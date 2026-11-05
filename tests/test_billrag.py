@@ -1333,3 +1333,19 @@ def test_focus_note_reaches_the_answer_prompt_and_evidence_is_reordered(tmp_path
     assert "best-matching evidence is from Trusts (Amendment) (" in llm.calls[-1]
     r2 = p.ask("How many days does the Trusts amendment allow?")
     assert r2.focus is None and "best-matching" not in llm.calls[-1]
+
+
+def test_cut_off_replies_are_rejected_in_both_sinhala_paths(tmp_path):
+    from billrag.llm import Reply as R
+    assert R("x", [], "length").truncated and R("x", [], "max_tokens").truncated and not R("x", [], "stop").truncated
+    st, llm = make_store(tmp_path), DirectLLM()
+    _with_official(st)
+    orig = llm.chat
+
+    def chat(system, messages, **kw):
+        r = orig(system, messages, **kw)
+        return R(r.text, [], "length") if ("LANGUAGE:" in system or system.startswith("Translate the answer")) else r
+    llm.chat = chat
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert r.direct_fallback == "cut off at the output limit" and r.direct_rejected.startswith(SI_ANS)
+    assert r.answer == r.answer_en and any("cut off" in w for w in r.warnings)  # translation cut off too -> English

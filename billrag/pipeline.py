@@ -141,6 +141,7 @@ class Result:
     official: list = field(default_factory=list)  # [(bill, section)] whose official local-language text informed the answer
     focus: dict = None  # {"title", "bills", "score"}: the bill an unnamed "this new bill" was taken to mean
     quote_fixes: list = field(default_factory=list)  # [(quoted, official)] misspelt quotations replaced by the official text
+    direct_rejected: str = ""  # the rejected one-step answer (diagnostics)
     direct_fallback: str = ""  # why a one-step local-language answer was rejected (then: English answer + translation)
     path: str = "en"  # how the answer was written: en | direct (in the user's language from official text) | translated
 
@@ -184,13 +185,15 @@ class Pipeline:
         self.translator = translator or translate.Translator(llm, grade_effort)  # may use a dedicated translation model
         self.direct_local = direct_local  # Sinhala question + official Sinhala text -> answer in Sinhala in one step
         self.official_chars = official_chars
+        self._last_cut = False  # did the last _llm reply hit max_tokens
         self.history = []
 
     # ------------------------------------------------------------ steps
     def _llm(self, system, user, max_tokens, res, effort=None, json_out=False, llm=None):
         def call(u):
             res.llm_calls += 1
-            txt = (llm or self.llm).chat(system, [{"role": "user", "content": u}], max_tokens=max_tokens, effort=effort).text
+            r = (llm or self.llm).chat(system, [{"role": "user", "content": u}], max_tokens=max_tokens, effort=effort)
+            txt, self._last_cut = r.text, getattr(r, "truncated", False)
             txt = LEAK.split(txt)[0].strip() or txt.strip()
             if json_out:
                 return txt, False
@@ -299,7 +302,7 @@ class Pipeline:
             note += FOCUS_NOTE.format(title=focus["title"], keys=", ".join(focus["bills"]))
         user = f"QUESTION: {question}\n\nEVIDENCE:\n\n" + "\n\n".join(blocks) + note
         system = ANSWER_SYSTEM + (LOCAL_NOTE.format(lang=lang, LANG=lang.upper()) if code else "")
-        return self._llm(system, user, 2400 if code else 1800, res, self.answer_effort, llm=self.answer_llm)
+        return self._llm(system, user, 4000 if code else 1800, res, self.answer_effort, llm=self.answer_llm)
 
     def answer_direct(self, question, user_question, evidence, enough, missing, res, code, focus=None):
         """One-step answer in the user's language when the bill's official text in that language exists for the evidence.
@@ -312,12 +315,16 @@ class Pipeline:
         out = self.summarise(q, evidence, enough, missing, res, local=(code, official), focus=focus)
         out, fixes = translate.fix_quotes(out, list(official.values()))
         res.quote_fixes += fixes
-        why = translate.check_script(out, code) if out != LEAK_FALLBACK else "unusable output"
+        why = ("unusable output" if out == LEAK_FALLBACK else "cut off at the output limit" if self._last_cut
+               else translate.check_script(out, code))
         if not why and not CITE.search(out):
             why = "no citations"
         if not why and self.verify(out, evidence):
             why = "citations not in the evidence: " + ", ".join(self.verify(out, evidence))
-        return (None, why) if why else (out, refs)
+        if why:
+            res.direct_rejected = out[:3000]  # logged, so a rejection can be diagnosed
+            return None, why
+        return out, refs
 
     def focus_bill(self, question, evidence, keys=None):
         """For a question that says "this new bill" without naming one: the bill (all its GS/Bill versions together) whose

@@ -108,8 +108,10 @@ LEAKED = re.compile(r"^\s*(analysis|assistant\s*final|we need to)\b", re.I)
 RETRY = "\n\nReply with ONLY the translation - no analysis, no notes, nothing before or after it."
 
 
-def _chat(llm, system, text, max_tokens, effort):
-    return (llm.chat(system, [{"role": "user", "content": text}], max_tokens=max_tokens, effort=effort).text or "").strip()
+def _chat(llm, system, text, max_tokens, effort, want_cut=False):
+    r = llm.chat(system, [{"role": "user", "content": text}], max_tokens=max_tokens, effort=effort)
+    out = (r.text or "").strip()
+    return (out, getattr(r, "truncated", False)) if want_cut else out
 
 
 # Degenerate model output (seen live in a Llama 3.3 Sinhala answer: "ආන්ඩ්‍රාත්‍රාත්‍රාත්‍රාය"): a short unit that contains a
@@ -299,8 +301,8 @@ class Translator:
             for prompt in ((answer_in, answer_in + RETRY) if i == len(self._chats()) - 1 else (answer_in,)):  # one firmer retry on the last model
                 self.calls += 1
                 try:
-                    out = _chat(llm, system, prompt, 2400, effort)
-                    why = check_out(out, answer, code)
+                    out, cut = _chat(llm, system, prompt, 4000, effort, want_cut=True)  # Sinhala: several tokens a word
+                    why = "cut off at the output limit" if cut else check_out(out, answer, code)
                 except Exception as e:  # noqa: BLE001
                     out, why = "", f"error: {e}"[:160]
                 if not why:

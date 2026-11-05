@@ -471,7 +471,22 @@ degenerate repetition (ආන්ඩ්‍රාත්‍රාත්‍රාත
   Zero citation warnings, zero garble hits, zero direct-path fallbacks in these runs. Hosted-model latency varies 3-10x between
   runs of the same prompt, so n=2 per question says little about speed; the direct path removes the translate-out call
   (30-103 s). Quality is better than translate-out but not clean: expect occasional wrong words. Open problems: translate-in
-  can lose a bill title; the answer model ignores 070/2026 §3 in favour of 085/2026 §14 on the live question.
+  can lose a bill title; on the live question the grader's kept evidence changes from run to run (070 §3 + 085 §14, or only
+  085/2026 §14, or only the 078/2026 overview), so the "which bill" problem is partly in grading, not only in the answer step.
+- **Cut-off replies:** `Reply.stop` / `Reply.truncated` (OpenAI `finish_reason == "length"`, Anthropic `max_tokens`; Workers AI
+  reports it, verified). Llama translate-out copying long official passages was cut off mid-word twice at 2,400 tokens and
+  `check_out` passed it. Now a cut-off translation counts as a failed attempt and a cut-off direct answer falls back; limits for
+  Sinhala output are 4,000 tokens (Sinhala needs several tokens per word). `direct_rejected` logs the rejected direct answer
+  (one live run was rejected for "no citations" and could not be diagnosed).
+
+### "This new bill" without a name (`Pipeline.focus_bill`, `Result.focus`, log field `focus`)
+If the English question matches `UNNAMED` ("this/that [new|proposed|...] bill/act/law/draft", or "the new/proposed ... bill",
+not followed by "no."), has no `NNN/YYYY`, and the kept evidence spans more than one bill, the bill family (its GS + Bill versions,
+grouped by `title_norm`) with the highest grade wins (ties: total grade, then newest). Its clauses go first and the answer prompt
+(English and direct Sinhala) gets `FOCUS_NOTE`: answer about that bill, name it first, mention other bills only as clearly
+different bills. Fires on 2 of 134 eval questions (both name their bill, so the focus is the named one). An earlier pattern that
+also accepted plain "the Act"/"the law" fired on 9, mostly wrong ("the law governing ..."). Live (2 runs of the logged question)
+it did not fire because the grader kept only one bill each time: it fixes the answer step, not grading.
 
 ## Product priority: recent bills
 
