@@ -12,6 +12,10 @@ Embeddings (optional; without them retrieval is BM25 + structure-aware, which al
   BILLRAG_EMBED_MODEL     e.g. text-embedding-3-large, or BAAI/bge-small-en-v1.5
   BILLRAG_EMBED_BASE_URL / BILLRAG_EMBED_API_KEY   for OpenAI-compatible embedding servers
 
+Pipeline (retrieve -> grade -> summarise)
+  BILLRAG_GRADE_EFFORT    reasoning effort for the grading/condense calls (default low; empty = omit the field)
+  BILLRAG_ANSWER_EFFORT   reasoning effort for the answer call (default: model default)
+
 Retrieval
   BILLRAG_RERANK          default: "cloudflare" when Cloudflare credentials are set, else "none"
                           none | llm | cloudflare | cloudflare-fused
@@ -43,6 +47,8 @@ class Settings:
     embed_api_key: str | None
     rerank: str
     rerank_model: str
+    grade_effort: str | None
+    answer_effort: str | None
     cf_account_id: str | None
     cf_api_token: str | None
 
@@ -74,6 +80,8 @@ def load_settings() -> Settings:
         embed_api_key=e("BILLRAG_EMBED_API_KEY") or None,
         rerank=e("BILLRAG_RERANK", cf_default).lower(),
         rerank_model=e("BILLRAG_RERANK_MODEL", "@cf/baai/bge-reranker-base"),
+        grade_effort=(e("BILLRAG_GRADE_EFFORT", "low") or None),
+        answer_effort=(e("BILLRAG_ANSWER_EFFORT") or None),
         cf_account_id=cf_account,
         cf_api_token=cf_token,
     )

@@ -19,6 +19,8 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
       (fingerprinted). Index + vectors uploaded to R2 and restore verified (checksums + eval MRR 0.69 from the copy).
 - [x] Bill summaries (365 bills: all 2024-2026 + 64 of 2023) + `find_bills` tool + kind routing; eval grown to 134 items
       (72 recent) with repaired bill-level gold. Recent (2025+): MRR 0.85 -> 0.87, bill-level MRR 0.91 -> 0.96.
+- [x] Two-step pipeline (retrieve -> AI grading -> AI summary) is the default engine; `eval-answers` added. On 24 recent
+      questions: strict 0.83 vs agent 0.71, 2.2 LLM calls/question; not faster (see AGENTS.md).
 - [x] Workers AI providers wired in: `BILLRAG_EMBED_PROVIDER=cloudflare` (bge-base-en-v1.5, 42,696 chunks embedded in ~3 min)
       and `BILLRAG_RERANK=cloudflare` (bge-reranker-base). Agent verified end to end with the best config (~25 s/question).
 - [x] Verified live on Cloudflare Workers AI: `@cf/openai/gpt-oss-120b` via the OpenAI-compatible endpoint does multi-step
@@ -26,6 +28,12 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
       `bge-base-en-v1.5` (768-d) respond too; neither is wired into billrag yet.
 
 ## Next (in priority order)
+- [ ] **Latency**: pipeline median ~12-15 s, p90 ~25-30 s. Try a faster/smaller model for the grading call (e.g. gpt-oss-20b),
+      grade fewer candidates (14 -> 8) or truncate passages harder, cap evidence to what scored 3, and stream the answer.
+- [ ] Answer eval is only 24 questions and self-judged: widen to all 72 recent items, run 2-3 times for variance, and judge
+      with a different model than the one answering.
+- [ ] Grader drops (`kept_gold` < `cand_gold`) and boilerplate retrieval misses (identical "qualified auditor" / rules clauses in
+      many incorporation bills): when several bills match a boilerplate question, show the candidate bills instead of guessing.
 - [ ] **One-command refresh for newly published bills** (the users' main use case): scrape -> `ingest` -> `summarize
       --since-year <current-1>` -> incremental `embed` -> `upload_r2.py --include-index`, ideally on a schedule. Each
       step is already resumable/incremental; they just aren't chained. Check how the scraper detects new/changed bills

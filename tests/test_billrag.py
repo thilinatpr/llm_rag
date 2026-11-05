@@ -161,7 +161,7 @@ class FakeLLM:
     def __init__(self, script):
         self.script, self.seen = list(script), []
 
-    def chat(self, system, messages, tools=(), max_tokens=0):
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
         self.seen.append(json.loads(json.dumps(messages)))
         return self.script.pop(0)
 
@@ -437,3 +437,184 @@ def test_agent_recovers_from_leaked_tool_call_text(tmp_path):
     # a model that keeps leaking is cut off with the text before the leak, never the raw tokens
     llm2 = FakeLLM([Reply("Partial answer <|call|> junk")] * 3)
     assert Agent(st, Retriever(st), llm2).ask("q") == "Partial answer"
+
+
+# ---------------------------------------------------------------- two-step pipeline (retrieve -> grade -> summarise)
+class ScriptLLM:
+    """Answers each pipeline prompt by inspecting it, like a (very literal) model would."""
+
+    def __init__(self, enough=True, queries=(), bad_eval=False, cite="[086/2026 \u00a72]"):
+        self.calls, self.efforts, self.enough, self.queries, self.bad_eval, self.cite = [], [], enough, list(queries), bad_eval, cite
+        self.rounds = 0
+
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+        user = messages[-1]["content"]
+        self.efforts.append(effort)
+        self.calls.append(user)
+        if "CANDIDATES:" in user:
+            if self.bad_eval:
+                return Reply("sorry, no json")
+            cands = re.findall(r"^\[(\d+)\] (.*?)(?=\n\n\[\d+\] |\Z)", user.split("CANDIDATES:")[1].strip(), re.S | re.M)
+            scores = [{"i": int(i), "s": 3 if ("fifteen days" in body or "Zebra" in body) else 0} for i, body in cands]
+            self.rounds += 1
+            enough = self.enough or self.rounds > 1
+            return Reply(json.dumps({"scores": scores, "enough": enough, "missing": "the rest", "queries": self.queries}))
+        if "FOLLOW-UP:" in user:
+            return Reply("What does the Trusts Amendment Bill 086/2026 say about fifteen days?")
+        return Reply(f"The Bill replaces ten days with fifteen days {self.cite}.")
+
+
+import re  # noqa: E402  (used by ScriptLLM)
+from billrag.pipeline import Pipeline, parse_json  # noqa: E402
+
+
+def test_parse_json_tolerates_chatter():
+    assert parse_json('Sure! {"a": 1} hope that helps') == {"a": 1}
+    assert parse_json("no json here") is None
+    assert parse_json('analysis: use {braces} freely, then {"scores": [1], "enough": true} done') == {"scores": [1], "enough": True}
+    assert parse_json('{"a": 1} and later {"b": 2}') == {"a": 1}
+
+
+def test_pipeline_happy_path_two_llm_calls(tmp_path):
+    st, llm = make_store(tmp_path), ScriptLLM()
+    events = []
+    p = Pipeline(st, Retriever(st), llm, on_event=lambda n, d: events.append(n))
+    r = p.ask("How many days does the amendment allow?")
+    assert r.llm_calls == 2 and len(llm.calls) == 2  # grade + summarise, nothing else
+    assert "fifteen days" in r.answer and not r.warnings and r.enough
+    assert [e.key for e in r.evidence] == ["086/2026"] and r.evidence[0].section == 2
+    assert "fifteen days" in r.evidence[0].chunk["text"]  # the full section text went to the summariser
+    assert r.sources() == ["[086/2026 \u00a72, p.2] Trusts (Amendment) - Bill (Bill, 2026-10-21)"] or r.sources()[0].startswith("[086/2026 \u00a72")
+    assert "EVIDENCE:" in llm.calls[1] and "[086/2026 \u00a72]" in llm.calls[1]
+    assert events == ["retrieve", "evaluate"]
+
+
+def test_pipeline_flags_citations_not_in_evidence(tmp_path):
+    st = make_store(tmp_path)
+    r = Pipeline(st, Retriever(st), ScriptLLM(cite="[099/2026 \u00a73]")).ask("How many days?")
+    assert any("099/2026 \u00a73" in w for w in r.warnings)
+    ok = Pipeline(st, Retriever(st), ScriptLLM(cite="[086/2026 \u00a72(1)]")).ask("How many days?")  # sub-clause cite is fine
+    assert not ok.warnings
+
+
+def test_pipeline_runs_one_followup_round_when_evidence_is_insufficient(tmp_path):
+    st = make_store(tmp_path)
+    extra = {"key": "090/2026", "bill_no": 90, "year": 2026, "date": "2026-10-30T00:00:00Z", "title": "Zebra Protection - Bill",
+             "title_norm": "zebra protection", "kind": "Bill", "long_title": "to protect zebras", "presented_by": None,
+             "presented_on": None, "gazette_date": None, "printed_no": None, "n_pages": 1, "n_sections": 1, "pdf_path": "x",
+             "summary": None}
+    st.replace_bill(extra, [{"kind": "section", "section_no": 1, "page": 1, "text": "Zebra grazing quota applies to herds.",
+                             "ctx": "Bill 090/2026 zebra grazing quota applies to herds"}])
+    st.commit()
+    llm = ScriptLLM(enough=False, queries=["zebra quota"])
+    r = Pipeline(st, Retriever(st), llm).ask("How many days?")
+    assert r.llm_calls == 3  # grade, grade the new candidates, summarise
+    assert r.queries == ["How many days?", "zebra quota"] and r.enough
+    grade_prompts = [c for c in llm.calls if "CANDIDATES:" in c]
+    assert len(grade_prompts) == 2 and "Zebra" in grade_prompts[1] and "Zebra" not in grade_prompts[0]  # round two grades only NEW passages
+    assert {e.key for e in r.evidence} == {"086/2026", "090/2026"}  # evidence merged across rounds
+
+
+def test_pipeline_stops_when_followup_finds_nothing_new_and_says_evidence_is_incomplete(tmp_path):
+    st, llm = make_store(tmp_path), ScriptLLM(enough=False, queries=["trustee accounts deadline"])
+    r = Pipeline(st, Retriever(st), llm).ask("How many days?")
+    assert r.llm_calls == 2 and not r.enough  # nothing new to grade -> no wasted call
+    assert "INCOMPLETE" in llm.calls[-1]  # the summariser is told the evidence is incomplete
+    r2 = Pipeline(st, Retriever(st), ScriptLLM(enough=False, queries=["x"]), extra_rounds=0).ask("How many days?")
+    assert r2.llm_calls == 2 and not r2.enough
+
+
+def test_pipeline_survives_unusable_grader_output(tmp_path):
+    st = make_store(tmp_path)
+    r = Pipeline(st, Retriever(st), ScriptLLM(bad_eval=True)).ask("How many days?")
+    assert r.answer and any("unusable" in w for w in r.warnings) and r.evidence
+
+
+def test_pipeline_no_candidates_means_no_llm_calls(tmp_path):
+    st, llm = make_store(tmp_path), ScriptLLM()
+    r = Pipeline(st, Retriever(st), llm).ask("zzzqqq")
+    assert llm.calls == [] and "could not find" in r.answer and r.evidence == []
+
+
+def test_pipeline_condenses_followups_and_honours_explicit_bill_numbers(tmp_path):
+    st, llm = make_store(tmp_path), ScriptLLM()
+    p = Pipeline(st, Retriever(st), llm)
+    p.ask("How many days?")
+    n = len(llm.calls)
+    r = p.ask("and what about the GS version 081/2026?")
+    assert "FOLLOW-UP:" in llm.calls[n] and r.llm_calls == 3  # condense + grade + summarise
+    assert all(e.key == "086/2026" or e.key == "081/2026" for e in r.evidence)
+    r2 = Pipeline(st, Retriever(st), ScriptLLM()).ask("what does 081/2026 say about trustee accounts?")
+    assert {c.key for c in r2.evidence} <= {"081/2026"}  # an explicit bill number restricts retrieval to that bill
+
+
+def test_pipeline_uses_low_effort_for_grading_only_and_checks_fullwidth_citations(tmp_path):
+    st, llm = make_store(tmp_path), ScriptLLM(cite="\u3010099/2026 \u00a73\u3011")
+    r = Pipeline(st, Retriever(st), llm, grade_effort="low", answer_effort=None).ask("How many days?")
+    assert llm.efforts == ["low", None]  # grade cheaply, answer at the model's default
+    assert any("099/2026 \u00a73" in w for w in r.warnings)  # full-width brackets are verified too
+
+
+def test_openai_adapter_sends_effort_as_extra_body():
+    from billrag.llm import OpenAILLM
+
+    class Msg:
+        content, tool_calls = "ok", None
+
+    class Resp:
+        choices = [type("C", (), {"message": Msg})()]
+
+    seen = {}
+
+    class Client:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    seen.update(kw)
+                    return Resp()
+
+    llm = object.__new__(OpenAILLM)
+    llm.client, llm.model = Client, "m"
+    assert llm.chat("s", [{"role": "user", "content": "q"}], effort="low").text == "ok"
+    assert seen["extra_body"] == {"reasoning_effort": "low"}
+    seen.clear()
+    llm.chat("s", [{"role": "user", "content": "q"}])
+    assert "extra_body" not in seen  # omitted unless asked for
+
+
+# ---------------------------------------------------------------- answer-level eval helpers
+def test_answer_eval_scoring_helpers():
+    from billrag import answer_eval as ae
+    clause = {"level": "clause", "gold": [{"bill": "001/2026", "section": 3}, {"bill": "002/2026", "section": 3}]}
+    assert ae.cites_gold(clause, "See [002/2026 §3(2)] for details") and ae.cites_gold(clause, "【001/2026 §3】")
+    assert not ae.cites_gold(clause, "[001/2026 §4] and [003/2026 §3]")  # right bill wrong section; wrong bill right section
+    bill = {"level": "bill", "gold": [{"bill": "001/2026"}]}
+    assert ae.cites_gold(bill, "It is [001/2026 §2]") and not ae.cites_gold(bill, "It is [009/2026]")
+    chunk = {"bill_key": "003/2026", "section_no": 3, "also_in": ["001/2026"]}
+    assert ae.chunk_has_gold(clause, chunk) and not ae.chunk_has_gold(clause, {"bill_key": "003/2026", "section_no": 4})
+    items = [{"id": i} for i in range(10)]
+    assert [i["id"] for i in ae.select(items, 5)] == [0, 2, 4, 6, 8] and ae.select(items, 0) == items
+    rows = [{"level": "clause", "cited_gold": True, "verdict": "correct", "seconds": 4, "cand_gold": True, "kept_gold": False, "llm_calls": 2},
+            {"level": "bill", "cited_gold": False, "verdict": "partial", "seconds": 6, "cand_gold": True, "kept_gold": True, "llm_calls": 3}]
+    s = ae.summarize(rows)
+    assert s["all"]["correct"] == 0.5 and s["all"]["correct_or_partial"] == 1.0 and s["all"]["avg_seconds"] == 5
+    assert s["all"]["kept_gold"] == 0.5 and s["clause"]["n"] == 1 and s["bill"]["cited_gold"] == 0.0
+
+
+def test_grader_retries_once_when_the_first_reply_is_prose(tmp_path):
+    st = make_store(tmp_path)
+
+    class Flaky(ScriptLLM):
+        def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+            user = messages[-1]["content"]
+            if "CANDIDATES:" in user and not any("CANDIDATES:" in c for c in self.calls):
+                self.calls.append(user); self.efforts.append(effort)
+                return Reply("analysis: we need to produce a summary of the bill ...")  # prose, no JSON
+            return super().chat(system, messages, tools, max_tokens, effort)
+
+    llm = Flaky()
+    r = Pipeline(st, Retriever(st), llm, grade_effort="low").ask("How many days?")
+    assert r.llm_calls == 3 and not r.warnings  # prose reply -> one firmer retry -> real grades, no fallback
+    assert llm.efforts[:2] == ["low", None] and "JSON object ONLY" in llm.calls[1]
+    assert r.evidence and r.evidence[0].score == 3

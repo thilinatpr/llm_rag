@@ -62,7 +62,7 @@ class AnthropicLLM:
         kw = {k: v for k, v in (("base_url", base_url), ("api_key", api_key)) if v}
         self.client, self.model = anthropic.Anthropic(**kw), model
 
-    def chat(self, system, messages, tools=(), max_tokens=2048) -> Reply:
+    def chat(self, system, messages, tools=(), max_tokens=2048, effort=None) -> Reply:  # effort: ignored here
         kw = {}
         if tools:
             kw["tools"] = [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
@@ -79,8 +79,10 @@ class OpenAILLM:
         kw = {k: v for k, v in (("base_url", base_url), ("api_key", api_key)) if v}
         self.client, self.model = openai.OpenAI(max_retries=6, **kw), model
 
-    def chat(self, system, messages, tools=(), max_tokens=2048) -> Reply:
+    def chat(self, system, messages, tools=(), max_tokens=2048, effort=None) -> Reply:
         kw = {}
+        if effort:  # reasoning models (gpt-oss): low/medium/high; sent as an extra body field
+            kw["extra_body"] = {"reasoning_effort": effort}
         if tools:
             kw["tools"] = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
                                                              "parameters": t["parameters"]}} for t in tools]

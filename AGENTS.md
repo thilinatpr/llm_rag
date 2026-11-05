@@ -16,7 +16,9 @@ billrag/parse.py          PDF -> sections/parts/schedules (structure-aware) + co
 billrag/ingest.py         parse every English PDF -> data/bills/index.sqlite (chunks + FTS5)
 billrag/store.py          SQLite schema, BM25 search, section/outline/version queries
 billrag/retrieve.py       BM25 (+ optional dense) -> RRF -> optional LLM rerank -> dedup of identical text -> diversity cap
-billrag/agent.py          tool-calling loop: search_bills, list_bills, get_bill_overview, get_section, diff_bills
+billrag/pipeline.py       DEFAULT chat engine, two steps: retrieve -> AI evidence grading -> AI summary (+ citation check)
+billrag/answer_eval.py    answer-level eval: cites-the-gold-clause, LLM judge, latency (`billrag eval-answers`)
+billrag/agent.py          (`--mode agent`) tool-calling loop: search_bills, list_bills, get_bill_overview, get_section, diff_bills
 billrag/llm.py            Anthropic + OpenAI-compatible chat adapters, OpenAI/sentence-transformers embedders
 billrag/enrich.py         optional: dense vectors (`embed`) and LLM bill summaries (`summarize`)
 billrag/config.py         all settings come from BILLRAG_* env vars (documented at the top of the file)
@@ -32,7 +34,9 @@ pip install -r requirements-billrag.txt
 python scripts/scrape_bills.py [--langs ENGLISH] [--since-year N]   # resumable; ~4.5k PDFs, ~700 MB
 python -m billrag ingest [--since-year N]                           # ~1 min for everything
 python -m billrag search "query" [-k 5 --year 2024 --bill 077/2026]  # retrieval only, no key needed
-python -m billrag chat -v | ask "question"                          # needs a chat model (see config.py)
+python -m billrag chat -v | ask "question"                          # needs a chat model (see config.py); default = two-step pipeline
+python -m billrag ask --mode agent "question"                      # the older free-form tool loop
+python -m billrag eval-answers --mode pipeline --since-year 2025 --limit 24   # answer quality + latency (~3 min, ~70 LLM calls)
 python -m billrag eval -k 10 --since-year 2025 --misses 10 --label NAME   # retrieval quality on RECENT bills (the ones users ask about)
 python -m billrag summarize --since-year 2024 --workers 8   # LLM bill summaries + search keywords (resumable, newest first)
 python -m pytest tests -q                                           # must pass before every commit
@@ -86,6 +90,40 @@ export BILLRAG_CHAT_PROVIDER=openai BILLRAG_CHAT_MODEL=@cf/openai/gpt-oss-120b \
 - Needs `api.cloudflare.com` in the environment's network allowlist and `CLOUDFLARE_API_TOKEN` as an env secret.
 - Workers AI rejects `content: null` on assistant tool-call messages; `llm.to_openai_messages` sends `""` (tested).
 - Model list: `GET /accounts/<id>/ai/models/search`. Reranker is listed under task "Text Classification".
+
+## Two-step pipeline (default engine) - how it works and what we learned
+
+`Pipeline.ask`: (1) retrieve clauses (k=14) + bill-level overviews (k=4) with the hybrid retriever, restricted to the bill
+if the question contains an explicit `NNN/YYYY`; (2) ONE LLM call grades every candidate 0-3 and says whether the kept
+evidence is enough (if not: at most one extra retrieval round with the grader's suggested queries; only NEW candidates
+are graded); (3) ONE LLM call writes the answer from the *full section text* of the kept clauses; (4) a deterministic
+check flags any citation that is not in the evidence shown to the model (`Result.warnings`). In a chat, follow-ups are
+first condensed into a standalone question (+1 call). Typical: 2.2 LLM calls, median ~12-15 s.
+
+Measured on 24 recent (2025+) eval questions, same gold, same judge (`eval-answers`):
+
+| engine | strict* | judged correct | avg s |
+|---|---|---|---|
+| agent (tool loop) | 0.71 | 18/24 | 13.2 |
+| pipeline v4 | 0.83 | 22/24 | 16.0 |
+| pipeline v5 (answer effort low) | 0.83 | 23/24 | 15.7 |
+
+*strict = judge says correct AND the answer cites the gold clause/bill (or a sibling GS/Bill version of it). n=24 and the
+judge is the same model that answers, so treat gaps under ~0.1 as noise. The pipeline is not faster than the agent.
+
+Lessons (all cost us a debugging round):
+- **Reasoning models sometimes answer JSON requests in prose** ("analysis: we need to..."). Grader and judge retry once with a
+  firmer prompt before falling back; `parse_json` scans for the first valid object. Never rely on a single parse.
+- **Don't make the grader strict about bill names.** A "different bill scores <= 1" rule dropped the correct clause when the
+  question paraphrased the title (strict 0.88 -> 0.67). The grader only uses the title as a tie-break; the answer prompt makes
+  the model name the bill it actually relied on.
+- **The judge cannot see wrong-bill answers** (lookalike boilerplate clauses give the right text from the wrong bill), so
+  always read `strict` / `cited_gold`, not just "correct". `expand_gold` counts the same section of sibling GS/Bill versions.
+- Remaining failures are retrieval misses on boilerplate-heavy incorporation bills and a few grader drops (`kept_gold` 0.88-0.96
+  vs `cand_gold` 0.96): check `cand_gold` vs `kept_gold` to see whether the retriever or the grader lost the clause.
+- `BILLRAG_GRADE_EFFORT=low` (default) makes grading ~3x faster; low effort on the answer call did not help (latency is dominated
+  by hosted-model variance). Models without `reasoning_effort` support: set `BILLRAG_GRADE_EFFORT=` (empty).
+- Models may emit citations in full-width brackets 【..】; the verifier accepts both.
 
 ## Product priority: recent bills
 

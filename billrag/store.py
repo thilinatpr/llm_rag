@@ -38,7 +38,7 @@ def normalize_ref(ref: str):
 class Store:
     def __init__(self, path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(path))
+        self.db = sqlite3.connect(str(path), check_same_thread=False)  # sqlite is serialized; evals read from threads
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
 
