@@ -28,6 +28,10 @@ class_name = "BillragContainer"
 tag = "v1"
 new_sqlite_classes = ["BillragContainer"]
 
+# Keep Worker logs (incl. upstream_failed errors) so problems can be read after the fact.
+[observability]
+enabled = true
+
 [vars]
 # Comma-separated. This is the only allowlist: nothing needs verifying on the Cloudflare side.
 ALLOWED_EMAILS = "thilinatpr@gmail.com"

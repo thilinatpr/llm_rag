@@ -10,7 +10,18 @@ async function upstream(request, env) {
   const headers = new Headers(request.headers);
   headers.delete("Cookie");
   headers.set("X-Proxy-Secret", env.PROXY_SECRET);
-  return getContainer(env.BILLRAG).fetch(new Request(request, { headers }));
+  const started = Date.now();
+  try {
+    return await getContainer(env.BILLRAG).fetch(new Request(request, { headers }));
+  } catch (e) {
+    // Answer with a real status the page can show, instead of letting the connection drop.
+    const path = new URL(request.url).pathname;
+    console.error(JSON.stringify({ event: "upstream_failed", path, ms: Date.now() - started, error: String((e && e.message) || e) }));
+    return new Response(JSON.stringify({ error: "The app server is not responding. If it was asleep, it is starting; try again in a minute." }), {
+      status: 502,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 }
 
 export default { fetch: createHandler({ upstream }) };

@@ -4,6 +4,7 @@ Set BILLRAG_PROXY_SECRET to require an `X-Proxy-Secret` header on every request 
 a non-loopback host without it is refused.
 
 GET  /            single-page chat UI
+GET  /healthz     {"ok": true} (the page polls it while a sleeping container starts)
 POST /api/ask     {"session": str, "question": str} -> {"answer": str}   (needs a chat model/API key)
 POST /api/search  {"query": str, "k": int}          -> {"results": [str]} (retrieval only, no key needed)
 """
@@ -67,20 +68,43 @@ function add(text, cls) {
   const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
   log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A dropped connection (TypeError) usually means the container was asleep and is starting; wait until it answers, then retry once.
+async function waitUntilUp(note) {
+  for (let i = 0; i < 60; i++) {
+    note.textContent = 'The server is waking up (this can take a minute or two)... ' + (i * 3) + 's';
+    try { const r = await fetch('/healthz', {cache: 'no-store'}); if (r.ok) return true; } catch (e) {}
+    await sleep(3000);
+  }
+  return false;
+}
+async function post(path, body, note) {
+  const send = () => fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  let r;
+  try { r = await send(); }
+  catch (e) {
+    if (!(await waitUntilUp(note))) throw new Error('The server did not come back after 3 minutes. Try again shortly.');
+    note.textContent = 'Server is up. Asking again...';
+    r = await send();
+  }
+  let j = {};
+  try { j = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(`${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
+  return j;
+}
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = q.value.trim(); if (!text) return;
   q.value = ''; btn.disabled = true; add(text, 'me');
-  const wait = add(so.checked ? 'Searching...' : 'Thinking...', 'bot');
+  const label = so.checked ? 'Searching...' : 'Thinking...';
+  const wait = add(label, 'bot');
+  const slow = setTimeout(() => { if (wait.textContent === label) wait.textContent = label + ' still working; answers take 15-30s, longer if the server was asleep.'; }, 8000);
   try {
-    const r = await fetch(so.checked ? '/api/search' : '/api/ask', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(so.checked ? {query: text, k: 6} : {session, question: text})
-    });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || r.statusText);
+    const j = await post(so.checked ? '/api/search' : '/api/ask',
+                         so.checked ? {query: text, k: 6} : {session, question: text}, wait);
     wait.textContent = so.checked ? j.results.join('\\n\\n---\\n\\n') : j.answer;
   } catch (err) { wait.textContent = 'Error: ' + err.message; wait.classList.add('err'); }
+  clearTimeout(slow);
   btn.disabled = false; q.focus(); log.scrollTop = log.scrollHeight;
 });
 </script></body></html>
@@ -179,6 +203,8 @@ def make_handler(app):
                 return
             if self.path in ("/", "/index.html"):
                 self._send(200, PAGE, "text/html")
+            elif self.path == "/healthz":
+                self._send(200, json.dumps({"ok": True}))
             else:
                 self._send(404, json.dumps({"error": "not found"}))
 
