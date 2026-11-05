@@ -271,10 +271,11 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". Live since 2026-11-05 16:06 UTC: build `4cfb4b63` = commit `a2ad066` (PR #14: translation layer #12 +
-`TRANSLATE = "ai"`), Worker version `d0bf988b`, container app version 8. Previous: build `3bbe2bc6`, container version 7. Anything
-merged to `main` later is NOT live until someone runs `wrangler deploy`. Check `git log origin/main` against the `build` seen in the
-latest chat log before telling the owner a change is live.
+"Merged" is not "live". Live since 2026-11-05 16:47 UTC: build `af86776e` = `main` at `fca8f3a` (merge of PR #14: translation
+layer, `TRANSLATE = "ai"`, `TRANSLATE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"`), Worker version `e56e31b8`, container
+app version 9 (image `sha256:f647ba62...`). Previous: build `4cfb4b63` (commit `a2ad066`), container v8 (`sha256:38b7eaea...`);
+before that build `3bbe2bc6`, v7. Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
+`git log origin/main` against the `build` seen in the latest chat log before telling the owner a change is live.
 
 ## Rules
 
