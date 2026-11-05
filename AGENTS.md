@@ -20,7 +20,7 @@ billrag/agent.py          tool-calling loop: search_bills, list_bills, get_bill_
 billrag/llm.py            Anthropic + OpenAI-compatible chat adapters, OpenAI/sentence-transformers embedders
 billrag/enrich.py         optional: dense vectors (`embed`) and LLM bill summaries (`summarize`)
 billrag/config.py         all settings come from BILLRAG_* env vars (documented at the top of the file)
-evals/retrieval_eval.jsonl  47 reviewed Q&A items with gold (bill, section); results log in evals/results.jsonl
+evals/retrieval_eval.jsonl  134 reviewed Q&A items with gold (bill, section); 72 are from 2025+ bills; log in evals/results.jsonl
 billrag/evaluate.py       recall@k / MRR metrics; scripts/make_eval.py generates + `--review` prints a draft
 tests/test_billrag.py     offline tests (synthetic bills + scripted fake LLM); no network or keys
 ```
@@ -33,7 +33,8 @@ python scripts/scrape_bills.py [--langs ENGLISH] [--since-year N]   # resumable;
 python -m billrag ingest [--since-year N]                           # ~1 min for everything
 python -m billrag search "query" [-k 5 --year 2024 --bill 077/2026]  # retrieval only, no key needed
 python -m billrag chat -v | ask "question"                          # needs a chat model (see config.py)
-python -m billrag eval -k 10 --misses 10 --label NAME   # retrieval quality; run before/after any retrieval change
+python -m billrag eval -k 10 --since-year 2025 --misses 10 --label NAME   # retrieval quality on RECENT bills (the ones users ask about)
+python -m billrag summarize --since-year 2024 --workers 8   # LLM bill summaries + search keywords (resumable, newest first)
 python -m pytest tests -q                                           # must pass before every commit
 ```
 
@@ -86,6 +87,32 @@ export BILLRAG_CHAT_PROVIDER=openai BILLRAG_CHAT_MODEL=@cf/openai/gpt-oss-120b \
 - Workers AI rejects `content: null` on assistant tool-call messages; `llm.to_openai_messages` sends `""` (tested).
 - Model list: `GET /accounts/<id>/ai/models/search`. Reranker is listed under task "Text Classification".
 
+## Product priority: recent bills
+
+Users mostly ask about **newly published bills** and rarely about old ones. So: report eval numbers on the recent slice
+(`--since-year 2025`) first; spend LLM/embedding budget newest-first (`summarize` processes bills newest-first, so it is
+safe to stop early - summaries currently exist for all 2024-2026 bills and 64 of 2023, none older); the agent prompt
+tells the model to prefer the newest matching bill and cite dates. Don't optimise for 2003-2020 bills at the cost of
+recent ones.
+
+## Retrieval routing, summaries, versions (learned the hard way)
+
+- **Route by chunk kind.** `search_bills` searches clauses/schedules only (`kinds=("section","schedule")`);
+  `find_bills` searches `overview` chunks only. When summaries were first added to overview chunks and everything was
+  searched together, recent R@1 dropped 0.78 -> 0.67 because rich overview chunks crowded out the real clause.
+  `billrag eval` mirrors this (`--route split`, default; `--route none` searches all kinds).
+- **Summaries** are LLM-written (`@cf/openai/gpt-oss-120b`, ~110 words + 8-12 keywords), stored in `bills.summary`, folded
+  into the overview chunk, labelled "auto-generated" everywhere they are shown, and survive a re-ingest. The prompt
+  forbids outside knowledge - a first pilot added a UN resolution number that is not in the bill. Never present a
+  summary as authoritative; the agent must verify details in the clauses.
+- **Effect (n=24 recent bill-level questions):** MRR 0.91 -> 0.96, R@1 0.88 -> 0.92. Real but small; baseline was
+  already strong. Old bills (no summaries) are unchanged.
+- **`Store.versions(title_norm, near_date)`**: titles like "Finance (Amendment)" recur every year (26 Code of Criminal
+  Procedure amendments!). Always pass the bill's date so only its own GS/Bill versions (within 300 days) count. The first
+  eval gold labels forgot this and were wildly generous; they were repaired and bill-level numbers dropped accordingly.
+- `embed` is incremental: it reuses vectors whose (id, text-hash) is unchanged, so re-embedding after `summarize` costs
+  a few hundred chunks, not 42k. The same `model` must be used or everything is re-embedded.
+
 ## Eval set notes
 
 - Questions were written by an LLM from a single source clause (told to paraphrase) and then reviewed by hand; the gold
@@ -95,7 +122,9 @@ export BILLRAG_CHAT_PROVIDER=openai BILLRAG_CHAT_MODEL=@cf/openai/gpt-oss-120b \
 - Known weakness of the set: it was LLM-generated from clauses, so it favours questions answerable by one clause, and
   many incorporation-of-foundation bills share boilerplate (we dropped most such items). Bills with near-identical
   names (e.g. "Al Hasan" 2013 vs "Alhasan" 2015) make ambiguous gold; drop those items rather than loosen gold.
-- Always compare configs on the same file; n=47 means differences under ~0.15 are noise.
+- Always compare configs on the same file. With 72 recent / 134 total items, differences under ~0.05-0.10 are noise.
+- Bill-level gold = the bill's own versions within 300 days (+ hand-added spelling-variant siblings, see `review_note`).
+  Drop questions that are truly ambiguous (e.g. two bills amending the same Act in one year) instead of loosening gold.
 
 ## Retrieval config and the index in R2
 

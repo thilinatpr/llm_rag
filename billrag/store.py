@@ -84,9 +84,16 @@ class Store:
         sql += " ORDER BY date DESC LIMIT ?"; args.append(int(limit))
         return [dict(r) for r in self.db.execute(sql, args)]
 
-    def versions(self, title_norm):
-        return [dict(r) for r in self.db.execute(
+    def versions(self, title_norm, near_date=None, days=300):
+        """Bills sharing a normalized title. Titles like "Finance (Amendment)" recur every year, so pass `near_date`
+        to keep only versions of the *same* bill (its GS and Bill forms are weeks or months apart, not years)."""
+        rows = [dict(r) for r in self.db.execute(
             "SELECT key,kind,date FROM bills WHERE title_norm=? ORDER BY date", (title_norm,))]
+        if near_date:
+            from datetime import datetime
+            d0 = datetime.fromisoformat(near_date[:10])
+            rows = [r for r in rows if abs((datetime.fromisoformat(r["date"][:10]) - d0).days) <= days]
+        return rows
 
     def chunks_by_ids(self, ids):
         if not ids:
@@ -117,7 +124,7 @@ class Store:
                 out[r["section_no"]] = out.get(r["section_no"], "") + ("\n" if r["section_no"] in out else "") + r["text"]
         return out
 
-    def bm25(self, query, limit=50, year=None, keys=None):
+    def bm25(self, query, limit=50, year=None, keys=None, kinds=None):
         fq = fts_query(query)
         if not fq:
             return []
@@ -129,6 +136,8 @@ class Store:
             sql += " AND b.year=?"; args.append(int(year))
         if keys:
             sql += f" AND c.bill_key IN ({','.join('?' * len(keys))})"; args += list(keys)
+        if kinds:
+            sql += f" AND c.kind IN ({','.join('?' * len(kinds))})"; args += list(kinds)
         sql += " ORDER BY score LIMIT ?"; args.append(limit)
         return [r["id"] for r in self.db.execute(sql, args)]
 

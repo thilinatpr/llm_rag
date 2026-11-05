@@ -77,7 +77,7 @@ class OpenAILLM:
     def __init__(self, model, base_url=None, api_key=None):
         import openai
         kw = {k: v for k, v in (("base_url", base_url), ("api_key", api_key)) if v}
-        self.client, self.model = openai.OpenAI(**kw), model
+        self.client, self.model = openai.OpenAI(max_retries=6, **kw), model
 
     def chat(self, system, messages, tools=(), max_tokens=2048) -> Reply:
         kw = {}

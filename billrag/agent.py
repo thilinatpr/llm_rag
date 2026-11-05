@@ -9,11 +9,15 @@ SYSTEM = """You are an expert assistant that helps people scrutinize and underst
 You can ONLY rely on what your tools return from the indexed bills (English text of bills and Gazette-supplement versions).
 
 How to work:
+- For "which bill/law is about X?" questions use find_bills first (it searches bill-level text), then
+  get_bill_overview / search_bills to confirm in the clauses.
 - Orient with list_bills / get_bill_overview; find passages with search_bills. For multi-part or comparative questions,
   run several focused searches (rephrase, use the bill's own wording, filter by bill or year).
 - Before stating precise obligations, powers, offences, penalties, definitions or amounts, read the full clause with
   get_section; search snippets can be cut mid-clause.
 - Use diff_bills to compare a Gazette (GS) version with the later Bill version, or two related bills.
+- Users mostly care about recently published bills. When several bills match and the user gives no year, prefer the
+  newest, state the dates you relied on, and mention older bills only if they are clearly relevant or asked about.
 - "GS" = bill published in the Gazette before presentation; "Bill" = version presented to Parliament. Amendments made
   later in committee are NOT in this corpus; say so when relevant.
 
@@ -24,8 +28,15 @@ Answer rules:
 - Be concise and structured: a short answer first, then supporting detail. You explain; you do not give legal advice."""
 
 TOOLS = [
+    {"name": "find_bills",
+     "description": "Find WHICH bills are about a topic, purpose, body or Act (searches bill-level text: titles, long titles, "
+                    "auto-generated summaries, outlines). Returns one entry per bill. Use for 'which law ...' questions.",
+     "parameters": {"type": "object", "properties": {
+         "query": {"type": "string"}, "year": {"type": "integer", "description": "Only bills from this year"},
+         "top_k": {"type": "integer", "description": "Bills to return (default 6, max 12)"}},
+         "required": ["query"]}},
     {"name": "search_bills",
-     "description": "Hybrid (keyword + semantic) search over bill clauses. Returns cited passages. Use specific wording; "
+     "description": "Hybrid (keyword + semantic) search over bill CLAUSES and schedules. Returns cited passages. Use specific wording; "
                     "call several times for different aspects.",
      "parameters": {"type": "object", "properties": {
          "query": {"type": "string"},
@@ -85,9 +96,21 @@ class Agent:
             raise ValueError(f"No bill matches {ref!r}; use 'NNN/YYYY' or list_bills")
         raise ValueError("Ambiguous; specify one of: " + ", ".join(f"{h['key']} ({h['title']})" for h in hits))
 
+    def tool_find_bills(self, query, year=None, top_k=6):
+        res = self.retriever.search(query, k=min(int(top_k or 6), 12), year=year, kinds=("overview",))
+        out = []
+        for c in res:
+            b = self.store.bill(c["bill_key"])
+            vers = [v["key"] for v in self.store.versions(b["title_norm"], b["date"]) if v["key"] != b["key"]]
+            summ = (b.get("summary") or "").split("Keywords:")[0].strip()
+            out.append(f"{b['key']} | {b['date'][:10]} | {b['kind']} | {b['title']}\n  Long title: {(b['long_title'] or 'n/a')[:260]}"
+                       + (f"\n  Summary (auto-generated): {summ[:420]}" if summ else "")
+                       + (f"\n  Other versions: {', '.join(vers)}" if vers else ""))
+        return "\n\n".join(out) or "No matching bills."
+
     def tool_search_bills(self, query, year=None, bill=None, top_k=8):
         keys = [self.resolve(bill)] if bill else None
-        res = self.retriever.search(query, k=min(int(top_k or 8), 15), year=year, keys=keys)
+        res = self.retriever.search(query, k=min(int(top_k or 8), 15), year=year, keys=keys, kinds=("section", "schedule"))
         return "\n\n".join(fmt_passage(c) for c in res) or "No matching passages."
 
     def tool_list_bills(self, year=None, title_contains=None, kind=None, limit=30):
@@ -98,12 +121,12 @@ class Agent:
     def tool_get_bill_overview(self, bill):
         key = self.resolve(bill)
         b = self.store.bill(key)
-        vers = [v for v in self.store.versions(b["title_norm"]) if v["key"] != key]
+        vers = [v for v in self.store.versions(b["title_norm"], b["date"]) if v["key"] != key]
         lines = [f"{key} | {b['title']} | {b['kind']} | {b['date'][:10]} | {b['n_pages']} pages, {b['n_sections']} sections",
                  f"Long title: {b['long_title']}",
                  f"Presented by: {b['presented_by']} on {b['presented_on']}; Gazette: {b['gazette_date']}"]
         if b.get("summary"):
-            lines.append(f"Summary: {b['summary']}")
+            lines.append(f"Summary (auto-generated; verify against the clauses): {b['summary']}")
         if vers:
             lines.append("Related versions: " + "; ".join(f"{v['key']} ({v['kind']}, {v['date'][:10]})" for v in vers))
         lines.append("Outline:")

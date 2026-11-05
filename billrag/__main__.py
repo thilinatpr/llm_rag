@@ -27,11 +27,17 @@ def main(argv=None):
     p.add_argument("--file", default="evals/retrieval_eval.jsonl")
     p.add_argument("-k", type=int, default=10)
     p.add_argument("--misses", type=int, default=0, help="print N missed questions with what was retrieved")
+    p.add_argument("--since-year", type=int, default=0, help="only score items whose source bill is from this year on")
+    p.add_argument("--route", choices=["split", "none"], default="split",
+                   help="split (default, mirrors the agent): clause questions search clauses only, bill questions "
+                        "search overview chunks only. none: search every chunk kind for every question")
     p.add_argument("--label", default="", help="append the result to evals/results.jsonl under this label")
     sub.add_parser("embed", help="compute dense vectors (needs BILLRAG_EMBED_*)")
     p = sub.add_parser("summarize", help="LLM-summarise each bill to improve overview retrieval")
     p.add_argument("--since-year", type=int, default=0)
     p.add_argument("--limit", type=int)
+    p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--overwrite", action="store_true")
     a = ap.parse_args(argv)
 
     s = load_settings()
@@ -71,8 +77,9 @@ def main(argv=None):
         import json, pathlib
         from .evaluate import evaluate, format_report, load_items
         r = Retriever(store, embedder, s.vectors_path, make_llm(s) if s.rerank == "llm" else None, s.rerank, make_reranker(s))
-        items = load_items(a.file)
-        summary, rows, secs = evaluate(r, items, a.k)
+        items = [i for i in load_items(a.file) if i["source"]["year"] >= a.since_year]
+        summary, rows, secs = (evaluate(r, items, a.k, ("overview",), ("section", "schedule")) if a.route == "split"
+                               else evaluate(r, items, a.k))
         print(format_report(summary, a.label or f"rerank={s.rerank} dense={'on' if r.mat is not None else 'off'}"))
         print(f"({len(items)} questions, {secs:.1f}s)")
         for row in [x for x in rows if not x["rank"]][: a.misses]:
@@ -86,7 +93,7 @@ def main(argv=None):
     llm = make_llm(s)
     if a.cmd == "summarize":
         from .enrich import summarize_all
-        print(summarize_all(store, llm, a.since_year, a.limit), "bills summarised")
+        print(summarize_all(store, llm, a.since_year, a.limit, a.overwrite, a.workers), "bills summarised")
         return 0
     retriever = Retriever(store, embedder, s.vectors_path, llm, s.rerank, make_reranker(s))
     ev = (lambda n, args: print(f"  → {n} {args}", file=sys.stderr)) if a.verbose else None

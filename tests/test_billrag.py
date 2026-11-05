@@ -202,7 +202,7 @@ def test_agent_step_limit_forces_answer(tmp_path):
 
 
 def test_tool_specs_valid():
-    assert {t["name"] for t in TOOLS} == {"search_bills", "list_bills", "get_bill_overview", "get_section", "diff_bills"}
+    assert {t["name"] for t in TOOLS} == {"find_bills", "search_bills", "list_bills", "get_bill_overview", "get_section", "diff_bills"}
     assert all(t["parameters"]["type"] == "object" for t in TOOLS)
 
 
@@ -328,3 +328,96 @@ def test_dense_retrieval_fails_loudly_on_missing_or_stale_vectors(tmp_path):
     with pytest.raises(VectorsError):
         Retriever(st, E(), path)  # index changed after embedding -> refuse
     Retriever(st)  # keyword-only retriever (no embedder) is unaffected
+
+
+# ---------------------------------------------------------------- incremental embeddings + summaries
+class CountingEmbedder:
+    model = "fake"
+
+    def __init__(self):
+        self.seen = []
+
+    def embed(self, texts):
+        import numpy as np
+        self.seen += list(texts)
+        return np.asarray([[float(len(t)), 1.0] for t in texts], dtype="float32")
+
+
+def test_embed_all_is_incremental_and_stamped(tmp_path):
+    import numpy as np
+    from billrag.enrich import embed_all
+    st, path, emb = make_store(tmp_path), tmp_path / "v.npz", CountingEmbedder()
+    n_all = len(st.all_chunks())
+    assert embed_all(st, emb, path) == n_all and len(emb.seen) == n_all
+    before = np.load(path)["vectors"].copy()
+    emb.seen.clear()
+    assert embed_all(st, emb, path) == 0 and not emb.seen  # nothing changed -> nothing embedded
+    st.update_overview("086/2026", "Summary: new text about trusts")
+    assert embed_all(st, emb, path) == 1 and emb.seen == ["Summary: new text about trusts"]
+    after = np.load(path)
+    changed = [i for i in range(n_all) if not np.allclose(before[i], after["vectors"][i])]
+    assert len(changed) == 1  # only the edited overview chunk moved
+    assert str(after["fingerprint"]) == st.fingerprint()
+    Retriever(st, emb, path)  # fresh vectors validate against the edited index
+
+
+def test_embed_all_reuses_legacy_file_matching_current_index(tmp_path):
+    import numpy as np
+    from billrag.enrich import embed_all
+    st, path, emb = make_store(tmp_path), tmp_path / "v.npz", CountingEmbedder()
+    rows = st.all_chunks()
+    np.savez(path, ids=np.asarray([r["id"] for r in rows]), vectors=np.ones((len(rows), 2), dtype="float32"),
+             fingerprint=np.asarray(st.fingerprint()))  # old format: no chunk_hashes
+    assert embed_all(st, emb, path) == 0 and "chunk_hashes" in np.load(path).files
+
+
+def test_summarize_all_updates_overview_and_is_resumable(tmp_path):
+    from billrag.enrich import summarize_all
+    st = make_store(tmp_path)
+    good = "Allows trustees more time to keep accounts and lengthens a deadline. " * 3 + "\nKeywords: trust, accounts, deadline"
+    llm = FakeLLM([Reply(good), Reply(good)])
+    assert summarize_all(st, llm, workers=1) == 2
+    assert st.bill("086/2026")["summary"] == good.strip()
+    ov = st.db.execute("SELECT text FROM chunks WHERE bill_key='086/2026' AND kind='overview'").fetchone()[0]
+    assert ov.startswith("Bill 086/2026") and "Summary (auto-generated): Allows trustees" in ov and "Keywords: trust" in ov and "Outline:" in ov
+    assert st.bm25("deadline", kinds=("overview",))  # now findable through the summary text
+    assert summarize_all(st, FakeLLM([]), workers=1) == 0  # nothing left to do; the LLM is not called
+
+
+def test_summarize_survives_bad_model_output(tmp_path):
+    from billrag.enrich import summarize_all
+    st = make_store(tmp_path, with_gs=False)
+    assert summarize_all(st, FakeLLM([Reply("too short"), Reply("too short")]), workers=1) == 0
+    assert st.bill("086/2026")["summary"] is None  # nothing stored; retried on the next run
+
+
+def test_find_bills_returns_one_entry_per_bill_with_versions(tmp_path):
+    st = make_store(tmp_path)
+    ag = Agent(st, Retriever(st), FakeLLM([]))
+    out = ag.run_tool("find_bills", {"query": "amend the Trusts Ordinance", "top_k": 5})
+    assert "086/2026" in out and "Long title: to amend the Trusts Ordinance" in out
+    assert "Other versions: 081/2026" in out or "Other versions: 086/2026" in out
+    assert out.count("Long title:") == len(set(l.split(" | ")[0] for l in out.splitlines() if " | " in l))  # no clause chunks
+    assert ag.run_tool("find_bills", {"query": "zzzqqq"}) == "No matching bills."
+
+
+def test_versions_are_limited_to_the_same_bill_by_date(tmp_path):
+    st = make_store(tmp_path)
+    old = {"key": "010/2019", "bill_no": 10, "year": 2019, "date": "2019-03-01T00:00:00Z", "title": "Trusts (Amendment) - Bill",
+           "title_norm": "trusts amendment", "kind": "Bill", "long_title": "x", "presented_by": None, "presented_on": None,
+           "gazette_date": None, "printed_no": None, "n_pages": 1, "n_sections": 1, "pdf_path": "x", "summary": None}
+    st.replace_bill(old, [{"kind": "overview", "text": "old", "ctx": "old"}])
+    assert {v["key"] for v in st.versions("trusts amendment")} == {"010/2019", "081/2026", "086/2026"}  # same title, 3 bills
+    near = {v["key"] for v in st.versions("trusts amendment", "2026-10-21T00:00:00Z")}
+    assert near == {"081/2026", "086/2026"}  # the 2019 bill is a different bill
+    ag = Agent(st, Retriever(st), FakeLLM([]))
+    assert "010/2019" not in ag.run_tool("get_bill_overview", {"bill": "086/2026"})
+
+
+def test_search_bills_returns_clauses_only_and_find_bills_returns_overviews(tmp_path):
+    st = make_store(tmp_path)
+    ag = Agent(st, Retriever(st), FakeLLM([]))
+    st.update_overview("086/2026", "Summary (auto-generated): trustees must keep accounts for fifteen days. Keywords: trustee accounts")
+    clauses = ag.run_tool("search_bills", {"query": "trustee accounts summary"})
+    assert "overview" not in clauses and "auto-generated" not in clauses  # summaries never crowd out clauses
+    assert "Long title:" in ag.run_tool("find_bills", {"query": "trustee accounts"})

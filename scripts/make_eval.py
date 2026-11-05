@@ -52,6 +52,8 @@ CLAUSE (section {no}{part}):
 BILL_PROMPT = """You write evaluation questions for a search engine over Sri Lankan bills.
 Given a bill's title and long title, write ONE question a citizen might ask to find this bill or learn what it is
 for, WITHOUT using the bill's exact title words more than necessary (describe the subject in other words).
+The question must carry enough identifying detail (the year, the Act being amended, or the named body or subject)
+that only THIS bill fits; many bills amend the same Acts in different years, so a vague question is wrong.
 Return ONLY JSON: {{"question": "...", "answer": "<one sentence on the bill's purpose>"}}
 
 TITLE: {title} ({year})
@@ -67,14 +69,14 @@ def gold_equivalents(store, key, no):
     b = store.bill(key)
     text = norm(store.section_map(key).get(no, ""))
     gold = [{"bill": key, "section": no}]
-    for v in store.versions(b["title_norm"]):
+    for v in store.versions(b["title_norm"], b["date"]):
         if v["key"] != key and norm(store.section_map(v["key"]).get(no, "")) == text:
             gold.append({"bill": v["key"], "section": no})
     return gold
 
 
-def pick(store, rng, n, regex, used_titles):
-    rows = store.db.execute("SELECT key, year, title_norm FROM bills WHERE kind IN ('Bill','Other') AND n_sections>=4").fetchall()
+def pick(store, rng, n, regex, used_titles, since_year=0):
+    rows = store.db.execute("SELECT key, year, title_norm FROM bills WHERE kind IN ('Bill','Other') AND n_sections>=4 AND year>=?", (since_year,)).fetchall()
     weights = [2.0 if r["year"] >= 2021 else 1.0 for r in rows]
     out, tries = [], 0
     while len(out) < n and tries < 4000:
@@ -110,6 +112,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", default="evals/retrieval_eval.jsonl")
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--append", action="store_true", help="add to the existing file instead of overwriting")
+    ap.add_argument("--only-bill", type=int, default=0, help="generate only N bill-level items (skips clause items)")
+    ap.add_argument("--since-year", type=int, default=0, help="only sample bills from this year on")
+    ap.add_argument("--clause-scale", type=float, default=1.0, help="multiply the per-type clause quotas")
+    ap.add_argument("--bill-n", type=int, default=0, help="number of bill-level items (default 12)")
     ap.add_argument("--review", action="store_true", help="print the existing file for manual review and exit")
     a = ap.parse_args()
     if a.review:
@@ -119,16 +126,21 @@ def main():
         return
     s = load_settings()
     store, llm, rng = Store(s.db_path), make_llm(s), random.Random(a.seed)
-    jobs, used = [], set()
-    for t, (regex, how, quota) in TYPES.items():
-        for key, no, text in pick(store, rng, quota, regex, used):
+    jobs, used, existing = [], set(), []
+    if a.append and Path(a.out).exists():
+        existing = [json.loads(l) for l in open(a.out, encoding="utf-8") if l.strip()]
+        used = {store.bill(i["source"]["bill"])["title_norm"] for i in existing if store.bill(i["source"]["bill"])}
+    for t, (regex, how, quota) in ([] if a.only_bill else TYPES.items()):
+        for key, no, text in pick(store, rng, max(1, round(quota * a.clause_scale)), regex, used, a.since_year):
             b = store.bill(key)
             part = (store.section_text(key, no) or {}).get("part")
             jobs.append((t, "clause", key, no, text, CLAUSE_PROMPT.format(
                 how=how, title=b["title"], year=b["year"], long_title=b["long_title"] or "n/a", no=no,
                 part=f", {part}" if part else "", text=text)))
-    rows = store.db.execute("SELECT key FROM bills WHERE kind IN ('Bill','Other') AND long_title IS NOT NULL").fetchall()
-    for r in rng.sample([r["key"] for r in rows if store.bill(r["key"])["title_norm"] not in used], N_BILL_LEVEL):
+    rows = store.db.execute("SELECT key FROM bills WHERE kind IN ('Bill','Other') AND long_title IS NOT NULL AND year>=?", (a.since_year,)).fetchall()
+    n_bill = a.only_bill or a.bill_n or N_BILL_LEVEL
+    pool = [r["key"] for r in rows if store.bill(r["key"])["title_norm"] not in used]
+    for r in rng.sample(pool, n_bill):
         b = store.bill(r)
         jobs.append(("bill-purpose", "bill", r, None, b["long_title"], BILL_PROMPT.format(
             title=b["title"], year=b["year"], long_title=b["long_title"])))
@@ -136,21 +148,22 @@ def main():
     with ThreadPoolExecutor(4) as ex:
         outs = list(ex.map(lambda j: ask(llm, j[5]), jobs))
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
-    n = 0
-    with open(a.out, "w", encoding="utf-8") as f:
+    n = max([int(i["id"][1:]) for i in existing], default=0)
+    start = n
+    with open(a.out, "a" if a.append else "w", encoding="utf-8") as f:
         for (t, level, key, no, text, _), d in zip(jobs, outs):
             if not d:
                 print(f"  ! no usable output for {key} {no}", file=sys.stderr)
                 continue
             b = store.bill(key)
             gold = (gold_equivalents(store, key, no) if level == "clause" else
-                    [{"bill": v["key"]} for v in store.versions(b["title_norm"])])
+                    [{"bill": v["key"]} for v in store.versions(b["title_norm"], b["date"])])
             n += 1
             f.write(json.dumps({"id": f"q{n:03d}", "type": t, "level": level, "question": norm(d["question"]),
                                 "answer": norm(d["answer"]), "gold": gold,
                                 "source": {"bill": key, "section": no, "year": b["year"]},
                                 "evidence": norm(text)[:900], "reviewed": False}, ensure_ascii=False) + "\n")
-    print(f"wrote {n}/{len(jobs)} items to {a.out}", file=sys.stderr)
+    print(f"wrote {n - start}/{len(jobs)} items to {a.out}", file=sys.stderr)
 
 
 if __name__ == "__main__":

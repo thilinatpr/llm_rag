@@ -17,6 +17,8 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
         bm25 + dense + rerank R@1 0.60 R@5 0.81  R@10 0.91  MRR 0.69   <- best
 - [x] Dense + rerank are now the default when Cloudflare credentials exist; missing/stale vectors raise `VectorsError`
       (fingerprinted). Index + vectors uploaded to R2 and restore verified (checksums + eval MRR 0.69 from the copy).
+- [x] Bill summaries (365 bills: all 2024-2026 + 64 of 2023) + `find_bills` tool + kind routing; eval grown to 134 items
+      (72 recent) with repaired bill-level gold. Recent (2025+): MRR 0.85 -> 0.87, bill-level MRR 0.91 -> 0.96.
 - [x] Workers AI providers wired in: `BILLRAG_EMBED_PROVIDER=cloudflare` (bge-base-en-v1.5, 42,696 chunks embedded in ~3 min)
       and `BILLRAG_RERANK=cloudflare` (bge-reranker-base). Agent verified end to end with the best config (~25 s/question).
 - [x] Verified live on Cloudflare Workers AI: `@cf/openai/gpt-oss-120b` via the OpenAI-compatible endpoint does multi-step
@@ -24,17 +26,22 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
       `bge-base-en-v1.5` (768-d) respond too; neither is wired into billrag yet.
 
 ## Next (in priority order)
+- [ ] **One-command refresh for newly published bills** (the users' main use case): scrape -> `ingest` -> `summarize
+      --since-year <current-1>` -> incremental `embed` -> `upload_r2.py --include-index`, ideally on a schedule. Each
+      step is already resumable/incremental; they just aren't chained. Check how the scraper detects new/changed bills
+      (listing has `updatedAt`).
+- [ ] Recency prior in ranking (small boost for newer bills when the question gives no year) - measure on `--since-year 2025`;
+      today recency is only an instruction in the agent prompt.
+- [ ] Grow the *recent* eval slice with real questions (current 72 are LLM-generated) and add answer-level grading.
+- [ ] Remaining recent misses are mostly boilerplate-clause ambiguity (identical "qualified auditor" / retirement-age
+      clauses in many bills); consider showing the user the candidate bills instead of guessing.
 - [ ] **Wire a `cloudflare` provider** for embeddings (`/ai/run/@cf/baai/bge-base-en-v1.5`, `{"text":[...]}` ->
       `result.data`) and reranking (`/ai/run/@cf/baai/bge-reranker-base`, `{"query","contexts":[{"text"}]}` ->
       `result.response[{id,score}]`). Note: in a first trial the reranker scores saturated (top 3 all ~0.997), so judge it
       on the eval set, don't assume it helps. Still unverified live: the Anthropic adapter.
-- [ ] Bill-level "which law is this?" is still the weakest (R@1 0.50, R@10 0.80): try embedding the long title +
-      LLM summary as a separate bill-level index (`python -m billrag summarize`), and a `search_bills` mode that
-      returns bills instead of clauses.
 - [ ] Grow/harden the eval set: 47 questions gives roughly +/-0.14 on any rate, so only large differences are
       meaningful. Add real user questions, multi-clause questions, and answer-level grading of `agent.ask` output
       (the stored `answer` field is the reference).
-- [ ] Run `python -m billrag summarize` (LLM bill summaries) and measure whether "which bill is about X?" improves.
 - [ ] Rotate the R2 API token: it was pasted into a chat transcript. Revoke it and issue a new one.
 - [ ] Agent latency (~18-25 s for a 4-tool question on gpt-oss-120b; rerank adds ~1 s per search): try parallel tool calls, a smaller model for
       routing, or streaming.

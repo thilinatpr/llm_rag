@@ -40,10 +40,13 @@ def first_hit_rank(item, results):
     return None
 
 
-def evaluate(retriever, items, k=10):
+CLAUSE_KINDS = ("section", "schedule")
+
+
+def evaluate(retriever, items, k=10, bill_kinds=None, clause_kinds=None):
     rows, t0 = [], time.time()
     for it in items:
-        res = retriever.search(it["question"], k=k)
+        res = retriever.search(it["question"], k=k, kinds=bill_kinds if it["level"] == "bill" else clause_kinds)
         rows.append({"item": it, "rank": first_hit_rank(it, res), "top": [(c["bill_key"], c.get("section_no")) for c in res[:5]]})
     elapsed = time.time() - t0
     return summarize(rows), rows, elapsed

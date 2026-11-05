@@ -34,21 +34,35 @@ def _work(args):
         return None, f"{type(e).__name__}: {e}"
 
 
+def head_line(bill: dict) -> str:
+    return f"Bill {bill['key']} \u2014 {bill['title']} ({bill['kind']}, {bill['date'][:10]})"
+
+
+def overview_text(bill: dict, outline: list, summary=None) -> str:
+    """Bill-level chunk: title, optional LLM summary + keywords, long title, presenter, section outline."""
+    parts = [head_line(bill) + "."]
+    if summary:
+        parts.append("Summary (auto-generated): " + summary)
+    if bill.get("long_title"):
+        parts.append(bill["long_title"])
+    if bill.get("presented_by"):
+        parts.append(f"Presented by {bill['presented_by']}.")
+    parts.append("Outline: " + "; ".join(outline))
+    return " ".join(parts)[:3600]
+
+
 def build_chunks(bill: dict, parsed):
-    head = f"Bill {bill['key']} — {bill['title']} ({bill['kind']}, {bill['date'][:10]})"
+    head = head_line(bill)
     chunks = []
     outline = []
     for s in parsed.sections:
-        ref = f"§{s.no}" if s.no is not None else (s.label or "schedule")
+        ref = f"\u00a7{s.no}" if s.no is not None else (s.label or "schedule")
         outline.append(f"{ref} {s.heading or s.text[:60]}")
         ctx_head = " | ".join(x for x in (head, s.part, ref, s.heading) if x)
         for piece in split_text(s.text):
             chunks.append({"kind": s.kind, "part": s.part, "section_no": s.no, "heading": s.heading,
                            "page": s.page, "text": piece, "ctx": f"{ctx_head}\n{piece}"})
-    c = parsed.cover
-    overview = " ".join(x for x in (
-        head + ".", bill["long_title"] or "", f"Presented by {c['presented_by']}." if c.get("presented_by") else "",
-        "Outline: " + "; ".join(outline)) if x)[:3000]
+    overview = overview_text({**bill, "presented_by": parsed.cover.get("presented_by")}, outline, bill.get("summary"))
     chunks.insert(0, {"kind": "overview", "page": 1, "text": overview, "ctx": overview})
     return chunks
 
@@ -85,6 +99,8 @@ def ingest(data_dir: Path, db_path: Path, limit=None, workers=4, since_year=0):
                    "printed_no": c.get("printed_no"), "n_pages": parsed.n_pages,
                    "n_sections": sum(1 for s in parsed.sections if s.kind == "section"), "pdf_path": str(p),
                    "summary": None}
+            prev = store.bill(row["key"])
+            row["summary"] = prev["summary"] if prev else None  # LLM summaries survive a re-ingest
             store.replace_bill(row, build_chunks(row, parsed))
             if n % 50 == 0:
                 store.commit()
