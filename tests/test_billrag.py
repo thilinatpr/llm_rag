@@ -618,3 +618,40 @@ def test_grader_retries_once_when_the_first_reply_is_prose(tmp_path):
     assert r.llm_calls == 3 and not r.warnings  # prose reply -> one firmer retry -> real grades, no fallback
     assert llm.efforts[:2] == ["low", None] and "JSON object ONLY" in llm.calls[1]
     assert r.evidence and r.evidence[0].score == 3
+def test_web_ui_endpoints(tmp_path):
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from billrag.web import make_handler
+
+    class StubApp:
+        def search(self, q, k=6):
+            return [f"hit:{q}:{k}"]
+
+        def ask(self, sid, q):
+            if q == "boom":
+                raise RuntimeError("no key")
+            return f"{sid}:{q}"
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(StubApp()))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+
+    def post(path, body):
+        req = urllib.request.Request(base + path, json.dumps(body).encode(), {"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    try:
+        with urllib.request.urlopen(base + "/") as r:
+            assert b"Sri Lanka Bills Chat" in r.read()
+        assert post("/api/ask", {"session": "s", "question": "hi"}) == (200, {"answer": "s:hi"})
+        assert post("/api/search", {"query": "x", "k": 99}) == (200, {"results": ["hit:x:15"]})
+        assert post("/api/ask", {"question": " "})[0] == 400
+        code, body = post("/api/ask", {"question": "boom"})
+        assert code == 500 and "no key" in body["error"]
+    finally:
+        srv.shutdown()

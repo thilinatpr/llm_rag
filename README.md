@@ -33,6 +33,7 @@ python -m billrag search "detention period of a suspect" -k 5     # no key neede
 
 export ANTHROPIC_API_KEY=...                   # or see billrag/config.py for OpenAI-compatible servers
 python -m billrag chat -v
+python -m billrag serve                       # simple web chat UI at http://127.0.0.1:8000 (tick "Search only" to skip the LLM; --mode agent for the tool loop)
 python -m billrag ask "How does the 2026 terrorism bill limit detention without trial?"
 
 # optional upgrades
