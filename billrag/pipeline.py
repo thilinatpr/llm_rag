@@ -13,6 +13,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
+from . import resolve
 from .store import normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
@@ -238,8 +239,17 @@ class Pipeline:
     # ------------------------------------------------------------ driver
     def ask(self, question: str) -> Result:
         res = Result(question=question, answer="")
+        plan = resolve.resolve_question(self.store, question)
+        if plan["action"] == "reply":  # greeting, or an abbreviation we cannot ground: no search, no model call
+            res.answer = plan["text"]
+            self.on_event("resolve", {"reply": True})
+            self.history.append((question, res.answer))
+            return res
+        notes = plan["notes"]
+        if notes:
+            self.on_event("resolve", {"notes": notes})
         t = time.time()
-        q = self.condense(question, res)
+        q = self.condense(plan["question"], res)
         res.seconds["condense"] = time.time() - t
         keys = [k for k in {normalize_ref(m) for m in re.findall(r"\d{1,3}\s*/\s*\d{4}", q)} if k and self.store.bill(k)] or None
         seen_ids, graded, queries = set(), [], [q]
@@ -267,6 +277,12 @@ class Pipeline:
         t = time.time()
         res.answer = self.summarise(q, res.evidence, enough, missing, res)
         res.seconds["summarise"] = time.time() - t
+        if notes:
+            res.answer = " ".join(notes) + "\n\n" + res.answer
+        if not res.evidence:
+            near = resolve.closest_bills(self.store, question, int(m.group(0)) if (m := re.search(r"\b(19|20)\d{2}\b", question)) else None)
+            if near:
+                res.answer += "\n\nClosest bills by title: " + "; ".join(f"{t} ({', '.join(k)})" for t, k in near) + "."
         bad = self.verify(res.answer, res.evidence)
         if bad:
             res.warnings.append("citations not backed by the retrieved evidence: " + ", ".join(bad))

@@ -100,21 +100,26 @@ test("REST sender posts to the Email Service endpoint, retries 429, throws on fa
   }
 });
 
-test("signed-in requests go to the upstream only when it is bound and configured", async () => {
+test("page is static; only /api/* and /healthz go to the upstream, and only when configured", async () => {
   const t = setup();
   const cookie = await login(t);
   const seen = [];
-  const withUp = createHandler({ sendMail: async () => {}, upstream: async (req, env) => (seen.push(req.url), new Response("from container")) });
-  const call = (env, path = "/x") => withUp(new Request("https://x.test" + path, { headers: { Cookie: cookie } }), env);
-  // no BILLRAG binding -> falls through to static assets
-  assert.equal(await (await call(t.env)).text(), "hello page");
-  // bound but PROXY_SECRET missing -> fail closed
-  assert.equal((await call({ ...t.env, BILLRAG: {} })).status, 500);
+  const withUp = createHandler({ sendMail: async () => {}, upstream: async (req) => (seen.push(new URL(req.url).pathname), new Response("from container")) });
+  const call = (env, path, method = "GET") => withUp(new Request("https://x.test" + path, { method, headers: { Cookie: cookie } }), env);
+  const bound = { ...t.env, BILLRAG: {}, PROXY_SECRET: "s".repeat(16) };
+  // no BILLRAG binding -> static assets for everything
+  assert.equal(await (await call(t.env, "/api/ask", "POST")).text(), "hello page");
+  // bound: the page comes from assets without touching the container
+  assert.equal(await (await call(bound, "/")).text(), "hello page");
   assert.equal(seen.length, 0);
-  const ok = await call({ ...t.env, BILLRAG: {}, PROXY_SECRET: "s".repeat(16) });
-  assert.equal(await ok.text(), "from container");
+  // API and health probe go upstream
+  assert.equal(await (await call(bound, "/api/ask", "POST")).text(), "from container");
+  assert.equal(await (await call(bound, "/healthz")).text(), "from container");
+  assert.deepEqual(seen, ["/api/ask", "/healthz"]);
+  // bound but PROXY_SECRET missing -> fail closed for upstream routes
+  assert.equal((await call({ ...t.env, BILLRAG: {} }, "/api/ask", "POST")).status, 500);
   // unauthenticated requests never reach the upstream
-  const anon = await withUp(new Request("https://x.test/api/ask", { method: "POST" }), { ...t.env, BILLRAG: {}, PROXY_SECRET: "s".repeat(16) });
+  const anon = await withUp(new Request("https://x.test/api/ask", { method: "POST" }), bound);
   assert.equal(anon.status, 401);
-  assert.equal(seen.length, 1);
+  assert.equal(seen.length, 2);
 });
