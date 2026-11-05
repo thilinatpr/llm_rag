@@ -41,5 +41,14 @@ FROM_ADDRESS = "login@tripletrackr.com"
 CF_ACCOUNT_ID = "e81ea992523c4e14d3d1a89f10732576"
 # R2 bucket holding the built index (index.sqlite + vectors.npz); the container restores it on start.
 R2_BUCKET = "gov-rag"
+# Translation of non-English questions (billrag/translate.py): off | script | ai.
+# script = Sinhala/Tamil by Unicode script, no extra model call for English. ai = one extra call on every other question
+# (English too) that detects ANY language and translates it. Read by the container when it starts.
+TRANSLATE = "ai"
+# Model for the translate calls only (detect + translate in, translate out). Unset = the chat model (gpt-oss-120b).
+# A Workers AI chat model or the Meta machine-translation model @cf/meta/m2m100-1.2b. If it errors or returns unusable
+# output, the chat model is tried instead (see the warning in the chat log). Llama 3.3 gave the correct Sinhala legal terms
+# where gpt-oss did not, but is slower on long answers (~37 s vs ~7 s); see AGENTS.md "Translation model".
+TRANSLATE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 # Optional, ignored when the container is bound: proxy signed-in requests to another server instead.
 # ORIGIN = "https://billrag.example.com"

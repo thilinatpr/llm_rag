@@ -70,5 +70,6 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
 ## Product
 - [ ] Web UI / API wrapper (streaming answers, clickable citations that open the PDF page from R2).
 - [x] Translation layer (`billrag/translate.py`, switch `BILLRAG_TRANSLATE=off|script|ai`): any language via one AI detect+translate call, Sinhala/Tamil free by script; answers come back in the question language, citations preserved.
+- [ ] Compare translation models on real Sinhala/Tamil questions (Gemma 3 12B vs M2M100 vs gpt-oss) using the warning reasons in the chat logs.
 - [ ] Evaluate the translation layer: a small Sinhala/Tamil question set, back-translation check, which model translates best.
 - [ ] Conversation memory limits (the agent keeps full history; trim or summarise for long chats).

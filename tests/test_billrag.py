@@ -1015,3 +1015,79 @@ def test_settings_translate_switch(monkeypatch):
     assert load_settings().translate == "script"
     monkeypatch.setenv("BILLRAG_TRANSLATE", "AI")
     assert load_settings().translate == "ai"
+
+
+# ---------------------------------------------------------------- dedicated translation model (BILLRAG_TRANSLATE_MODEL)
+class TrModel:
+    """A translation-only chat model (e.g. Gemma / Llama): answers just the two translate prompts."""
+
+    def __init__(self, fail=False):
+        self.model, self.fail, self.calls = "@cf/google/gemma-3-12b-it", fail, []
+
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+        self.calls.append((system[:30], effort))
+        if self.fail:
+            raise RuntimeError("HTTP 400 model not found")
+        if system.startswith("Translate the user's question"):
+            return Reply("How many days does the amendment allow?")
+        return Reply(SI_Q + " [086/2026 §2]")
+
+
+def test_dedicated_translation_chat_model_is_used_without_reasoning_effort(tmp_path):
+    st, main, tm = make_store(tmp_path), TranslatingLLM(), TrModel()
+    p = Pipeline(st, Retriever(st), main, grade_effort="low", translator=translate.Translator(main, "low", model_llm=tm))
+    r = p.ask(SI_Q)
+    assert "TO_EN" not in main.calls and "FROM_EN" not in main.calls  # main model only graded + answered
+    assert len(tm.calls) == 2 and all(e is None for _, e in tm.calls)  # no reasoning_effort sent to the translation model
+    assert translate.detect(r.answer) == "si" and not r.warnings and r.llm_calls == 4
+    assert r.seconds["translate_in"] < 5  # only the translation itself, not the whole pipeline
+
+
+def test_translation_model_outage_falls_back_to_main_model_and_reports_reasons(tmp_path):
+    st, main = make_store(tmp_path), TranslatingLLM(drop_cites=True)
+    p = Pipeline(st, Retriever(st), main, translator=translate.Translator(main, model_llm=TrModel(fail=True)))
+    r = p.ask(SI_Q)
+    assert "TO_EN" in main.calls  # question translated by the main model after the translation model failed
+    assert r.answer == r.answer_en  # main model dropped citations twice -> English shown
+    w = " ".join(r.warnings)
+    assert "gemma-3-12b-it: error" in w and "citations changed" in w
+
+
+class FakeCF:
+    def __init__(self):
+        self.bodies = []
+
+    def _post(self, model, body):
+        self.bodies.append(body)
+        return {"translated_text": f"<{body['target_lang']}:{body['text'].strip()}>"}
+
+
+def test_m2m100_keeps_citations_bullets_and_skips_non_text():
+    cf = FakeCF()
+    mt = translate.M2M("@cf/meta/m2m100-1.2b", None, None, client=cf)
+    out = mt.translate_keeping_cites("It is **fifteen** days [086/2026 §2(1)].\n- longer 【086/2026 §3】, then 2 [086/2026]", "en", "si")
+    assert out == "<si:It is fifteen days> [086/2026 §2(1)].\n- <si:longer> [086/2026 §3] <si:, then 2> [086/2026]"
+    assert translate.cites(out) == translate.cites("[086/2026 §2(1)] [086/2026 §3] [086/2026]")
+    assert all("086/2026" not in b["text"] for b in cf.bodies)  # the model never sees a citation
+
+
+def test_make_translator_picks_the_right_kind_of_model():
+    import dataclasses
+    from billrag.config import load_settings
+    s = dataclasses.replace(load_settings(), chat_provider="openai", chat_model="@cf/openai/gpt-oss-120b", chat_api_key="x",
+                            cf_account_id="acct", cf_api_token="tok")
+    main = object()
+    t = translate.make_translator(dataclasses.replace(s, translate_model=None), main)
+    assert t.model_llm is None and t.mt is None and t.llm is main
+    t = translate.make_translator(dataclasses.replace(s, translate_model="@cf/meta/m2m100-1.2b"), main)
+    assert t.mt and t.mt.model == "@cf/meta/m2m100-1.2b" and t.model_llm is None
+    t = translate.make_translator(dataclasses.replace(s, translate_model="@cf/google/gemma-3-12b-it"), main)
+    assert t.model_llm.model == "@cf/google/gemma-3-12b-it" and t.mt is None
+
+
+def test_translation_never_adds_bill_numbers():
+    assert translate.drop_invented_refs("q", 'What criteria define a "terrorist act" in this new bill 077/2026?') == \
+        'What criteria define a "terrorist act" in this new bill?'
+    assert translate.drop_invented_refs("q", "What does Bill No. 77/2026 say?") == "What does Bill say?"
+    assert translate.drop_invented_refs("\u0db8\u0dd9\u0db8 086/2026", "What does 086/2026 say?") == "What does 086/2026 say?"
+    assert "077" not in translate.TO_EN + translate.DETECT_AND_TRANSLATE  # no example numbers for models to copy

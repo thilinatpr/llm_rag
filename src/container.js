@@ -25,6 +25,10 @@ export class BillragContainer extends Container {
       BILLRAG_CHAT_BASE_URL: `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/ai/v1`,
       BILLRAG_CHAT_API_KEY: env.CLOUDFLARE_API_TOKEN,
       BILLRAG_PROXY_SECRET: env.PROXY_SECRET,
+      // Translation layer (billrag/translate.py): off | script | ai. Unset -> the Python default ("script").
+      BILLRAG_TRANSLATE: env.TRANSLATE,
+      // Optional model for the translate calls only, e.g. @cf/google/gemma-3-12b-it or @cf/meta/m2m100-1.2b.
+      BILLRAG_TRANSLATE_MODEL: env.TRANSLATE_MODEL,
     };
     this.envVars = Object.fromEntries(Object.entries(pass).filter(([, v]) => v));
   }

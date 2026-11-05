@@ -81,7 +81,8 @@ Container: restores index.sqlite + vectors.npz from R2 (gov-rag/bills/) on start
 | Email | zone `tripletrackr.com`; sender `login@tripletrackr.com` via the Email Service REST API (`/accounts/<id>/email/sending/send`) - no per-recipient verification in Cloudflare; `ALLOWED_EMAILS` is the only allowlist |
 
 **Worker vars** (`wrangler.toml`): `ALLOWED_EMAILS`, `FROM_ADDRESS`, `CF_ACCOUNT_ID`, `R2_BUCKET`; optional `CHAT_MODEL`
-(default `@cf/openai/gpt-oss-120b`), `ORIGIN` (ignored when the container is bound).
+(default `@cf/openai/gpt-oss-120b`), `ORIGIN` (ignored when the container is bound), `TRANSLATE` (`off`|`script`|`ai`, passed to the container as
+`BILLRAG_TRANSLATE`; currently `ai`), `TRANSLATE_MODEL` (-> `BILLRAG_TRANSLATE_MODEL`; currently `@cf/meta/llama-3.3-70b-instruct-fp8-fast`).
 **Worker secrets** (`npx wrangler secret put NAME`): `OTP_PEPPER`, `CF_EMAIL_TOKEN` (Email Sending), `PROXY_SECRET` (shared with the
 container; >= 16 chars), `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (the container needs only read access: use a read-only R2
 token if you can), `CLOUDFLARE_API_TOKEN` (Workers AI). `container.js` copies these into the container's env as
@@ -129,21 +130,73 @@ Secrets: `npx wrangler secret put NAME` (stdin) / `npx wrangler secret list`. Th
 container reads them from the Worker env when it (re)starts, so restart it (redeploy or let it sleep) after changing one.
 Rotating a token: create the new one, `secret put` it, then revoke the old one.
 
-### Deploying from the cloud sandbox (what worked, and the traps)
-Needs: the environment's network allowlist includes `registry.cloudflare.com` (it answers 401 when reachable), and a token
-with Containers permission (`npx wrangler containers list` must work). The sandbox proxy re-signs HTTPS, which breaks `pip`
-inside `docker build`, and Docker Hub rate-limits anonymous pulls (HTTP 429), so do NOT build the repo `Dockerfile` as is:
-1. `dockerd > /tmp/dockerd.log 2>&1 &` (wait ~8 s); `docker pull python:3.12-slim && docker tag python:3.12-slim local-python:3.12`.
-2. Make a scratch build context (outside the repo): copy `billrag/`, `scripts/fetch_index.py`, `scripts/upload_r2.py`,
-   `docker/entrypoint.sh`, `requirements-serve.txt` and the proxy CA bundle (`/root/.ccr/ca-bundle.crt`) into it, with a Dockerfile
-   identical to the repo's except `FROM local-python:3.12` and
-   `RUN --mount=type=bind,source=ca-bundle.crt,target=/ca.crt PIP_CERT=/ca.crt pip install -r requirements-serve.txt`
-   (the mount keeps the proxy CA out of the final image - never bake it in).
-3. Copy `wrangler.toml` to a temporary `wrangler.deploy.toml` with `image = "<scratch>/Dockerfile"` and
-   `image_build_context = "<scratch>"`; run `npx wrangler deploy -c wrangler.deploy.toml`; delete the temp file; `pkill dockerd`.
-4. Watch the rollout as above. `workers.dev` and `wrangler tail` (websocket, HTTP 403) are NOT reachable from the sandbox, so
-   verify through the API, the rollout status and the chat logs rather than by loading the site.
-The harness blocks production deploys unless the owner asked for one in that turn.
+### Deploying from the cloud sandbox (verified 2026-11-05, build `4cfb4b63`)
+Only when the owner asked for a deploy in that turn. Deploy a commit that is on `main` (or merge it right after, with a merge
+commit, not a squash, so the deployed SHA stays in `main`'s history), and always deploy green.
+
+**Why not just `npx wrangler deploy`:** the sandbox proxy re-signs HTTPS, so `pip` inside `docker build` fails with
+`CERTIFICATE_VERIFY_FAILED`. Docker Hub also rate-limits anonymous pulls (HTTP 429) and the Docker daemon is not running by
+default. Never disable TLS verification and never bake the proxy CA into the image: bind-mount it for the `pip` step only.
+
+**0. Pre-flight: token and network.** The deploy token needs Workers Scripts: Edit, Workers KV Storage: Edit,
+Containers: Edit, Zone: Read. It does NOT need Workers AI (the container uses its own `CLOUDFLARE_API_TOKEN` Worker
+secret). A Workers-AI-only token fails late, after the image build, with `Failed to automatically retrieve account IDs` or
+`403 No access to the specified service`, so check first:
+```bash
+cd /home/user/llm_rag && export CLOUDFLARE_ACCOUNT_ID=$CF_ACCOUNT_ID      # wrangler cannot look the account up itself
+H="Authorization: Bearer $CLOUDFLARE_API_TOKEN"; B=https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID
+for u in containers/applications storage/kv/namespaces workers/subdomain; do
+  printf "%-26s" $u; curl -sS -H "$H" "$B/$u" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("ok" if d["success"] else d["errors"])'
+done                                                                     # all three must say ok
+curl -s -o /dev/null -w "%{http_code}\n" https://registry.cloudflare.com/v2/   # 401 = reachable; anything else = add it to the allowlist
+```
+**1. Green tests, Docker up, base image cached.**
+```bash
+pip install -q -r requirements-billrag.txt pytest && python -m pytest tests -q
+npm ci && npm test
+pgrep dockerd || (nohup dockerd > /tmp/dockerd.log 2>&1 &); sleep 8; docker info | grep "Server Version"
+docker pull python:3.12-slim && docker tag python:3.12-slim local-python:3.12
+```
+**2. Note what is live now (your rollback target) and the build id you are about to ship.**
+```bash
+npx wrangler containers info a03f4f3c-2efb-4e69-a1b6-c408e6f9b8dc | grep -E '"version"|"image"'   # e.g. version 8, sha256:...
+python -c "from billrag.chatlog import build_id; print(build_id())"                               # appears as `build` in chat logs
+```
+**3. Scratch build context outside the repo** (the repo `Dockerfile` stays untouched):
+```bash
+S=<scratchpad>/build; rm -rf $S; mkdir -p $S/scripts $S/docker
+cp -r billrag $S/ && cp scripts/fetch_index.py scripts/upload_r2.py $S/scripts/ && cp docker/entrypoint.sh $S/docker/
+cp requirements-serve.txt /root/.ccr/ca-bundle.crt $S/ && find $S -name __pycache__ -prune -exec rm -rf {} +
+sed -e 's|^FROM python:3.12-slim|FROM local-python:3.12|' \
+    -e 's|^RUN pip install -r requirements-serve.txt|RUN --mount=type=bind,source=ca-bundle.crt,target=/ca.crt PIP_CERT=/ca.crt pip install -r requirements-serve.txt|' \
+    Dockerfile > $S/Dockerfile
+diff Dockerfile $S/Dockerfile          # must show exactly those two lines
+sed "s|^image = \"./Dockerfile\"|image = \"$S/Dockerfile\"\nimage_build_context = \"$S\"|" wrangler.toml > wrangler.deploy.toml
+```
+If `Dockerfile` gains new `COPY` lines, copy those files into `$S` too.
+**4. Deploy, then clean up** (the build + push takes ~1 min):
+```bash
+npx wrangler deploy -c wrangler.deploy.toml    # ends with "Current Version ID: <worker version>" and "Modified application ..."
+rm -f wrangler.deploy.toml; pkill dockerd; git status --short   # must be clean
+```
+**5. Watch the container rollout** (took ~2 min; the old instance answers until it completes):
+```bash
+A=a03f4f3c-2efb-4e69-a1b6-c408e6f9b8dc
+for i in $(seq 1 12); do
+  s=$(curl -sS -H "$H" "$B/containers/applications/$A/rollouts" | python3 -c 'import sys,json; r=sorted(json.load(sys.stdin)["result"],key=lambda x:x["created_at"])[-1]; print(r["status"], "v"+str(r["target_version"]), r["progress"].get("updated_instances"), "/", r["progress"].get("total_instances"))')
+  echo "$(date +%T) $s"; case "$s" in completed*) break;; esac; sleep 30
+done
+```
+**6. Verify and record.** `workers.dev` and `wrangler tail` are NOT reachable from the sandbox, so verify from the chat
+logs once someone has asked a question (`pip install boto3` first; it is not in `requirements-billrag.txt`):
+```bash
+env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY python scripts/read_chatlogs.py --since $(date +%F) --out /tmp/logs.jsonl --show 5
+python3 -c "import json,collections; print(collections.Counter(json.loads(l).get('build') for l in open('/tmp/logs.jsonl')))"
+```
+Then update **Deployed vs main** below (build id, commit, Worker version, container version, previous version) in the same PR
+or a follow-up, and tell the owner exactly what is live and what is only merged.
+**Rollback:** check out the previous deployed commit and repeat steps 1-5; the old image digest stays in
+`registry.cloudflare.com`, and `wrangler deployments list` shows earlier Worker versions.
 
 ### Reading the chat logs
 Every question the live app answers is logged (best-effort, off the request path) to `r2://gov-rag/chatlogs/YYYY-MM-DD/<HHMMSSfff>-<session>-<turn>.json`
@@ -176,6 +229,8 @@ Worker-side errors (`upstream_failed`, with path, ms, error) go to Workers Logs 
 | `VectorsError` at startup | `vectors.npz` does not match `index.sqlite` (re-ingested without re-embedding). Re-run `embed`, `upload_r2.py --include-index`. |
 | workerd: "provided value is not of type function or ExportedHandler" | `src/worker.js` may only export the default handler and the Durable Object class; keep helpers in `auth.js`/`container.js`. |
 | `docker build` 429 or pip SSL errors in the sandbox | See "Deploying from the cloud sandbox". |
+| `wrangler deploy`: "Failed to automatically retrieve account IDs" / "403 No access to the specified service" | Token lacks deploy scopes (e.g. the Workers-AI-only token) or `CLOUDFLARE_ACCOUNT_ID` is unset: run the pre-flight check in "Deploying from the cloud sandbox". |
+| `wrangler deploy`: "The Docker CLI is needed ... could not be launched" | The Docker daemon is not running: `nohup dockerd > /tmp/dockerd.log 2>&1 &`. |
 | Out of memory in the container | `lite` (256 MiB) fit in memory but was too slow; `basic` is current. Vectors are float16 (66 MB); sessions are capped at 50 (`web.MAX_SESSIONS`). |
 
 ### Cost
@@ -216,10 +271,10 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". At the time of writing the live container is build `3bbe2bc6` (shorter answers, reasoning guard, logging,
-grounding, static page). Anything merged to `main` afterwards (for example the Sinhala/Tamil translation layer, #12) is NOT live
-until someone runs `wrangler deploy`. Check `git log origin/main` against the `build` seen in the latest chat log before
-telling the owner a change is live.
+"Merged" is not "live". Live since 2026-11-05 16:06 UTC: build `4cfb4b63` = commit `a2ad066` (PR #14: translation layer #12 +
+`TRANSLATE = "ai"`), Worker version `d0bf988b`, container app version 8. Previous: build `3bbe2bc6`, container version 7. Anything
+merged to `main` later is NOT live until someone runs `wrangler deploy`. Check `git log origin/main` against the `build` seen in the
+latest chat log before telling the owner a change is live.
 
 ## Rules
 
@@ -317,6 +372,29 @@ more call to translate the answer back. The English answer is citation-verified 
 translation must reproduce every `[NNN/YYYY §s]` citation exactly, else we return the English answer with a warning. If `ai`
 detection returns unusable output, the question is treated as English (warning). Bill titles stay English (English-only index).
 Translation quality is unmeasured: no non-English eval set yet.
+
+**Translation model** (`BILLRAG_TRANSLATE_MODEL`, Worker var `TRANSLATE_MODEL`; `translate.make_translator`): unset = the chat model.
+A chat model id is called on the same endpoint WITHOUT `reasoning_effort`. An id containing `m2m100` (`@cf/meta/m2m100-1.2b`) is a
+pure MT model called via `/ai/run`: `M2M.translate_keeping_cites` translates line by line and keeps citations, bullets and
+punctuation-only pieces out of the model; `ai` language detection then still uses a chat model. Any failure (error, reasoning text,
+wrong script, changed citations) falls back to the main chat model (one firmer retry on the last model), and the warning lists each
+attempt's reason. `drop_invented_refs` removes any `NNN/YYYY` the translation added (a bill number restricts retrieval to that bill).
+
+**Measured 2026-11-05** on the first live Sinhala question ("which criteria define a terrorist act in this new bill") and its
+712-char English answer, translated back to Sinhala and Tamil (n=1 question, 3 runs for the question; read the outputs, not just ok):
+
+| model | question -> English | answer -> si / ta | verdict |
+|---|---|---|---|
+| `@cf/openai/gpt-oss-120b` (chat model) | ~1 s; added "summary" 2/3 runs | 7-12 s / 23 s; "terrorist act" -> තර්ජන ("threat") | fast, wrong legal term |
+| `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | ~1.3 s; identical and correct 3/3 | 34-37 s / 28 s; correct ත්‍රස්තවාදී | **chosen**: quality over speed |
+| `@cf/meta/llama-4-scout-17b-16e-instruct` | ~0.9 s; correct | 11 s / 23 s; Chinese characters (意图) inside the Sinhala | rejected |
+| `@cf/meta/m2m100-1.2b` (MT) | 3.6 s; meaning lost ("framework") | 18 s / 26 s; broken Sinhala conjuncts, "Sri Lanka" wrong, English left in Tamil | rejected |
+| `@cf/google/gemma-4-26b-a4b-it` | no usable output | ~107 s; reasoning/empty | rejected |
+
+`@cf/google/gemma-3-12b-it` does not exist on this account (check `GET /accounts/<id>/ai/models/search` before configuring a model).
+`@cf/ai4bharat/indictrans2-en-indic-1B` (Translation) is listed too, untested. With an example bill number in the prompt
+(`like 077/2026`), both Llama models added "077/2026" to a question that named no bill: never put concrete numbers in prompts.
+To trade quality for speed, unset `TRANSLATE_MODEL` (gpt-oss translates, ~30 s faster on a Sinhala answer).
 
 ## Product priority: recent bills
 
