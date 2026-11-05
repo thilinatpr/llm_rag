@@ -10,7 +10,8 @@ documents.gov.lk. The three `*.ipynb` notebooks are older LangChain/OpenAI RAG e
 
 ```
 scripts/scrape_bills.py   documents.gov.lk -> data/bills/{bills.json,bills.csv,pdfs/<year>/<NNN_YYYY>_<LANG>.pdf}
-scripts/upload_r2.py      data/bills/ -> Cloudflare R2 bucket `gov-rag`, prefix `bills/` (idempotent)
+scripts/upload_r2.py      data/bills/ -> Cloudflare R2 bucket `gov-rag`, prefix `bills/` (idempotent; --include-index adds index+vectors)
+scripts/fetch_index.py    R2 -> data/bills/{index.sqlite,vectors.npz}: restore the built index in a fresh session (no ingest/embed)
 billrag/parse.py          PDF -> sections/parts/schedules (structure-aware) + cover metadata
 billrag/ingest.py         parse every English PDF -> data/bills/index.sqlite (chunks + FTS5)
 billrag/store.py          SQLite schema, BM25 search, section/outline/version queries
@@ -96,18 +97,29 @@ export BILLRAG_CHAT_PROVIDER=openai BILLRAG_CHAT_MODEL=@cf/openai/gpt-oss-120b \
   names (e.g. "Al Hasan" 2013 vs "Alhasan" 2015) make ambiguous gold; drop those items rather than loosen gold.
 - Always compare configs on the same file; n=47 means differences under ~0.15 are noise.
 
-## Recommended retrieval config (measured on evals/retrieval_eval.jsonl)
+## Retrieval config and the index in R2
 
+**Defaults:** if `CLOUDFLARE_API_TOKEN` and an account id (`BILLRAG_CF_ACCOUNT_ID` / `CLOUDFLARE_ACCOUNT_ID` /
+`R2_ACCOUNT_ID`) are set, dense embeddings (`@cf/baai/bge-base-en-v1.5`) and the cross-encoder
+(`@cf/baai/bge-reranker-base`) turn on automatically; otherwise keyword search only. Override with
+`BILLRAG_EMBED_PROVIDER=none` / `BILLRAG_RERANK=none`. `python -m billrag eval` prints `rerank=... dense=on|off`.
+
+Measured on `evals/retrieval_eval.jsonl`: BM25 only MRR 0.48 -> +rerank 0.64 -> +dense 0.62 -> +dense+rerank 0.69
+(R@10 0.91). Pure cross-encoder order beat the RRF-fused variant (`cloudflare-fused`).
+
+**Fresh session (fastest path):**
 ```bash
-export CLOUDFLARE_API_TOKEN=...                       # secret; Workers AI permission
-export BILLRAG_CF_ACCOUNT_ID=<account_id>             # or CLOUDFLARE_ACCOUNT_ID / R2_ACCOUNT_ID
-export BILLRAG_EMBED_PROVIDER=cloudflare BILLRAG_EMBED_MODEL=@cf/baai/bge-base-en-v1.5
-export BILLRAG_RERANK=cloudflare                      # @cf/baai/bge-reranker-base
-python -m billrag embed                               # once per ingest: ~10M tokens, ~3 min, writes data/bills/vectors.npz
+env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY python scripts/fetch_index.py --bucket gov-rag   # R2_* env vars
+python -m billrag eval -k 10                                                                      # sanity: MRR ~0.69
 ```
-- Results: BM25 only MRR 0.48 -> +rerank 0.64 -> +dense 0.62 -> +dense+rerank 0.69 (R@10 0.91). Pure cross-encoder
-  order beat the RRF-fused variant (`cloudflare-fused`).
-- `vectors.npz` is derived from the index: **re-run `embed` after every `ingest`** (chunk ids change), or dense
-  retrieval will silently point at the wrong chunks. It is git-ignored (114 MB).
-- If `vectors.npz` is absent the retriever silently falls back to BM25 only; check `eval` output ("dense=on/off").
-- Reranking is best-effort: on any API error the first-stage order is kept.
+**Rebuilding:** `ingest` then `embed` (~10M tokens, ~3 min, ~1 min for ingest), then
+`python scripts/upload_r2.py --bucket gov-rag --include-index` so the next session can fetch it.
+
+- **Fail-loud rule:** `vectors.npz` carries a fingerprint of the exact index it was built from
+  (`Store.fingerprint()`: hash of every chunk id + text). If dense is enabled and the file is missing, stale after a
+  re-ingest, or unstamped, the retriever raises `VectorsError` (CLI: exit 1 with the fix). Never bypass it; re-run `embed`.
+  `ingest` prints a NOTE when it leaves existing vectors stale.
+- Reranking is best-effort: on any API error the first-stage order is kept. Missing Cloudflare credentials with
+  `BILLRAG_RERANK=cloudflare` set explicitly is an error at startup.
+- `index.sqlite` (201 MB) and `vectors.npz` (114 MB) are git-ignored; R2 `gov-rag/bills/{index.sqlite,vectors.npz}` is
+  the shared copy. Upload always overwrites them (size is not a reliable change check).

@@ -8,6 +8,9 @@ Key layout mirrors data/bills/:  bills/pdfs/<year>/<bill>_<LANG>.pdf, bills/bill
 Idempotent: objects that already exist with the same size are skipped.
 
   python scripts/upload_r2.py --bucket gov-rag [--prefix bills] [--dry-run] [--include-index]
+
+--include-index also uploads index.sqlite and vectors.npz (always re-uploaded: they can change without changing size).
+Restore them in a fresh session with scripts/fetch_index.py.
 """
 import argparse
 import mimetypes
@@ -18,6 +21,9 @@ from pathlib import Path
 
 import boto3
 from botocore.config import Config
+
+
+INDEX_FILES = ("index.sqlite", "vectors.npz")
 
 
 def client():
@@ -52,18 +58,22 @@ def main():
     ap.add_argument("--prefix", default="bills")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--include-index", action="store_true", help="also upload index.sqlite")
+    ap.add_argument("--include-index", action="store_true", help="also upload index.sqlite and vectors.npz")
     a = ap.parse_args()
     if not a.bucket:
         sys.exit("Pass --bucket or set R2_BUCKET")
     root = Path(a.data)
     files = sorted((root / "pdfs").rglob("*.pdf")) + [root / n for n in ("bills.json", "bills.csv") if (root / n).exists()]
-    if a.include_index and (root / "index.sqlite").exists():
-        files.append(root / "index.sqlite")
+    always = set()
+    if a.include_index:
+        for name in INDEX_FILES:
+            if (root / name).exists():
+                files.append(root / name)
+                always.add(name)
     s3 = client()
     have = existing(s3, a.bucket, a.prefix)
     todo = [(p, f"{a.prefix}/{p.relative_to(root).as_posix()}") for p in files]
-    todo = [(p, k) for p, k in todo if have.get(k) != p.stat().st_size]
+    todo = [(p, k) for p, k in todo if have.get(k) != p.stat().st_size or p.name in always]
     print(f"{len(files)} local files, {len(files) - len(todo)} already in R2, {len(todo)} to upload "
           f"({sum(p.stat().st_size for p, _ in todo) / 1e6:.0f} MB)", file=sys.stderr)
     if a.dry_run:

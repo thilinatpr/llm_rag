@@ -279,3 +279,52 @@ def test_retriever_cross_rerank_modes(tmp_path):
         def scores(self, q, texts):
             raise RuntimeError("api down")
     assert [c["id"] for c in Retriever(st, rerank="cloudflare", reranker=Boom()).search("trustee accounts section", k=6)] == base
+
+
+# ---------------------------------------------------------------- defaults and loud failure
+def test_settings_default_to_cloudflare_only_with_credentials(monkeypatch):
+    from billrag.config import load_settings
+    for k in ("BILLRAG_EMBED_PROVIDER", "BILLRAG_RERANK", "CLOUDFLARE_API_TOKEN", "BILLRAG_CF_ACCOUNT_ID",
+              "CLOUDFLARE_ACCOUNT_ID", "R2_ACCOUNT_ID"):
+        monkeypatch.delenv(k, raising=False)
+    s = load_settings()
+    assert (s.embed_provider, s.rerank) == ("none", "none")
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "t")
+    assert load_settings().embed_provider == "none"  # token alone is not enough: needs an account id
+    monkeypatch.setenv("R2_ACCOUNT_ID", "a")
+    s = load_settings()
+    assert (s.embed_provider, s.rerank) == ("cloudflare", "cloudflare")
+    monkeypatch.setenv("BILLRAG_EMBED_PROVIDER", "none")  # explicit setting wins
+    assert load_settings().embed_provider == "none"
+
+
+def test_fingerprint_tracks_index_content(tmp_path):
+    a = make_store(tmp_path / "a")
+    b = make_store(tmp_path / "b")
+    assert a.fingerprint() == b.fingerprint()  # deterministic
+    a.db.execute("UPDATE chunks SET ctx = ctx || ' x' WHERE id = 1")
+    assert a.fingerprint() != b.fingerprint()
+
+
+def test_dense_retrieval_fails_loudly_on_missing_or_stale_vectors(tmp_path):
+    import numpy as np
+    from billrag.retrieve import VectorsError
+
+    class E:
+        def embed(self, texts):
+            return np.ones((len(texts), 2), dtype="float32")
+
+    st = make_store(tmp_path)
+    path = tmp_path / "v.npz"
+    with pytest.raises(VectorsError, match="does not exist"):
+        Retriever(st, E(), path)
+    ids = np.asarray([r["id"] for r in st.all_chunks()])
+    np.savez(path, ids=ids, vectors=np.ones((len(ids), 2), dtype="float32"))  # no fingerprint
+    with pytest.raises(VectorsError, match="stale or unstamped"):
+        Retriever(st, E(), path)
+    np.savez(path, ids=ids, vectors=np.ones((len(ids), 2), dtype="float32"), fingerprint=np.asarray(st.fingerprint()))
+    assert Retriever(st, E(), path).mat is not None  # valid vectors load
+    st.db.execute("UPDATE chunks SET ctx = 'changed' WHERE id = 1")
+    with pytest.raises(VectorsError):
+        Retriever(st, E(), path)  # index changed after embedding -> refuse
+    Retriever(st)  # keyword-only retriever (no embedder) is unaffected

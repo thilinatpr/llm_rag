@@ -11,7 +11,7 @@ def embed_all(store, embedder, path, batch=256):
         print(f"  embedded {min(i + batch, len(rows))}/{len(rows)}", file=sys.stderr)
     m = np.vstack(vecs)
     m /= np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-9)
-    np.savez_compressed(path, ids=np.asarray([r["id"] for r in rows]), vectors=m)
+    np.savez_compressed(path, ids=np.asarray([r["id"] for r in rows]), vectors=m, fingerprint=np.asarray(store.fingerprint()))
 
 
 SUM_PROMPT = ("Summarise this Sri Lankan bill for a non-lawyer in at most 120 words: purpose, who is affected, key new "

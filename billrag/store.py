@@ -132,6 +132,14 @@ class Store:
         sql += " ORDER BY score LIMIT ?"; args.append(limit)
         return [r["id"] for r in self.db.execute(sql, args)]
 
+    def fingerprint(self):
+        """Hash of every chunk id + indexed text. Vectors are only valid for the exact index they were made from."""
+        import hashlib
+        h = hashlib.sha256()
+        for r in self.db.execute("SELECT id, ctx FROM chunks ORDER BY id"):
+            h.update(f"{r['id']}\x00{r['ctx']}\x00".encode())
+        return h.hexdigest()
+
     def all_chunks(self):
         return [dict(r) for r in self.db.execute("SELECT id, ctx FROM chunks ORDER BY id")]
 

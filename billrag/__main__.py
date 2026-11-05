@@ -39,6 +39,9 @@ def main(argv=None):
     if a.cmd == "ingest":
         from .ingest import ingest
         ingest(s.data_dir, s.db_path, a.limit, a.workers, a.since_year)
+        if s.vectors_path.exists():
+            print(f"NOTE: {s.vectors_path} no longer matches the index. Re-run `python -m billrag embed` "
+                  f"(dense retrieval will refuse to start until you do).", file=sys.stderr)
         return 0
     if not s.db_path.exists():
         sys.exit(f"No index at {s.db_path}. Run: python -m billrag ingest")
@@ -102,4 +105,8 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    from .retrieve import VectorsError
+    try:
+        sys.exit(main())
+    except VectorsError as e:
+        sys.exit(f"error: {e}")

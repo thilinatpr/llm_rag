@@ -6,6 +6,10 @@ from collections import defaultdict
 RRF_K = 60
 
 
+class VectorsError(RuntimeError):
+    """Dense retrieval is configured but the vectors are missing or do not match the current index."""
+
+
 def rrf(rankings, k=RRF_K):
     """Reciprocal rank fusion of several ranked id lists -> ids ordered by fused score."""
     score = defaultdict(float)
@@ -19,10 +23,18 @@ class Retriever:
     def __init__(self, store, embedder=None, vectors_path=None, llm=None, rerank="none", reranker=None):
         self.store, self.embedder, self.llm, self.rerank_mode, self.reranker = store, embedder, llm, rerank, reranker
         self.ids = self.mat = None
-        if embedder is not None and vectors_path is not None and vectors_path.exists():
-            import numpy as np
-            z = np.load(vectors_path)
-            self.ids, self.mat = z["ids"], z["vectors"]
+        if embedder is not None and vectors_path is not None:
+            self._load_vectors(vectors_path)
+
+    def _load_vectors(self, path):
+        import numpy as np
+        hint = "Run `python -m billrag embed`, or set BILLRAG_EMBED_PROVIDER=none to use keyword search only."
+        if not path.exists():
+            raise VectorsError(f"Dense retrieval is enabled but {path} does not exist. {hint}")
+        z = np.load(path)
+        if "fingerprint" not in z.files or str(z["fingerprint"]) != self.store.fingerprint():
+            raise VectorsError(f"{path} was not built from the current index (stale or unstamped). {hint}")
+        self.ids, self.mat = z["ids"], z["vectors"]
 
     def dense(self, query, limit, year=None, keys=None):
         if self.mat is None:

@@ -7,12 +7,14 @@ Chat model
   BILLRAG_CHAT_API_KEY    optional; otherwise the SDK's own env var (ANTHROPIC_API_KEY / OPENAI_API_KEY)
 
 Embeddings (optional; without them retrieval is BM25 + structure-aware, which already works well)
-  BILLRAG_EMBED_PROVIDER  none (default) | openai | sentence-transformers
+  BILLRAG_EMBED_PROVIDER  default: "cloudflare" when CLOUDFLARE_API_TOKEN + an account id are set, else "none"
+                          none | cloudflare | openai | sentence-transformers
   BILLRAG_EMBED_MODEL     e.g. text-embedding-3-large, or BAAI/bge-small-en-v1.5
   BILLRAG_EMBED_BASE_URL / BILLRAG_EMBED_API_KEY   for OpenAI-compatible embedding servers
 
 Retrieval
-  BILLRAG_RERANK          none (default) | llm | cloudflare | cloudflare-fused
+  BILLRAG_RERANK          default: "cloudflare" when Cloudflare credentials are set, else "none"
+                          none | llm | cloudflare | cloudflare-fused
                           llm: chat model scores candidates; cloudflare: Workers AI cross-encoder reorders them;
                           cloudflare-fused: RRF of the cross-encoder order and the first-stage order
   BILLRAG_RERANK_MODEL    default @cf/baai/bge-reranker-base
@@ -56,6 +58,9 @@ class Settings:
 def load_settings() -> Settings:
     e = os.environ.get
     provider = e("BILLRAG_CHAT_PROVIDER", "anthropic").lower()
+    cf_account = e("BILLRAG_CF_ACCOUNT_ID") or e("CLOUDFLARE_ACCOUNT_ID") or e("R2_ACCOUNT_ID") or None
+    cf_token = e("CLOUDFLARE_API_TOKEN") or None
+    cf_default = "cloudflare" if (cf_account and cf_token) else "none"  # best measured config, if usable
     default_model = "claude-sonnet-5-5" if provider == "anthropic" else ""
     return Settings(
         data_dir=Path(e("BILLRAG_DATA", "data/bills")),
@@ -63,12 +68,12 @@ def load_settings() -> Settings:
         chat_model=e("BILLRAG_CHAT_MODEL", default_model),
         chat_base_url=e("BILLRAG_CHAT_BASE_URL") or None,
         chat_api_key=e("BILLRAG_CHAT_API_KEY") or None,
-        embed_provider=e("BILLRAG_EMBED_PROVIDER", "none").lower(),
+        embed_provider=e("BILLRAG_EMBED_PROVIDER", cf_default).lower(),
         embed_model=e("BILLRAG_EMBED_MODEL", ""),
         embed_base_url=e("BILLRAG_EMBED_BASE_URL") or None,
         embed_api_key=e("BILLRAG_EMBED_API_KEY") or None,
-        rerank=e("BILLRAG_RERANK", "none").lower(),
+        rerank=e("BILLRAG_RERANK", cf_default).lower(),
         rerank_model=e("BILLRAG_RERANK_MODEL", "@cf/baai/bge-reranker-base"),
-        cf_account_id=e("BILLRAG_CF_ACCOUNT_ID") or e("CLOUDFLARE_ACCOUNT_ID") or e("R2_ACCOUNT_ID") or None,
-        cf_api_token=e("CLOUDFLARE_API_TOKEN") or None,
+        cf_account_id=cf_account,
+        cf_api_token=cf_token,
     )
