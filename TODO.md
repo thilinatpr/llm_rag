@@ -9,17 +9,22 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
 - [x] SQLite FTS5 index: 1,513 bills / 42,696 chunks; keyless `search` command
 - [x] Hybrid retrieval plumbing (RRF, optional dense, optional LLM rerank, GS/Bill text dedup, diversity cap)
 - [x] Agent loop + 5 tools + Anthropic/OpenAI-compatible adapters; 15 offline tests
+- [x] Verified live on Cloudflare Workers AI: `@cf/openai/gpt-oss-120b` via the OpenAI-compatible endpoint does multi-step
+      tool calling and a correctly cited, source-checked answer (~18 s, 4 tool calls). `bge-reranker-base` and
+      `bge-base-en-v1.5` (768-d) respond too; neither is wired into billrag yet.
 
 ## Next (in priority order)
-- [ ] **Run the agent against a real chat model.** Nothing has been verified live yet: Anthropic/OpenAI adapters,
-      tool-calling round trips, citation quality. Needs `ANTHROPIC_API_KEY` or an OpenAI-compatible endpoint.
-- [ ] **Decide the models** (chat + embeddings). Then run `python -m billrag embed` and compare retrieval with/without
-      dense vectors on a small question set.
+- [ ] **Wire a `cloudflare` provider** for embeddings (`/ai/run/@cf/baai/bge-base-en-v1.5`, `{"text":[...]}` ->
+      `result.data`) and reranking (`/ai/run/@cf/baai/bge-reranker-base`, `{"query","contexts":[{"text"}]}` ->
+      `result.response[{id,score}]`). Note: in a first trial the reranker scores saturated (top 3 all ~0.997), so judge it
+      on the eval set, don't assume it helps. Still unverified live: the Anthropic adapter.
 - [ ] **Build an eval set** (~30-50 questions with expected bill/section) and a script reporting recall@k for
       BM25 vs hybrid vs +rerank, plus answer-citation checks. Without it, tuning is guesswork.
 - [ ] Upload `data/bills/index.sqlite` to R2 (`scripts/upload_r2.py --include-index`) so a fresh session skips ingest.
 - [ ] Run `python -m billrag summarize` (LLM bill summaries) and measure whether "which bill is about X?" improves.
 - [ ] Rotate the R2 API token: it was pasted into a chat transcript. Revoke it and issue a new one.
+- [ ] Agent latency (~18 s for a 4-tool question on gpt-oss-120b): try parallel tool calls, a smaller model for
+      routing, or streaming.
 
 ## Data quality
 - [ ] OCR the 2 scanned bills with no text layer (`048/2013`, `011/2012`); OCR also unlocks Sinhala/Tamil.

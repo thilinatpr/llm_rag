@@ -46,7 +46,7 @@ def to_openai_messages(system, messages):
     out = [{"role": "system", "content": system}]
     for m in messages:
         if m["role"] == "assistant" and m.get("tool_calls"):
-            out.append({"role": "assistant", "content": m.get("content") or None, "tool_calls": [
+            out.append({"role": "assistant", "content": m.get("content") or "", "tool_calls": [  # "" not null: Workers AI rejects null
                 {"id": t["id"], "type": "function",
                  "function": {"name": t["name"], "arguments": json.dumps(t["args"])}} for t in m["tool_calls"]]})
         elif m["role"] == "tool":

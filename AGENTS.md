@@ -70,3 +70,14 @@ python -m pytest tests -q                                           # must pass 
   re-run them.
 - `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in the sandbox belong to the sandbox proxy, not R2: run R2 tools with
   `env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY`.
+
+## Chat model on Cloudflare Workers AI (verified)
+
+```bash
+export BILLRAG_CHAT_PROVIDER=openai BILLRAG_CHAT_MODEL=@cf/openai/gpt-oss-120b \
+  BILLRAG_CHAT_BASE_URL=https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1 \
+  BILLRAG_CHAT_API_KEY=$CLOUDFLARE_API_TOKEN      # token needs Workers AI permission; R2 keys do not work here
+```
+- Needs `api.cloudflare.com` in the environment's network allowlist and `CLOUDFLARE_API_TOKEN` as an env secret.
+- Workers AI rejects `content: null` on assistant tool-call messages; `llm.to_openai_messages` sends `""` (tested).
+- Model list: `GET /accounts/<id>/ai/models/search`. Reranker is listed under task "Text Classification".

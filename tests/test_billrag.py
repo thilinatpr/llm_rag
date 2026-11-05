@@ -153,6 +153,7 @@ def test_openai_conversion():
     assert out[0] == {"role": "system", "content": "SYS"}
     assert json.loads(out[2]["tool_calls"][0]["function"]["arguments"]) == {"x": 1}
     assert [m["role"] for m in out] == ["system", "user", "assistant", "tool", "tool"]
+    assert out[2]["content"] == ""  # never null: some OpenAI-compatible servers (Workers AI) reject null
 
 
 # ---------------------------------------------------------------- agent
