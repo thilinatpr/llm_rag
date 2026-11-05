@@ -108,6 +108,14 @@ def make_llm(settings):
     return cls(settings.chat_model, settings.chat_base_url, settings.chat_api_key)
 
 
+def make_answer_llm(settings):
+    """Optional separate model for the answer step (BILLRAG_ANSWER_MODEL); None means use the main chat model."""
+    if not settings.answer_model or settings.answer_model == settings.chat_model:
+        return None
+    import dataclasses
+    return make_llm(dataclasses.replace(settings, chat_model=settings.answer_model))
+
+
 # ---------------------------------------------------------------- embeddings
 class OpenAIEmbedder:
     def __init__(self, model, base_url=None, api_key=None, batch=64):

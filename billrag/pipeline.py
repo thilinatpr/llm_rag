@@ -18,6 +18,29 @@ from .store import normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
 CITE = re.compile(r"[\[【](\d{3}/\d{4})(?:\s*§\s*(\d+))?")  # also the full-width brackets some models emit
+REASONING = re.compile(r"^\s*analysis\s*[:\uff1a]?", re.I)
+FINAL = re.compile(r"assistant\s*final\s*[:\uff1a]?\s*|\bfinal(?:\s+answer)?\s*[:\uff1a]\s*", re.I)
+RETRY_NOTE = "\n\nReply with ONLY the final answer, in the format requested. Do not include any analysis or reasoning text."
+LEAK_FALLBACK = ("I could not produce a reliable written answer this time. The sources below are the passages I found; "
+                 "please try asking again.")
+
+
+def degenerate(txt):
+    """Text that is not a written answer at all (e.g. a long run of '!!!!'): too few letters to be sentences."""
+    letters = sum(c.isalpha() for c in txt)
+    return letters == 0 or (len(txt) >= 40 and letters < 0.4 * len(txt))
+
+
+def strip_reasoning(txt):
+    """-> (text, leaked). gpt-oss sometimes returns its reasoning ("analysis: ...") instead of, or before, the answer."""
+    if not REASONING.match(txt):
+        return txt, False
+    m = FINAL.search(txt)
+    if m and txt[m.end():].strip():
+        return txt[m.end():].strip(), False
+    return txt, True
+
+
 LEAK = re.compile(r"<\|(?:call|start|end|channel|message|return|constrain)\|>|\bto=functions\b")
 
 EVAL_PROMPT = """You are a strict evidence grader for a question-answering system over Sri Lankan bills.
@@ -54,8 +77,10 @@ Rules:
   appear and differ, say so. Committee-stage amendments are not in this corpus.
 - Users mostly care about recently published bills: when several bills match and the question gives no year, lead with the
   newest and state the dates. Summaries marked auto-generated are hints only: rely on clause text for details.
-- Format: a short direct answer (1-3 sentences) first, then supporting detail as brief bullets with citations, then a
-  one-line "Caveats" only if something is uncertain or missing. You explain; you do not give legal advice."""
+- Format and length: BE BRIEF. Start with the direct answer in 1-2 sentences. Then at most 3 one-line bullets, each with its
+  citation, only for details the question needs (a time limit, a penalty, a power). Aim for under 120 words in total (up to
+  180 for a "summarise" request, at most 6 bullets). Do not restate the question, list every consequence or definition, or
+  repeat a point. Add a one-line "Caveats" only if something is uncertain or missing. You explain; you do not give legal advice."""
 
 CONDENSE_PROMPT = """Rewrite the follow-up question as a standalone question that can be understood without the conversation.
 Keep bill names, numbers and years. If it is already standalone, return it unchanged. Return ONLY the question.
@@ -119,19 +144,33 @@ STRICT = "\n\nReply with the JSON object ONLY - no analysis, no explanation, no 
 
 class Pipeline:
     def __init__(self, store, retriever, llm, k_clauses=14, k_bills=4, extra_rounds=1, keep_max=8,
-                 evidence_chars=14000, on_event=None, grade_effort=None, answer_effort=None):
+                 evidence_chars=14000, on_event=None, grade_effort=None, answer_effort=None, answer_llm=None):
         self.store, self.retriever, self.llm = store, retriever, llm
         self.k_clauses, self.k_bills, self.extra_rounds = k_clauses, k_bills, extra_rounds
         self.keep_max, self.evidence_chars = keep_max, evidence_chars
         self.on_event = on_event or (lambda *_: None)
         self.grade_effort, self.answer_effort = grade_effort, answer_effort
+        self.answer_llm = answer_llm or llm  # the answer step may use a different model than grading
         self.history = []
 
     # ------------------------------------------------------------ steps
-    def _llm(self, system, user, max_tokens, res, effort=None):
-        res.llm_calls += 1
-        txt = self.llm.chat(system, [{"role": "user", "content": user}], max_tokens=max_tokens, effort=effort).text
-        return LEAK.split(txt)[0].strip() or txt.strip()
+    def _llm(self, system, user, max_tokens, res, effort=None, json_out=False, llm=None):
+        def call(u):
+            res.llm_calls += 1
+            txt = (llm or self.llm).chat(system, [{"role": "user", "content": u}], max_tokens=max_tokens, effort=effort).text
+            txt = LEAK.split(txt)[0].strip() or txt.strip()
+            if json_out:
+                return txt, False
+            txt, leaked = strip_reasoning(txt)
+            return txt, leaked or degenerate(txt)
+
+        txt, leaked = call(user)
+        if leaked:  # (JSON replies from the grader are parsed, and retried, by evaluate())
+            txt, leaked = call(user + RETRY_NOTE)
+            if leaked:
+                res.warnings.append("the model returned reasoning or unusable text instead of an answer (twice)")
+                return LEAK_FALLBACK
+        return txt
 
     def condense(self, question, res):
         if not self.history:
@@ -162,9 +201,9 @@ class Pipeline:
             where = f"§{c['section_no']}" if c.get("section_no") is not None else c["kind"]
             blocks.append(f"[{i}] {tag}{c['bill_key']} {where} — {c['title']} ({c['bill_kind']}, {c['date'][:10]})\n{txt}")
         prompt = EVAL_PROMPT.format(question=question, candidates="\n\n".join(blocks))
-        d = parse_json(self._llm("You output only valid JSON.", prompt, 1500, res, self.grade_effort))
+        d = parse_json(self._llm("You output only valid JSON.", prompt, 1500, res, self.grade_effort, json_out=True))
         if not d or not isinstance(d.get("scores"), list):  # reasoning models sometimes answer in prose: retry once, firmer
-            d = parse_json(self._llm("You output only valid JSON.", prompt + STRICT, 2000, res, None))
+            d = parse_json(self._llm("You output only valid JSON.", prompt + STRICT, 2000, res, None, json_out=True))
         if not d or not isinstance(d.get("scores"), list):
             res.warnings.append("evaluation step returned unusable output; using retrieval order")
             return {i: (3 if i < 5 else 1) for i in range(len(cands))}, True, "", []
@@ -218,7 +257,7 @@ class Pipeline:
         note = "" if enough else (f"\n\nNOTE: the grader judged this evidence INCOMPLETE. Missing: {missing or 'unspecified'}. "
                                    "Answer what the evidence supports and state clearly what is missing.")
         user = f"QUESTION: {question}\n\nEVIDENCE:\n\n" + "\n\n".join(blocks) + note
-        return self._llm(ANSWER_SYSTEM, user, 1800, res, self.answer_effort)
+        return self._llm(ANSWER_SYSTEM, user, 1800, res, self.answer_effort, llm=self.answer_llm)
 
     @staticmethod
     def verify(answer, evidence):

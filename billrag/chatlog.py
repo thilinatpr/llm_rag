@@ -21,6 +21,19 @@ from pathlib import Path
 
 _lock = threading.Lock()
 _s3 = None
+_build = None
+
+
+def build_id():
+    """Short hash of the billrag source files running now, so a log record says which code produced it."""
+    global _build
+    if _build is None:
+        import hashlib
+        h = hashlib.sha1()
+        for f in sorted(Path(__file__).resolve().parent.glob("*.py")):
+            h.update(f.name.encode() + f.read_bytes())
+        _build = h.hexdigest()[:8]
+    return _build
 
 
 def enabled():
@@ -66,7 +79,7 @@ def log_turn(**fields):
     if not enabled():
         return
     now = datetime.now(timezone.utc)
-    rec = {"ts": now.isoformat(timespec="milliseconds"), **fields}
+    rec = {"ts": now.isoformat(timespec="milliseconds"), "build": build_id(), **fields}
     sid = "".join(c for c in str(fields.get("session", "")) if c.isalnum())[:8] or "anon"
     name = f"{now.strftime('%H%M%S%f')[:9]}-{sid}-{fields.get('turn', 0)}"
     threading.Thread(target=_write, args=(rec, now.strftime("%Y-%m-%d"), name), daemon=True).start()
