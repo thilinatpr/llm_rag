@@ -46,8 +46,9 @@ R2_BUCKET = "gov-rag"
 # (English too) that detects ANY language and translates it. Read by the container when it starts.
 TRANSLATE = "ai"
 # Model for the translate calls only (detect + translate in, translate out). Unset = the chat model (gpt-oss-120b).
-# A Workers AI chat model (Google Gemma, Meta Llama) or the Meta machine-translation model @cf/meta/m2m100-1.2b.
-# If it errors or returns unusable output, the chat model is tried instead (see the warning in the chat log).
-TRANSLATE_MODEL = "@cf/google/gemma-3-12b-it"
+# A Workers AI chat model or the Meta machine-translation model @cf/meta/m2m100-1.2b. If it errors or returns unusable
+# output, the chat model is tried instead (see the warning in the chat log). Llama 3.3 gave the correct Sinhala legal terms
+# where gpt-oss did not, but is slower on long answers (~37 s vs ~7 s); see AGENTS.md "Translation model".
+TRANSLATE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 # Optional, ignored when the container is bound: proxy signed-in requests to another server instead.
 # ORIGIN = "https://billrag.example.com"

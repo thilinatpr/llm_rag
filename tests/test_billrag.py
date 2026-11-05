@@ -1083,3 +1083,11 @@ def test_make_translator_picks_the_right_kind_of_model():
     assert t.mt and t.mt.model == "@cf/meta/m2m100-1.2b" and t.model_llm is None
     t = translate.make_translator(dataclasses.replace(s, translate_model="@cf/google/gemma-3-12b-it"), main)
     assert t.model_llm.model == "@cf/google/gemma-3-12b-it" and t.mt is None
+
+
+def test_translation_never_adds_bill_numbers():
+    assert translate.drop_invented_refs("q", 'What criteria define a "terrorist act" in this new bill 077/2026?') == \
+        'What criteria define a "terrorist act" in this new bill?'
+    assert translate.drop_invented_refs("q", "What does Bill No. 77/2026 say?") == "What does Bill say?"
+    assert translate.drop_invented_refs("\u0db8\u0dd9\u0db8 086/2026", "What does 086/2026 say?") == "What does 086/2026 say?"
+    assert "077" not in translate.TO_EN + translate.DETECT_AND_TRANSLATE  # no example numbers for models to copy

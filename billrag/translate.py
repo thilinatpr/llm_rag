@@ -23,10 +23,12 @@ import re
 SCRIPTS = {"si": ("Sinhala", re.compile(r"[඀-෿]")), "ta": ("Tamil", re.compile(r"[஀-௿]"))}
 CITE = re.compile(r"[\[【]\d{3}/\d{4}(?:\s*§\s*\d+(?:\([^)\]]*\))*)?[\]】]")
 
-TO_EN = ("Translate the user's question about a Sri Lankan bill into clear English for a search engine. Keep bill numbers "
-         "(like 077/2026), years and section numbers exactly. Use the English name of an Act or body when you know it. "
+NO_ADD = ("Copy any bill number, year or section number exactly as the user wrote it, and NEVER add a bill number, year or "
+          "bill name that the question does not contain.")
+TO_EN = ("Translate the user's question about a Sri Lankan bill into clear English for a search engine. " + NO_ADD + " "
+         "Use the English name of an Act or body when you know it. "
          "Reply with ONLY the English question.")
-FROM_EN = ("Translate the answer below into {lang}. Keep every citation in square brackets (like [077/2026 §12(2)]) EXACTLY as "
+FROM_EN = ("Translate the answer below into {lang}. Keep every citation in square brackets (like [NNN/YYYY §N]) EXACTLY as "
            "written, in ASCII brackets, untranslated. Keep bill titles, Act names and numbers in English, followed by a {lang} "
            "gloss in parentheses only if it helps. Do not add, remove or soften any statement. Reply with ONLY the translation.")
 
@@ -44,8 +46,7 @@ MODES = ("off", "script", "ai")
 
 DETECT_AND_TRANSLATE = ("You prepare questions about Sri Lankan bills for an English-only search engine. Identify the language of "
                         "the user's question (romanised Sinhala/Tamil counts as Sinhala/Tamil). If it is not English, translate it "
-                        "into clear English: keep bill numbers (like 077/2026), years and section numbers exactly, and use the "
-                        "English name of an Act or body when you know it. Reply with ONLY JSON: "
+                        "into clear English. " + NO_ADD + " Use the English name of an Act or body when you know it. Reply with ONLY JSON: "
                         '{"language": "<English name of the language>", "english": "<the question in English>"}')
 
 
@@ -66,8 +67,21 @@ def detect_ai(llm, text, effort=None):
             lang, eng = str(obj.get("language", "")).strip().lower(), str(obj.get("english", "")).strip()
             if isinstance(obj, dict) and lang and eng:
                 code = {v[0].lower(): k for k, v in SCRIPTS.items()}.get(lang, lang)
-                return ("en", text) if lang in ("english", "en") else (code, eng)
+                return ("en", text) if lang in ("english", "en") else (code, drop_invented_refs(text, eng))
     return None
+
+
+REF = re.compile(r"\b\d{1,3}\s*/\s*\d{4}\b")
+
+
+def drop_invented_refs(src, out):
+    """Remove bill numbers (NNN/YYYY) the translation added: a bill number in the question restricts retrieval to that bill,
+    and models copy numbers from examples (Llama added '077/2026' to a question that named no bill)."""
+    have = {re.sub(r"\s", "", m) for m in REF.findall(src)}
+    for m in REF.findall(out):
+        if re.sub(r"\s", "", m) not in have:
+            out = re.sub(r"\s*(?:\bno\.?\s*)?" + re.escape(m), "", out, flags=re.I)
+    return re.sub(r"\s+([?.,])", r"\1", out).strip()
 
 
 def cites(text):
@@ -151,7 +165,7 @@ class Translator:
         if self.mt:
             self.calls += 1
             try:
-                out = self.mt.translate(text, lang_arg(code), "en").strip()
+                out = drop_invented_refs(text, self.mt.translate(text, lang_arg(code), "en"))
                 if out and detect(out) == "en":
                     return out
             except Exception:  # noqa: BLE001
@@ -163,7 +177,7 @@ class Translator:
             except Exception:  # noqa: BLE001
                 continue
             if out and not LEAKED.match(out) and detect(out) == "en":
-                return out
+                return drop_invented_refs(text, out)
         return None
 
     def from_english(self, answer, code):
