@@ -1,4 +1,4 @@
-"""CLI: python -m billrag {ingest,stats,search,ask,chat,embed,summarize}"""
+"""CLI: python -m billrag {ingest,stats,search,ask,chat,serve,embed,summarize}"""
 import argparse
 import sys
 import time
@@ -26,6 +26,10 @@ def main(argv=None):
                    help="pipeline (default): retrieve -> AI evidence grading -> AI summary; agent: free-form tool loop")
     p = sub.add_parser("chat", help="interactive chat")
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--mode", choices=["pipeline", "agent"], default="pipeline")
+    p = sub.add_parser("serve", help="simple web chat UI")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8000)
     p.add_argument("--mode", choices=["pipeline", "agent"], default="pipeline")
     p = sub.add_parser("eval", help="retrieval recall@k / MRR on an eval set (uses the env-configured retriever)")
     p.add_argument("--file", default="evals/retrieval_eval.jsonl")
@@ -65,6 +69,11 @@ def main(argv=None):
     store = Store(s.db_path)
     if a.cmd == "stats":
         print(store.stats())
+        return 0
+
+    if a.cmd == "serve":
+        from .web import serve
+        serve(s, a.host, a.port, a.mode)
         return 0
 
     from .llm import make_embedder, make_llm, make_reranker
