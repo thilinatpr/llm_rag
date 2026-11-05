@@ -21,6 +21,8 @@ Pipeline (retrieve -> grade -> summarise)
 Translation (questions in other languages; the index is English only - see translate.py)
   BILLRAG_TRANSLATE       off | script (default: Sinhala/Tamil by Unicode script, no extra call for English) |
                           ai (one model call names ANY language and translates; +1 call per non-Sinhala/Tamil question)
+  BILLRAG_TRANSLATE_MODEL optional model for the translate calls only (default: the chat model). A chat model on the same
+                          provider/endpoint (e.g. @cf/google/gemma-3-12b-it) or a Workers AI MT model (@cf/meta/m2m100-1.2b)
 
 Retrieval
   BILLRAG_RERANK          default: "cloudflare" when Cloudflare credentials are set, else "none"
@@ -57,6 +59,7 @@ class Settings:
     grade_effort: str | None
     answer_effort: str | None
     translate: str
+    translate_model: str | None
     cf_account_id: str | None
     cf_api_token: str | None
 
@@ -92,6 +95,7 @@ def load_settings() -> Settings:
         grade_effort=(e("BILLRAG_GRADE_EFFORT", "low") or None),
         answer_effort=(e("BILLRAG_ANSWER_EFFORT") or None),
         translate=e("BILLRAG_TRANSLATE", "script").lower(),
+        translate_model=e("BILLRAG_TRANSLATE_MODEL") or None,
         cf_account_id=cf_account,
         cf_api_token=cf_token,
     )

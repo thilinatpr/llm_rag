@@ -6,8 +6,16 @@ Switch (BILLRAG_TRANSLATE / Pipeline(translate_mode=...)):
   ai      like script, but any other question first goes through ONE model call that names its language and, if it is not
           English, translates it (+1 call on every non-Sinhala/Tamil question, English included). Covers any language and
           romanised Sinhala/Tamil.
-For a non-English question the pipeline then makes one more call: the finished English answer -> the user's language. Citations like [077/2026 §12] are language-neutral and must survive translation
-byte-for-byte; if they do not, we return the (verified) English answer instead of a translation that may have altered them.
+For a non-English question the pipeline then makes one more call: the finished English answer -> the user's language.
+Citations like [077/2026 §12] are language-neutral and must survive translation byte-for-byte; if they do not, we return
+the (verified) English answer instead of a translation that may have altered them.
+
+Translation model (BILLRAG_TRANSLATE_MODEL, optional; default = the main chat model):
+  a chat model on the same provider/endpoint, e.g. @cf/google/gemma-3-12b-it or @cf/meta/llama-3.3-70b-instruct-fp8-fast
+  (instruction-following, no reasoning step), or
+  a dedicated machine-translation model whose id contains "m2m100", e.g. @cf/meta/m2m100-1.2b, called through Workers AI
+  /ai/run. Citations are cut out and re-inserted verbatim around it, so it cannot alter them.
+Whatever is used, a failed translation falls back to the main chat model once, and the reason is reported.
 """
 import json
 import re
@@ -66,15 +74,142 @@ def cites(text):
     return sorted(m.replace("【", "[").replace("】", "]") for m in CITE.findall(text))
 
 
+LEAKED = re.compile(r"^\s*(analysis|assistant\s*final|we need to)\b", re.I)
+RETRY = "\n\nReply with ONLY the translation - no analysis, no notes, nothing before or after it."
+
+
+def _chat(llm, system, text, max_tokens, effort):
+    return (llm.chat(system, [{"role": "user", "content": text}], max_tokens=max_tokens, effort=effort).text or "").strip()
+
+
+def check_out(out, answer, code):
+    """-> None if `out` is a usable translation of `answer` into `code`, else the reason it is not."""
+    if not out or LEAKED.match(out):
+        return "empty or reasoning text"
+    if code in SCRIPTS and detect(out) != code:
+        return f"not in {language_name(code)} script"
+    if cites(out) != cites(answer):
+        return "citations changed"
+    return None
+
+
+class M2M:
+    """Dedicated machine-translation model on Workers AI (e.g. @cf/meta/m2m100-1.2b): {text, source_lang, target_lang}."""
+
+    def __init__(self, model, account, token, client=None):
+        from .llm import _Cloudflare
+        self.model, self.cf = model, client or _Cloudflare(account, token)
+
+    def translate(self, text, src, tgt):
+        if not any(c.isalpha() for c in text):
+            return text
+        return (self.cf._post(self.model, {"text": text, "source_lang": src, "target_lang": tgt}) or {}).get("translated_text", "")
+
+    def translate_keeping_cites(self, text, src, tgt):
+        """Translate line by line; citations, bullets and bold markers are kept out of the model's hands."""
+        out = []
+        for line in text.split("\n"):
+            m = re.match(r"^(\s*(?:[-*\u2022]|\d+\.)?\s*)(.*)$", line)
+            lead, body = m.group(1), m.group(2).replace("**", "")
+            parts, last = [], 0
+            for c in CITE.finditer(body):
+                parts += [self.translate(body[last:c.start()], src, tgt).strip(), c.group(0).replace("\u3010", "[").replace("\u3011", "]")]
+                last = c.end()
+            parts.append(self.translate(body[last:], src, tgt).strip())
+            out.append(lead + re.sub(r"\s+([.,;:!?)])", r"\1", " ".join(p for p in parts if p)))
+        return "\n".join(out)
+
+
+def lang_arg(code):
+    return code if code in SCRIPTS or code == "en" else code.lower()  # m2m100 takes codes or English language names
+
+
+class Translator:
+    """to_english / from_english / detect_ai, with an optional dedicated translation model and a fallback to the main model."""
+
+    def __init__(self, llm, effort=None, model_llm=None, mt=None):
+        self.llm, self.effort = llm, effort       # main chat model (fallback, and detect_ai when only an MT model is set)
+        self.model_llm, self.mt = model_llm, mt   # BILLRAG_TRANSLATE_MODEL: a chat model, or an M2M machine-translation model
+        self.calls = 0
+
+    def _chats(self):
+        """(llm, effort) to try in order: the translation chat model (no reasoning effort) then the main model."""
+        return ([(self.model_llm, None)] if self.model_llm else []) + [(self.llm, self.effort)]
+
+    def detect_ai(self, text):
+        for llm, effort in self._chats():
+            self.calls += 1
+            try:
+                got = detect_ai(llm, text, effort)
+            except Exception:  # noqa: BLE001 - a translation-model outage must not break the chat
+                got = None
+            if got:
+                return got
+        return None
+
+    def to_english(self, text, code):
+        if self.mt:
+            self.calls += 1
+            try:
+                out = self.mt.translate(text, lang_arg(code), "en").strip()
+                if out and detect(out) == "en":
+                    return out
+            except Exception:  # noqa: BLE001
+                pass
+        for llm, effort in self._chats():
+            self.calls += 1
+            try:
+                out = _chat(llm, TO_EN, text, 400, effort).strip('"')
+            except Exception:  # noqa: BLE001
+                continue
+            if out and not LEAKED.match(out) and detect(out) == "en":
+                return out
+        return None
+
+    def from_english(self, answer, code):
+        """-> (translation or None, reasons for every failed attempt)."""
+        reasons = []
+        if self.mt:
+            self.calls += 1
+            try:
+                out = self.mt.translate_keeping_cites(answer, "en", lang_arg(code)).strip()
+                why = check_out(out, answer, code)
+            except Exception as e:  # noqa: BLE001
+                out, why = "", f"error: {e}"[:160]
+            if not why:
+                return out, reasons
+            reasons.append(f"{self.mt.model}: {why}")
+        system = FROM_EN.format(lang=language_name(code))
+        for i, (llm, effort) in enumerate(self._chats()):
+            for prompt in ((answer, answer + RETRY) if i == len(self._chats()) - 1 else (answer,)):  # one firmer retry on the last model
+                self.calls += 1
+                try:
+                    out = _chat(llm, system, prompt, 2400, effort)
+                    why = check_out(out, answer, code)
+                except Exception as e:  # noqa: BLE001
+                    out, why = "", f"error: {e}"[:160]
+                if not why:
+                    return out, reasons
+                reasons.append(f"{getattr(llm, 'model', 'model')}: {why}")
+        return None, reasons
+
+
+def make_translator(settings, llm):
+    """Translator for the pipeline from Settings (BILLRAG_TRANSLATE_MODEL)."""
+    tm = getattr(settings, "translate_model", None)
+    effort = getattr(settings, "grade_effort", None)
+    if not tm or tm == settings.chat_model:
+        return Translator(llm, effort)
+    if "m2m100" in tm.lower():
+        return Translator(llm, effort, mt=M2M(tm, settings.cf_account_id, settings.cf_api_token))
+    import dataclasses
+    from .llm import make_llm
+    return Translator(llm, effort, model_llm=make_llm(dataclasses.replace(settings, chat_model=tm)))
+
+
 def to_english(llm, text, code, effort=None):
-    out = llm.chat(TO_EN, [{"role": "user", "content": text}], max_tokens=400, effort=effort).text.strip().strip('"')
-    return out if out and detect(out) == "en" else None  # untranslated (or empty) output is not usable for retrieval
+    return Translator(llm, effort).to_english(text, code)
 
 
 def from_english(llm, answer, code, effort=None):
-    """-> translated answer, or None when it is unusable or altered the citations."""
-    out = llm.chat(FROM_EN.format(lang=language_name(code)), [{"role": "user", "content": answer}], max_tokens=2400,
-                   effort=effort).text.strip()
-    if not out or (code in SCRIPTS and detect(out) != code) or cites(out) != cites(answer):
-        return None
-    return out
+    return Translator(llm, effort).from_english(answer, code)[0]

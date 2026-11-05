@@ -147,7 +147,7 @@ STRICT = "\n\nReply with the JSON object ONLY - no analysis, no explanation, no 
 class Pipeline:
     def __init__(self, store, retriever, llm, k_clauses=14, k_bills=4, extra_rounds=1, keep_max=8,
                  evidence_chars=14000, on_event=None, grade_effort=None, answer_effort=None, answer_llm=None,
-                 translate_mode="script"):
+                 translate_mode="script", translator=None):
         self.store, self.retriever, self.llm = store, retriever, llm
         self.k_clauses, self.k_bills, self.extra_rounds = k_clauses, k_bills, extra_rounds
         self.keep_max, self.evidence_chars = keep_max, evidence_chars
@@ -155,6 +155,7 @@ class Pipeline:
         self.grade_effort, self.answer_effort = grade_effort, answer_effort
         self.answer_llm = answer_llm or llm  # the answer step may use a different model than grading
         self.translate_mode = translate_mode  # off | script | ai (see translate.py)
+        self.translator = translator or translate.Translator(llm, grade_effort)  # may use a dedicated translation model
         self.history = []
 
     # ------------------------------------------------------------ steps
@@ -282,41 +283,44 @@ class Pipeline:
     # ------------------------------------------------------------ driver
     def ask(self, question: str) -> Result:
         """Translation layer around `_ask`: any language -> English -> pipeline -> answer in the question's language."""
-        mode, lang, q_en, calls, t = self.translate_mode, "en", question, 0, time.time()
+        tr = self.translator
+        mode, lang, q_en, t = self.translate_mode, "en", question, time.time()
+        tr.calls = 0
         if mode != "off":
             lang = translate.detect(question)  # Sinhala / Tamil by script: free
             if lang != "en":
-                calls += 1
-                q_en = translate.to_english(self.llm, question, lang, self.grade_effort)
+                q_en = tr.to_english(question, lang)
             elif mode == "ai":  # any other language (or romanised Sinhala/Tamil): one call detects and translates
-                calls += 1
-                got = translate.detect_ai(self.llm, question, self.grade_effort)
+                got = tr.detect_ai(question)
                 if got is None:
                     res = self._ask(question)
-                    res.llm_calls += calls
+                    res.llm_calls += tr.calls
                     res.warnings.append("language detection failed; treated the question as English")
                     return res
                 lang, q_en = got
+        t_in = time.time() - t
         if lang == "en":
             res = self._ask(question)
-            res.llm_calls += calls
+            res.llm_calls += tr.calls
+            if mode == "ai":
+                res.seconds["detect_language"] = t_in
             return res
         name = translate.language_name(lang)
         if not q_en:
-            return Result(question=question, lang=lang, llm_calls=calls, answer=(
+            return Result(question=question, lang=lang, llm_calls=tr.calls, answer=(
                 "Sorry, I could not translate that question into English to search the bills. Please try again or ask in English."))
         res = self._ask(q_en)
         res.question, res.lang, res.answer_en = question, lang, res.answer
-        res.llm_calls += calls
-        res.seconds["translate_in"] = time.time() - t
+        res.seconds["translate_in"] = t_in
         t = time.time()
-        out = translate.from_english(self.llm, res.answer_en, lang, self.grade_effort)
-        res.llm_calls += 1
+        out, reasons = tr.from_english(res.answer_en, lang)
         res.seconds["translate_out"] = time.time() - t
+        res.llm_calls += tr.calls
         if out:
             res.answer = out
         else:
-            res.warnings.append(f"could not translate the answer into {name} reliably (citations must stay intact); showing English")
+            res.warnings.append(f"could not translate the answer into {name} reliably ({'; '.join(reasons) or 'no output'}); "
+                                "showing English")
         return res
 
     def _ask(self, question: str) -> Result:

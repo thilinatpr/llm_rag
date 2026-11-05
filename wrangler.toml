@@ -45,5 +45,9 @@ R2_BUCKET = "gov-rag"
 # script = Sinhala/Tamil by Unicode script, no extra model call for English. ai = one extra call on every other question
 # (English too) that detects ANY language and translates it. Read by the container when it starts.
 TRANSLATE = "ai"
+# Model for the translate calls only (detect + translate in, translate out). Unset = the chat model (gpt-oss-120b).
+# A Workers AI chat model (Google Gemma, Meta Llama) or the Meta machine-translation model @cf/meta/m2m100-1.2b.
+# If it errors or returns unusable output, the chat model is tried instead (see the warning in the chat log).
+TRANSLATE_MODEL = "@cf/google/gemma-3-12b-it"
 # Optional, ignored when the container is bound: proxy signed-in requests to another server instead.
 # ORIGIN = "https://billrag.example.com"

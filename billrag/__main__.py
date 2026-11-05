@@ -144,10 +144,12 @@ def main(argv=None):
         agent = Agent(store, retriever, llm, on_event=ev)
         answer = agent.ask
     else:
+        from . import translate
         from .pipeline import Pipeline
         ev = (lambda n, d: print(f"  \u2192 {n}: {d}", file=sys.stderr)) if a.verbose else None
         pipe = Pipeline(store, retriever, llm, on_event=ev, grade_effort=s.grade_effort, answer_effort=s.answer_effort,
-                        answer_llm=make_answer_llm(s), translate_mode=s.translate)
+                        answer_llm=make_answer_llm(s), translate_mode=s.translate,
+                        translator=translate.make_translator(s, llm))
 
         def answer(q):
             r = pipe.ask(q)

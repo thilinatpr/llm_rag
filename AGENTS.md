@@ -82,7 +82,7 @@ Container: restores index.sqlite + vectors.npz from R2 (gov-rag/bills/) on start
 
 **Worker vars** (`wrangler.toml`): `ALLOWED_EMAILS`, `FROM_ADDRESS`, `CF_ACCOUNT_ID`, `R2_BUCKET`; optional `CHAT_MODEL`
 (default `@cf/openai/gpt-oss-120b`), `ORIGIN` (ignored when the container is bound), `TRANSLATE` (`off`|`script`|`ai`, passed to the container as
-`BILLRAG_TRANSLATE`; currently `ai`).
+`BILLRAG_TRANSLATE`; currently `ai`), `TRANSLATE_MODEL` (-> `BILLRAG_TRANSLATE_MODEL`; currently `@cf/google/gemma-3-12b-it`).
 **Worker secrets** (`npx wrangler secret put NAME`): `OTP_PEPPER`, `CF_EMAIL_TOKEN` (Email Sending), `PROXY_SECRET` (shared with the
 container; >= 16 chars), `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (the container needs only read access: use a read-only R2
 token if you can), `CLOUDFLARE_API_TOKEN` (Workers AI). `container.js` copies these into the container's env as
@@ -372,6 +372,18 @@ more call to translate the answer back. The English answer is citation-verified 
 translation must reproduce every `[NNN/YYYY §s]` citation exactly, else we return the English answer with a warning. If `ai`
 detection returns unusable output, the question is treated as English (warning). Bill titles stay English (English-only index).
 Translation quality is unmeasured: no non-English eval set yet.
+
+**Translation model** (`BILLRAG_TRANSLATE_MODEL`, Worker var `TRANSLATE_MODEL`; `translate.make_translator`): unset = the chat model.
+A chat model id (Google `@cf/google/gemma-3-12b-it`, Meta `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, ...) is called on the same
+endpoint WITHOUT `reasoning_effort`. An id containing `m2m100` (Meta `@cf/meta/m2m100-1.2b`) is a pure MT model called via `/ai/run`:
+it cannot follow instructions, so `M2M.translate_keeping_cites` translates line by line and keeps citations, bullets and
+punctuation-only pieces out of the model; `ai` language detection then still uses a chat model. Any failure (error, reasoning text,
+wrong script, changed citations) falls back to the main chat model (one firmer retry on the last model), and the warning lists
+each attempt's reason, e.g. `@cf/google/gemma-3-12b-it: citations changed`.
+First live result (2026-11-05, build `4cfb4b63`, gpt-oss-120b translating): a Sinhala question was translated in fine, but the
+answer translation was rejected (reason not logged then) and English was shown; the old `translate_in` timing also wrongly
+included the whole pipeline (fixed: it now times the translation only). Model ids above are from the Workers AI catalog and
+were NOT verified from the sandbox (the deploy token has no Workers AI access): check the first live log records.
 
 ## Product priority: recent bills
 
