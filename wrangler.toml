@@ -11,7 +11,7 @@ run_worker_first = true
 # Sessions and one-time codes. Create with: npx wrangler kv namespace create AUTH   (paste the id below)
 [[kv_namespaces]]
 binding = "AUTH"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "a44e7e8cc8f0444ba865ea162820193d"
 
 [vars]
 # Comma-separated. This is the only allowlist: nothing needs verifying on the Cloudflare side.
@@ -19,6 +19,6 @@ ALLOWED_EMAILS = "thilinatpr@gmail.com"
 # Any address on a domain onboarded under Cloudflare Email -> Email Sending.
 FROM_ADDRESS = "login@tripletrackr.com"
 # Cloudflare account id (not secret). The API token goes in the CF_EMAIL_TOKEN secret.
-CF_ACCOUNT_ID = "REPLACE_WITH_ACCOUNT_ID"
+CF_ACCOUNT_ID = "e81ea992523c4e14d3d1a89f10732576"
 # Optional: proxy signed-in requests to the Python UI (python -m billrag serve) instead of serving ./public.
 # ORIGIN = "https://billrag.example.com"
