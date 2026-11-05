@@ -61,6 +61,13 @@ Measured on the real index (42,696 chunks x 768 dims; `index.sqlite` 201 MB, `ve
 - Not measured: speed on a 1/16 vCPU. On a full core, startup work is ~0.9 s (fingerprint 0.16 s, vector load 0.7 s) and a
   vector scan ~0.1 s.
 
+### Chat model in the container
+
+The container uses Cloudflare Workers AI for everything (chat, query embeddings, rerank), so no Anthropic key is needed.
+`src/container.js` sets `BILLRAG_CHAT_PROVIDER=openai`, `BILLRAG_CHAT_MODEL=@cf/openai/gpt-oss-120b` (override with a
+`CHAT_MODEL` var), the account's `.../ai/v1` base URL, and reuses the `CLOUDFLARE_API_TOKEN` secret as the API key.
+Checked end to end locally against the real index: one pipeline question took ~15 s.
+
 ## Cloudflare Worker with email OTP login
 
 `src/auth.js` (entry: `src/worker.js`) puts an email one-time-code login in front of the site (static `public/` page, or the Python UI via `ORIGIN`).

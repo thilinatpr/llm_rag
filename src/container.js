@@ -19,7 +19,11 @@ export class BillragContainer extends Container {
       R2_SECRET_ACCESS_KEY: env.R2_SECRET_ACCESS_KEY,
       CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN, // Workers AI: query embeddings + rerank
       BILLRAG_CF_ACCOUNT_ID: env.CF_ACCOUNT_ID,
-      ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+      // Chat model: Cloudflare Workers AI through its OpenAI-compatible endpoint (same token as embeddings/rerank).
+      BILLRAG_CHAT_PROVIDER: "openai",
+      BILLRAG_CHAT_MODEL: env.CHAT_MODEL || "@cf/openai/gpt-oss-120b",
+      BILLRAG_CHAT_BASE_URL: `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/ai/v1`,
+      BILLRAG_CHAT_API_KEY: env.CLOUDFLARE_API_TOKEN,
       BILLRAG_PROXY_SECRET: env.PROXY_SECRET,
     };
     this.envVars = Object.fromEntries(Object.entries(pass).filter(([, v]) => v));
