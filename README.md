@@ -2,7 +2,7 @@
 
 ## Cloudflare Worker with email OTP login
 
-`src/worker.js` puts an email one-time-code login in front of the site (static `public/` page, or the Python UI via `ORIGIN`).
+`src/auth.js` (entry: `src/worker.js`) puts an email one-time-code login in front of the site (static `public/` page, or the Python UI via `ORIGIN`).
 Codes are sent with Cloudflare Email Routing's `send_email` binding, which can only deliver to **verified destination
 addresses**, so only people on that list can sign in.
 

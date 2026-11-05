@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, buildMime, newCode, normalizeEmail } from "../src/worker.js";
+import { createHandler, buildMime, newCode, normalizeEmail } from "../src/auth.js";
 
 function kv() {
   const m = new Map();
