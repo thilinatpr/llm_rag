@@ -131,9 +131,77 @@ class STEmbedder:
         return self.m.encode(texts, batch_size=32, show_progress_bar=False, normalize_embeddings=True)
 
 
+class _Cloudflare:
+    """Minimal Workers AI REST client (https://api.cloudflare.com/.../ai/run/<model>)."""
+
+    def __init__(self, account, token):
+        if not account or not token:
+            raise SystemExit("Cloudflare provider needs CLOUDFLARE_API_TOKEN and an account id "
+                             "(BILLRAG_CF_ACCOUNT_ID / CLOUDFLARE_ACCOUNT_ID / R2_ACCOUNT_ID).")
+        self.account, self.token = account, token
+
+    def _post(self, model, body, retries=4):
+        import time
+        import urllib.error
+        import urllib.request
+        url = f"https://api.cloudflare.com/client/v4/accounts/{self.account}/ai/run/{model}"
+        for attempt in range(retries):
+            req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
+                "Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    return json.load(r)["result"]
+            except urllib.error.HTTPError as e:
+                if e.code not in (429, 500, 502, 503, 504) or attempt == retries - 1:
+                    raise RuntimeError(f"Workers AI {model}: HTTP {e.code} {e.read().decode()[:200]}") from None
+            except (urllib.error.URLError, TimeoutError):
+                if attempt == retries - 1:
+                    raise
+            time.sleep(2 ** (attempt + 1))
+
+
+class CloudflareEmbedder(_Cloudflare):
+    def __init__(self, model, account, token, batch=50, workers=4, max_chars=2000):
+        super().__init__(account, token)
+        self.model, self.batch, self.workers, self.max_chars = model, batch, workers, max_chars
+
+    def embed(self, texts):
+        import numpy as np
+        from concurrent.futures import ThreadPoolExecutor
+        parts = [[(t or " ")[: self.max_chars] for t in texts[i:i + self.batch]]
+                 for i in range(0, len(texts), self.batch)]
+        with ThreadPoolExecutor(self.workers) as ex:
+            res = list(ex.map(lambda p: self._post(self.model, {"text": p})["data"], parts))
+        return np.asarray([v for r in res for v in r], dtype="float32")
+
+
+class CloudflareReranker(_Cloudflare):
+    """Cross-encoder: scores each (query, passage) pair; returns scores aligned with the input order."""
+
+    def __init__(self, model, account, token, max_chars=1500):
+        super().__init__(account, token)
+        self.model, self.max_chars = model, max_chars
+
+    def scores(self, query, texts):
+        r = self._post(self.model, {"query": query, "contexts": [{"text": (t or " ")[: self.max_chars]} for t in texts]})
+        out = [0.0] * len(texts)
+        for item in r["response"]:
+            out[item["id"]] = float(item["score"])
+        return out
+
+
+def make_reranker(settings):
+    if settings.rerank.startswith("cloudflare"):
+        return CloudflareReranker(settings.rerank_model, settings.cf_account_id, settings.cf_api_token)
+    return None
+
+
 def make_embedder(settings):
     if settings.embed_provider == "none":
         return None
+    if settings.embed_provider == "cloudflare":
+        return CloudflareEmbedder(settings.embed_model or "@cf/baai/bge-base-en-v1.5",
+                                  settings.cf_account_id, settings.cf_api_token)
     if not settings.embed_model:
         raise SystemExit("Set BILLRAG_EMBED_MODEL for the chosen BILLRAG_EMBED_PROVIDER.")
     if settings.embed_provider == "openai":

@@ -10,7 +10,13 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
 - [x] Hybrid retrieval plumbing (RRF, optional dense, optional LLM rerank, GS/Bill text dedup, diversity cap)
 - [x] Agent loop + 5 tools + Anthropic/OpenAI-compatible adapters; 15 offline tests
 - [x] Retrieval eval set (`evals/retrieval_eval.jsonl`, 47 reviewed questions) + `python -m billrag eval`.
-      BM25 baseline: R@1 0.38, R@5 0.66, R@10 0.66, MRR 0.48.
+      Config comparison (n=47, differences < ~0.15 are noise):
+        bm25 only            R@1 0.38  R@5 0.66  R@10 0.66  MRR 0.48
+        bm25 + rerank        R@1 0.57  R@5 0.72  R@10 0.79  MRR 0.64
+        bm25 + dense         R@1 0.47  R@5 0.83  R@10 0.91  MRR 0.62
+        bm25 + dense + rerank R@1 0.60 R@5 0.81  R@10 0.91  MRR 0.69   <- best
+- [x] Workers AI providers wired in: `BILLRAG_EMBED_PROVIDER=cloudflare` (bge-base-en-v1.5, 42,696 chunks embedded in ~3 min)
+      and `BILLRAG_RERANK=cloudflare` (bge-reranker-base). Agent verified end to end with the best config (~25 s/question).
 - [x] Verified live on Cloudflare Workers AI: `@cf/openai/gpt-oss-120b` via the OpenAI-compatible endpoint does multi-step
       tool calling and a correctly cited, source-checked answer (~18 s, 4 tool calls). `bge-reranker-base` and
       `bge-base-en-v1.5` (768-d) respond too; neither is wired into billrag yet.
@@ -20,16 +26,19 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
       `result.data`) and reranking (`/ai/run/@cf/baai/bge-reranker-base`, `{"query","contexts":[{"text"}]}` ->
       `result.response[{id,score}]`). Note: in a first trial the reranker scores saturated (top 3 all ~0.997), so judge it
       on the eval set, don't assume it helps. Still unverified live: the Anthropic adapter.
-- [ ] **Compare retrieval configs on the eval set** (`python -m billrag eval -k 10 --label "<name>"`): BM25 only (done),
-      + Workers AI dense embeddings, + `bge-reranker-base`, + both. Keep the config that wins per question type.
-      Weakest today: bill-level "which law is this?" (R@10 0.40) and paraphrased clause questions.
+- [ ] **Adopt dense+rerank as the default** (set the env vars in AGENTS.md "Recommended retrieval config") and make
+      `chat`/`ask` fail loudly or fall back when `vectors.npz` is missing, instead of silently running BM25 only.
+- [ ] Bill-level "which law is this?" is still the weakest (R@1 0.50, R@10 0.80): try embedding the long title +
+      LLM summary as a separate bill-level index (`python -m billrag summarize`), and a `search_bills` mode that
+      returns bills instead of clauses.
 - [ ] Grow/harden the eval set: 47 questions gives roughly +/-0.14 on any rate, so only large differences are
       meaningful. Add real user questions, multi-clause questions, and answer-level grading of `agent.ask` output
       (the stored `answer` field is the reference).
-- [ ] Upload `data/bills/index.sqlite` to R2 (`scripts/upload_r2.py --include-index`) so a fresh session skips ingest.
+- [ ] Upload `data/bills/index.sqlite` and `vectors.npz` (114 MB) to R2 so a fresh session skips ingest + re-embedding
+      (`scripts/upload_r2.py --include-index` only covers the sqlite file today; add vectors).
 - [ ] Run `python -m billrag summarize` (LLM bill summaries) and measure whether "which bill is about X?" improves.
 - [ ] Rotate the R2 API token: it was pasted into a chat transcript. Revoke it and issue a new one.
-- [ ] Agent latency (~18 s for a 4-tool question on gpt-oss-120b): try parallel tool calls, a smaller model for
+- [ ] Agent latency (~18-25 s for a 4-tool question on gpt-oss-120b; rerank adds ~1 s per search): try parallel tool calls, a smaller model for
       routing, or streaming.
 
 ## Data quality

@@ -16,8 +16,8 @@ def rrf(rankings, k=RRF_K):
 
 
 class Retriever:
-    def __init__(self, store, embedder=None, vectors_path=None, llm=None, rerank="none"):
-        self.store, self.embedder, self.llm, self.rerank_mode = store, embedder, llm, rerank
+    def __init__(self, store, embedder=None, vectors_path=None, llm=None, rerank="none", reranker=None):
+        self.store, self.embedder, self.llm, self.rerank_mode, self.reranker = store, embedder, llm, rerank, reranker
         self.ids = self.mat = None
         if embedder is not None and vectors_path is not None and vectors_path.exists():
             import numpy as np
@@ -44,11 +44,14 @@ class Retriever:
         d = self.dense(query, pool, year, keys)
         if d:
             lists.append(d)
-        fused = rrf(lists)[: max(pool // 2, k)]
+        first_stage = rrf(lists)
+        fused = first_stage[: max(pool * 3 // 4 if self.reranker else pool // 2, k)]
         chunks = self.store.chunks_by_ids(fused)
         fused = [i for i in fused if i in chunks]
         if self.rerank_mode == "llm" and self.llm and len(fused) > 1:
             fused = self.llm_rerank(query, fused, chunks)
+        elif self.rerank_mode.startswith("cloudflare") and self.reranker and len(fused) > 1:
+            fused = self.cross_rerank(query, fused, chunks)
         # collapse identical text across versions (e.g. GS vs Bill) and remember where else it appears
         seen, uniq = {}, []
         for i in fused:
@@ -71,6 +74,16 @@ class Retriever:
             if len(out) >= k:
                 break
         return out
+
+    def cross_rerank(self, query, ids, chunks):
+        """Reorder by cross-encoder score (stable on ties). 'cloudflare-fused' RRF-merges that order with the
+        first-stage order, which hedges against a reranker whose scores saturate near 1.0."""
+        try:
+            sc = self.reranker.scores(query, [chunks[i]["ctx"] for i in ids])
+        except Exception:
+            return ids  # reranking is best-effort
+        by_score = [ids[n] for n in sorted(range(len(ids)), key=lambda n: (-sc[n], n))]
+        return rrf([by_score, ids]) if self.rerank_mode == "cloudflare-fused" else by_score
 
     def llm_rerank(self, query, ids, chunks):
         cands = "\n".join(f"[{n}] {chunks[i]['text'][:450].replace(chr(10), ' ')}" for n, i in enumerate(ids))

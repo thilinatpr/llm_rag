@@ -47,7 +47,7 @@ def main(argv=None):
         print(store.stats())
         return 0
 
-    from .llm import make_embedder, make_llm
+    from .llm import make_embedder, make_llm, make_reranker
     from .retrieve import Retriever
     from .agent import Agent, fmt_passage
     embedder = make_embedder(s)
@@ -58,7 +58,7 @@ def main(argv=None):
         embed_all(store, embedder, s.vectors_path)
         return 0
     if a.cmd == "search":
-        r = Retriever(store, embedder, s.vectors_path)
+        r = Retriever(store, embedder, s.vectors_path, None, s.rerank, make_reranker(s))
         keys = [normalize_ref(a.bill)] if a.bill else None
         for c in r.search(a.query, a.k, a.year, keys):
             print(fmt_passage(c, 500), "\n")
@@ -67,7 +67,7 @@ def main(argv=None):
     if a.cmd == "eval":
         import json, pathlib
         from .evaluate import evaluate, format_report, load_items
-        r = Retriever(store, embedder, s.vectors_path, make_llm(s) if s.rerank == "llm" else None, s.rerank)
+        r = Retriever(store, embedder, s.vectors_path, make_llm(s) if s.rerank == "llm" else None, s.rerank, make_reranker(s))
         items = load_items(a.file)
         summary, rows, secs = evaluate(r, items, a.k)
         print(format_report(summary, a.label or f"rerank={s.rerank} dense={'on' if r.mat is not None else 'off'}"))
@@ -85,7 +85,7 @@ def main(argv=None):
         from .enrich import summarize_all
         print(summarize_all(store, llm, a.since_year, a.limit), "bills summarised")
         return 0
-    retriever = Retriever(store, embedder, s.vectors_path, llm, s.rerank)
+    retriever = Retriever(store, embedder, s.vectors_path, llm, s.rerank, make_reranker(s))
     ev = (lambda n, args: print(f"  → {n} {args}", file=sys.stderr)) if a.verbose else None
     agent = Agent(store, retriever, llm, on_event=ev)
     if a.cmd == "ask":

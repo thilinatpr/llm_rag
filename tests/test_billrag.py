@@ -241,3 +241,41 @@ def test_eval_file_is_well_formed():
     for i in items:
         assert i["level"] in ("clause", "bill") and i["question"].strip() and i["gold"]
         assert all("section" in g for g in i["gold"]) if i["level"] == "clause" else all("bill" in g for g in i["gold"])
+
+
+# ---------------------------------------------------------------- cloudflare adapters (HTTP mocked)
+def test_cloudflare_embedder_batches_in_order():
+    from billrag.llm import CloudflareEmbedder
+    e = CloudflareEmbedder("m", "acc", "tok", batch=2, workers=3)
+    e._post = lambda model, body: {"data": [[float(len(t))] for t in body["text"]]}
+    out = e.embed(["a", "bb", "ccc", "dddd", "eeeee"])
+    assert out.shape == (5, 1) and out[:, 0].tolist() == [1, 2, 3, 4, 5]  # order preserved across threads
+
+
+def test_cloudflare_reranker_aligns_scores_and_truncates():
+    from billrag.llm import CloudflareReranker
+    rr = CloudflareReranker("m", "acc", "tok", max_chars=5)
+    seen = {}
+    def fake(model, body):
+        seen["ctx"] = [c["text"] for c in body["contexts"]]
+        return {"response": [{"id": 2, "score": 0.9}, {"id": 0, "score": 0.1}, {"id": 1, "score": 0.5}]}
+    rr._post = fake
+    assert rr.scores("q", ["aaaaaaaa", "b", "c"]) == [0.1, 0.5, 0.9] and seen["ctx"][0] == "aaaaa"
+
+
+def test_retriever_cross_rerank_modes(tmp_path):
+    st = make_store(tmp_path)
+
+    class Rev:  # prefers the LAST first-stage candidate
+        def scores(self, q, texts):
+            return [float(i) for i in range(len(texts))]
+
+    base = [c["id"] for c in Retriever(st).search("trustee accounts section", k=6)]
+    pure = [c["id"] for c in Retriever(st, rerank="cloudflare", reranker=Rev()).search("trustee accounts section", k=6)]
+    fused = [c["id"] for c in Retriever(st, rerank="cloudflare-fused", reranker=Rev()).search("trustee accounts section", k=6)]
+    assert pure != base and set(pure) == set(base) and len(fused) == len(base)
+
+    class Boom:
+        def scores(self, q, texts):
+            raise RuntimeError("api down")
+    assert [c["id"] for c in Retriever(st, rerank="cloudflare", reranker=Boom()).search("trustee accounts section", k=6)] == base

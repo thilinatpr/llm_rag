@@ -95,3 +95,19 @@ export BILLRAG_CHAT_PROVIDER=openai BILLRAG_CHAT_MODEL=@cf/openai/gpt-oss-120b \
   many incorporation-of-foundation bills share boilerplate (we dropped most such items). Bills with near-identical
   names (e.g. "Al Hasan" 2013 vs "Alhasan" 2015) make ambiguous gold; drop those items rather than loosen gold.
 - Always compare configs on the same file; n=47 means differences under ~0.15 are noise.
+
+## Recommended retrieval config (measured on evals/retrieval_eval.jsonl)
+
+```bash
+export CLOUDFLARE_API_TOKEN=...                       # secret; Workers AI permission
+export BILLRAG_CF_ACCOUNT_ID=<account_id>             # or CLOUDFLARE_ACCOUNT_ID / R2_ACCOUNT_ID
+export BILLRAG_EMBED_PROVIDER=cloudflare BILLRAG_EMBED_MODEL=@cf/baai/bge-base-en-v1.5
+export BILLRAG_RERANK=cloudflare                      # @cf/baai/bge-reranker-base
+python -m billrag embed                               # once per ingest: ~10M tokens, ~3 min, writes data/bills/vectors.npz
+```
+- Results: BM25 only MRR 0.48 -> +rerank 0.64 -> +dense 0.62 -> +dense+rerank 0.69 (R@10 0.91). Pure cross-encoder
+  order beat the RRF-fused variant (`cloudflare-fused`).
+- `vectors.npz` is derived from the index: **re-run `embed` after every `ingest`** (chunk ids change), or dense
+  retrieval will silently point at the wrong chunks. It is git-ignored (114 MB).
+- If `vectors.npz` is absent the retriever silently falls back to BM25 only; check `eval` output ("dense=on/off").
+- Reranking is best-effort: on any API error the first-stage order is kept.
