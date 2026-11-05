@@ -1295,3 +1295,41 @@ def test_direct_answer_quotes_are_aligned_to_the_official_text(tmp_path):
                                                 if "LANGUAGE:" in system else llm.chat_orig(system, messages, **kw))
     r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
     assert r.path == "direct" and "“දින දහය වෙනුවට දින පහළොව ආදේශ කිරීම”" in r.answer and len(r.quote_fixes) == 1
+
+
+# ---------------------------------------------------------------- "this new bill": name the best-scored bill
+def _ev(key, sec, score, title, date="2026-10-01T00:00:00Z"):
+    from billrag.pipeline import Evidence
+    return Evidence({"bill_key": key, "section_no": sec, "kind": "section", "title": title, "bill_kind": "Bill", "date": date,
+                     "page": 1, "text": f"text of {key} §{sec}"}, score)
+
+
+def test_focus_bill_groups_versions_and_picks_the_best_scored_bill(tmp_path):
+    st = make_store(tmp_path)
+    p = Pipeline(st, Retriever(st), ScriptLLM())
+    ev = [_ev("085/2026", 14, 2, "Prevention of Foreign Terrorist Fighters - Bill", "2026-10-20T00:00:00Z"),
+          _ev("070/2026", 3, 3, "Protection of the State from Terrorism - GS", "2026-09-22T00:00:00Z"),
+          _ev("078/2026", None, 2, "Protection of the State from Terrorism - Bill", "2026-10-06T00:00:00Z")]
+    q = 'What criteria define a "terrorist act" in this new bill in 2026?'
+    f = p.focus_bill(q, ev)
+    assert f == {"title": "Protection of the State from Terrorism", "bills": ["070/2026", "078/2026"], "score": 3}
+    assert p.focus_bill(q, ev, keys=["085/2026"]) is None                      # the question names a bill
+    assert p.focus_bill("What criteria define a terrorist act?", ev) is None    # nothing unnamed to resolve
+    assert p.focus_bill(q, ev[1:]) is None                                      # one bill (two versions) anyway
+    # ties on the best score: more total score wins
+    tie = [_ev("001/2026", 1, 3, "A - Bill"), _ev("002/2026", 1, 3, "B - Bill"), _ev("002/2026", 2, 2, "B - Bill")]
+    assert p.focus_bill("what does this bill say", tie)["bills"] == ["002/2026"]
+
+
+def test_focus_note_reaches_the_answer_prompt_and_evidence_is_reordered(tmp_path, monkeypatch):
+    st, llm = make_store(tmp_path), ScriptLLM()
+    p = Pipeline(st, Retriever(st), llm)
+    other = _ev("070/2026", 3, 2, "Protection of the State from Terrorism - GS")
+    real = p.build_evidence
+    monkeypatch.setattr(p, "build_evidence", lambda graded: [other] + real(graded))  # a lookalike bill listed first
+    r = p.ask("How many days does this new bill allow?")
+    assert r.focus["title"] == "Trusts (Amendment)" and "086/2026" in r.focus["bills"] and r.focus["score"] == 3
+    assert r.evidence[0].key != "070/2026" and r.evidence[-1].key == "070/2026"
+    assert "best-matching evidence is from Trusts (Amendment) (" in llm.calls[-1]
+    r2 = p.ask("How many days does the Trusts amendment allow?")
+    assert r2.focus is None and "best-matching" not in llm.calls[-1]

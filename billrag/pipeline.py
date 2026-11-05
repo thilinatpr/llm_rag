@@ -43,6 +43,14 @@ def strip_reasoning(txt):
     return txt, True
 
 
+# "this new bill", "the proposed Act", "this law": the user means one bill but does not name it (seen live: the answer then
+# leaned on a lower-scored lookalike bill). Only checked when the question has no NNN/YYYY.
+_ADJ = r"(?:new|proposed|latest|recent|draft|upcoming)\s+"
+UNNAMED = re.compile(rf"\b(?:(?:this|that)\s+(?:{_ADJ}){{0,2}}|the\s+(?:{_ADJ}){{1,2}})(?:bill|act|law|draft)\b"
+                     r"(?!\s+(?:no\.?|number)\b)", re.I)
+FOCUS_NOTE = ("\n\nNOTE: the question refers to a bill without naming it. The best-matching evidence is from {title} ({keys}): "
+              "answer about THAT bill, name it in your first sentence, and lead with its clauses. Mention another bill only if "
+              "it adds something the question asks for, and then say clearly that it is a different bill.")
 LEAK = re.compile(r"<\|(?:call|start|end|channel|message|return|constrain)\|>|\bto=functions\b")
 
 EVAL_PROMPT = """You are a strict evidence grader for a question-answering system over Sri Lankan bills.
@@ -131,6 +139,7 @@ class Result:
     lang: str = "en"  # language of the user's question; the answer is in the same language when translation worked
     answer_en: str = ""  # the verified English answer (set only for translated results)
     official: list = field(default_factory=list)  # [(bill, section)] whose official local-language text informed the answer
+    focus: dict = None  # {"title", "bills", "score"}: the bill an unnamed "this new bill" was taken to mean
     quote_fixes: list = field(default_factory=list)  # [(quoted, official)] misspelt quotations replaced by the official text
     direct_fallback: str = ""  # why a one-step local-language answer was rejected (then: English answer + translation)
     path: str = "en"  # how the answer was written: en | direct (in the user's language from official text) | translated
@@ -268,7 +277,7 @@ class Pipeline:
             out.append(e)
         return out
 
-    def summarise(self, question, evidence, enough, missing, res, local=None):
+    def summarise(self, question, evidence, enough, missing, res, local=None, focus=None):
         """local: (lang code, {(bill, section): official text}) -> write the answer directly in that language."""
         if not evidence:
             return "I could not find anything in the indexed bills that answers this question."
@@ -286,11 +295,13 @@ class Pipeline:
             blocks.append(block)
         note = "" if enough else (f"\n\nNOTE: the grader judged this evidence INCOMPLETE. Missing: {missing or 'unspecified'}. "
                                    "Answer what the evidence supports and state clearly what is missing.")
+        if focus:
+            note += FOCUS_NOTE.format(title=focus["title"], keys=", ".join(focus["bills"]))
         user = f"QUESTION: {question}\n\nEVIDENCE:\n\n" + "\n\n".join(blocks) + note
         system = ANSWER_SYSTEM + (LOCAL_NOTE.format(lang=lang, LANG=lang.upper()) if code else "")
         return self._llm(system, user, 2400 if code else 1800, res, self.answer_effort, llm=self.answer_llm)
 
-    def answer_direct(self, question, user_question, evidence, enough, missing, res, code):
+    def answer_direct(self, question, user_question, evidence, enough, missing, res, code, focus=None):
         """One-step answer in the user's language when the bill's official text in that language exists for the evidence.
         -> (answer, official refs) or (None, reason) so the caller falls back to English answer + translation."""
         refs = self.official_texts(evidence, code)
@@ -298,7 +309,7 @@ class Pipeline:
             return None, "no official text"
         official = {(k, n): t for k, n, t in refs}
         q = f"{user_question}\n(English rendering used for search: {question})"
-        out = self.summarise(q, evidence, enough, missing, res, local=(code, official))
+        out = self.summarise(q, evidence, enough, missing, res, local=(code, official), focus=focus)
         out, fixes = translate.fix_quotes(out, list(official.values()))
         res.quote_fixes += fixes
         why = translate.check_script(out, code) if out != LEAK_FALLBACK else "unusable output"
@@ -307,6 +318,26 @@ class Pipeline:
         if not why and self.verify(out, evidence):
             why = "citations not in the evidence: " + ", ".join(self.verify(out, evidence))
         return (None, why) if why else (out, refs)
+
+    def focus_bill(self, question, evidence, keys=None):
+        """For a question that says "this new bill" without naming one: the bill (all its GS/Bill versions together) whose
+        evidence the grader scored highest; ties -> more total score, then newer. None if the question names a bill or the
+        evidence comes from one bill anyway."""
+        if keys or not UNNAMED.search(question) or not evidence:
+            return None
+        fams = {}
+        for e in evidence:
+            b = self.store.bill(e.key) if hasattr(self.store, "bill") else None
+            fam = (b or {}).get("title_norm") or re.sub(r"\s*-\s*(gs|bill)\s*$", "", e.chunk["title"].lower()).strip()
+            f = fams.setdefault(fam, {"title": re.sub(r"\s*-\s*(GS|Bill)\s*$", "", e.chunk["title"]).strip(), "bills": [],
+                                      "max": 0, "sum": 0, "date": ""})
+            if e.key not in f["bills"]:
+                f["bills"].append(e.key)
+            f["max"], f["sum"], f["date"] = max(f["max"], e.score), f["sum"] + e.score, max(f["date"], e.chunk["date"])
+        if len(fams) < 2:
+            return None
+        best = max(fams.values(), key=lambda f: (f["max"], f["sum"], f["date"]))
+        return {"title": best["title"], "bills": sorted(best["bills"]), "score": best["max"]}
 
     @staticmethod
     def verify(answer, evidence):
@@ -429,10 +460,14 @@ class Pipeline:
             res.queries += more
         res.enough, res.queries, res.graded = enough, [q] + res.queries, graded
         res.evidence = self.build_evidence(graded)
+        focus = res.focus = self.focus_bill(q, res.evidence, keys)
+        if focus:  # its clauses first (stable sort keeps the grader's order within each group)
+            res.evidence.sort(key=lambda e: e.key not in focus["bills"])
+            self.on_event("focus", focus)
         if local and self.direct_local and res.evidence:
             t = time.time()
             user_q = local[1] + ("\n(State this first: " + " ".join(notes) + ")" if notes else "")
-            out, info = self.answer_direct(q, user_q, res.evidence, enough, missing, res, local[0])
+            out, info = self.answer_direct(q, user_q, res.evidence, enough, missing, res, local[0], focus)
             res.seconds["answer_direct"] = time.time() - t
             if out:
                 res.answer, res.official, res.path = out, [(k, n) for k, n, _ in info], "direct"
@@ -443,7 +478,7 @@ class Pipeline:
                 self.on_event("answer_direct", {"fallback": info})
         if res.path != "direct":
             t = time.time()
-            res.answer = self.summarise(q, res.evidence, enough, missing, res)
+            res.answer = self.summarise(q, res.evidence, enough, missing, res, focus=focus)
             res.seconds["summarise"] = time.time() - t
             if notes:
                 res.answer = " ".join(notes) + "\n\n" + res.answer
