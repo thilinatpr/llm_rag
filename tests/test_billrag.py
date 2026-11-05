@@ -1174,3 +1174,100 @@ def test_no_official_text_means_plain_translation(tmp_path):
     st, llm = make_store(tmp_path), OfficialSeeingLLM()
     r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
     assert "OFFICIAL" not in llm.translate_out[0] and r.official == []
+
+
+# ---------------------------------------------------------------- one-step Sinhala answer + garble check
+LIVE_GARBLE = "ආන්ඩ්‍රාත්‍රාත්‍රාත්‍රාය‑අධිකාරී අපරාධය"  # from the first live Sinhala answer (2026-11-05)
+SI_ANS = "සංශෝධනය මගින් දින දහය වෙනුවට දින පහළොව ආදේශ කරයි"
+
+
+def test_sinhala_text_is_not_mistaken_for_punctuation_junk():
+    from billrag.pipeline import degenerate
+    assert not degenerate("ත්‍රස්තවාදී ක්‍රියාවක් [070/2026 §3(1)] [070/2026 §3(2)] - 2026.") and degenerate("!" * 50)
+
+
+def test_garble_check_rejects_the_live_repetition_and_other_degenerate_output():
+    assert "repeated text" in translate.garbled(LIVE_GARBLE)
+    assert translate.check_out(SI_ANS + " " + LIVE_GARBLE + " [086/2026 §2]", "x [086/2026 §2]", "si").startswith("repeated")
+    assert translate.garbled("ලලලලලල") and translate.garbled("ත" * 3 + "ා" * 6)
+    assert "overlong" in translate.garbled("අ" + "කුසල" * 0 + "ම්බරස්තවාදීප්‍රාණඇපකරුවන්භීෂණකාරීත්‍රස්තවාදයපිළිබඳවරදසහඅපරාධ" * 2)
+    assert "another script" in translate.check_script(SI_ANS + " 意图", "si")
+    # real text passes: dotted leaders, citations, markdown, numbers, a normal answer
+    for ok in (SI_ANS + " [086/2026 §2(1)(a)]", "වේලාව:......................................", "| --- | --- |", "1.1.1. 2026/2026",
+               "- **දඩය** රුපියල් 100,000 [070/2026 §3]", "The Bill replaces ten days with fifteen days."):
+        assert translate.garbled(ok) is None, ok
+
+
+class DirectLLM(TranslatingLLM):
+    """Writes the answer in Sinhala when the answer prompt asks for it (garble=True: a degenerate Sinhala answer)."""
+
+    def __init__(self, garble=False, **kw):
+        super().__init__(**kw)
+        self.garble, self.direct_prompt = garble, None
+
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+        if "LANGUAGE: the user asked in Sinhala" in system:
+            self.calls.append("DIRECT")
+            self.direct_prompt = messages[-1]["content"]
+            return Reply(SI_ANS + (" " + LIVE_GARBLE if self.garble else "") + " [086/2026 §2].")
+        return super().chat(system, messages, tools, max_tokens, effort)
+
+
+def _with_official(st):
+    st.replace_local("086/2026", "si", "ok", [(2, None, 2, "දින දහය වෙනුවට දින පහළොව ආදේශ කිරීම")], "x.pdf", 2)
+    st.commit()
+
+
+def test_sinhala_question_with_official_text_is_answered_in_sinhala_in_one_step(tmp_path):
+    st, llm = make_store(tmp_path), DirectLLM()
+    _with_official(st)
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert r.path == "direct" and "FROM_EN" not in llm.calls and llm.calls[-1] == "DIRECT"
+    assert r.llm_calls == 3  # question -> English, grade, Sinhala answer
+    assert "OFFICIAL SINHALA TEXT" in llm.direct_prompt and "දින දහය වෙනුවට දින පහළොව" in llm.direct_prompt
+    assert SI_Q in llm.direct_prompt and "fifteen days" in llm.direct_prompt  # the user's words + the English clause
+    assert r.answer.startswith(SI_ANS) and r.official == [("086/2026", 2)] and not r.warnings and r.answer_en == ""
+    assert "answer_direct" in r.seconds and "translate_out" not in r.seconds
+
+
+def test_garbled_direct_answer_falls_back_to_english_answer_and_translation(tmp_path):
+    st, llm = make_store(tmp_path), DirectLLM(garble=True)
+    _with_official(st)
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert r.path == "translated" and "repeated text" in r.direct_fallback and llm.calls[-1] == "FROM_EN"
+    assert "fifteen days" in r.answer_en and translate.detect(r.answer) == "si" and r.official == [("086/2026", 2)]
+
+
+def test_direct_answer_with_unbacked_citation_falls_back(tmp_path):
+    st, llm = make_store(tmp_path), DirectLLM()
+    _with_official(st)
+    llm.chat_orig = llm.chat
+    llm.chat = lambda system, messages, **kw: (Reply(SI_ANS + " [999/2026 §9].") if "LANGUAGE:" in system
+                                                else llm.chat_orig(system, messages, **kw))
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert r.path == "translated" and "999/2026" in r.direct_fallback and "999/2026" not in r.answer
+
+
+def test_direct_path_can_be_switched_off_and_english_is_unaffected(tmp_path):
+    st, llm = make_store(tmp_path), DirectLLM()
+    _with_official(st)
+    assert Pipeline(st, Retriever(st), llm, direct_local=False).ask(SI_Q).path == "translated" and "DIRECT" not in llm.calls
+    r = Pipeline(st, Retriever(st), llm).ask("How many days does the amendment allow?")
+    assert r.path == "en" and r.llm_calls == 2
+
+
+def test_web_meta_logs_path_and_english_answer(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from billrag import web
+    st = make_store(tmp_path)
+    app = web.App.__new__(web.App)
+    app.s = SimpleNamespace(chat_model="m", answer_model=None, translate_model=None, grade_effort=None, answer_effort=None,
+                            translate="script")
+    app.mode, app.store, app._llm, app._retr = "pipeline", st, TranslatingLLM(), Retriever(st)
+    _text, meta = app._new_responder()(SI_Q)
+    assert meta["path"] == "translated" and "fifteen days" in meta["answer_en"] and meta["direct_fallback"] is None
+
+
+def test_join_marks_repairs_vowel_signs_wrapped_onto_the_next_line():
+    assert parse_si.join_marks("ත්‍රස්තවා\nාදී සටන්කරු\nදෙවන පේළිය") == "ත්‍රස්තවාදී සටන්කරු\nදෙවන පේළිය"
+    assert parse_si.join_marks("කො\nොමිෂන් සභාව") == "කොමිෂන් සභාව" and parse_si.join_marks("නා\nාගාරය") == "නාගාරය"

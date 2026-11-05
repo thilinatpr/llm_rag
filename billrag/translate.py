@@ -19,6 +19,7 @@ Whatever is used, a failed translation falls back to the main chat model once, a
 """
 import json
 import re
+import unicodedata
 
 SCRIPTS = {"si": ("Sinhala", re.compile(r"[඀-෿]")), "ta": ("Tamil", re.compile(r"[஀-௿]"))}
 CITE = re.compile(r"[\[【]\d{3}/\d{4}(?:\s*§\s*\d+(?:\([^)\]]*\))*)?[\]】]")
@@ -111,12 +112,49 @@ def _chat(llm, system, text, max_tokens, effort):
     return (llm.chat(system, [{"role": "user", "content": text}], max_tokens=max_tokens, effort=effort).text or "").strip()
 
 
-def check_out(out, answer, code):
-    """-> None if `out` is a usable translation of `answer` into `code`, else the reason it is not."""
+# Degenerate model output (seen live in a Llama 3.3 Sinhala answer: "ආන්ඩ්‍රාත්‍රාත්‍රාත්‍රාය"): a short unit that contains a
+# letter repeated 3+ times in a row, one letter/sign 5+ times, or a "word" far longer than any real one. Thresholds were
+# checked against all 3,456 official Sinhala sections (no hits), see AGENTS.md.
+REPEAT_UNIT = re.compile(r"(\S{2,12}?)\1{2,}")
+REPEAT_CHAR = re.compile(r"(\S)\1{4,}")
+MAX_TOKEN = 45
+FOREIGN = re.compile(r"[\u0900-\u0d7f\u0e00-\u0fff\u1100-\u11ff\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0600-\u06ff\u0400-\u04ff]")
+
+
+def garbled(text):
+    """-> None, or why `text` looks like degenerate model output rather than prose (any language)."""
+    body = CITE.sub(" ", text or "")
+    body = re.sub(r"https?://\S+", " ", body)
+    for m in REPEAT_UNIT.finditer(body):
+        if any(c.isalpha() for c in m.group(1)):
+            return f"repeated text {m.group(0)[:40]!r}"
+    for m in REPEAT_CHAR.finditer(body):
+        if m.group(1).isalpha() or unicodedata.category(m.group(1)) in ("Mn", "Mc"):
+            return f"repeated character {m.group(0)[:20]!r}"
+    for tok in re.split(r"[\s/|]+", body):
+        if len(tok.strip(".,;:()[]*\"'-")) > MAX_TOKEN:
+            return f"overlong word {tok[:30]!r}..."
+    return None
+
+
+def check_script(out, code):
+    """Script-level checks for text that should be in language `code`: -> None or the reason it is unusable."""
     if not out or LEAKED.match(out):
         return "empty or reasoning text"
     if code in SCRIPTS and detect(out) != code:
         return f"not in {language_name(code)} script"
+    if code in SCRIPTS:
+        other = [c for c in FOREIGN.findall(out) if not SCRIPTS[code][1].match(c)]
+        if other:
+            return f"characters from another script ({''.join(other[:5])})"
+    return garbled(out)
+
+
+def check_out(out, answer, code):
+    """-> None if `out` is a usable translation of `answer` into `code`, else the reason it is not."""
+    why = check_script(out, code)
+    if why:
+        return why
     if cites(out) != cites(answer):
         return "citations changed"
     return None

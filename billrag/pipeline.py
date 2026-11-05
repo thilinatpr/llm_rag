@@ -11,9 +11,10 @@ Typical cost: 2 LLM calls (3 with a follow-up round, +1 to condense a follow-up 
 import json
 import re
 import time
+import unicodedata
 from dataclasses import dataclass, field
 
-from . import resolve, translate
+from . import parse_si, resolve, translate
 from .store import normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
@@ -27,7 +28,8 @@ LEAK_FALLBACK = ("I could not produce a reliable written answer this time. The s
 
 def degenerate(txt):
     """Text that is not a written answer at all (e.g. a long run of '!!!!'): too few letters to be sentences."""
-    letters = sum(c.isalpha() for c in txt)
+    txt = translate.CITE.sub("", txt).strip()  # citation labels are not prose either way
+    letters = sum(c.isalpha() or unicodedata.category(c) in ("Mn", "Mc") for c in txt)  # Sinhala vowel signs are marks
     return letters == 0 or (len(txt) >= 40 and letters < 0.4 * len(txt))
 
 
@@ -82,6 +84,14 @@ Rules:
   180 for a "summarise" request, at most 6 bullets). Do not restate the question, list every consequence or definition, or
   repeat a point. Add a one-line "Caveats" only if something is uncertain or missing. You explain; you do not give legal advice."""
 
+LOCAL_NOTE = """
+
+LANGUAGE: the user asked in {lang}. Write the WHOLE answer in {lang} (same rules, same brevity, same citation labels in ASCII
+square brackets exactly as shown, e.g. [NNN/YYYY §N]; citation labels and bill numbers stay as they are).
+For sections marked OFFICIAL {LANG} TEXT you are given the bill's own {lang} text, published with the bill (the {lang} text is
+authoritative): take legal terms, names and any quotation from it word for word; do not re-translate the English for those
+parts. Use the English text only to understand the clause. Bill titles may stay in English. Write correct, natural {lang}."""
+
 CONDENSE_PROMPT = """Rewrite the follow-up question as a standalone question that can be understood without the conversation.
 Keep bill names, numbers and years. If it is already standalone, return it unchanged. Return ONLY the question.
 
@@ -119,6 +129,8 @@ class Result:
     lang: str = "en"  # language of the user's question; the answer is in the same language when translation worked
     answer_en: str = ""  # the verified English answer (set only for translated results)
     official: list = field(default_factory=list)  # [(bill, section)] whose official local-language text informed the answer
+    direct_fallback: str = ""  # why a one-step local-language answer was rejected (then: English answer + translation)
+    path: str = "en"  # how the answer was written: en | direct (in the user's language from official text) | translated
 
     def sources(self):
         out = []
@@ -149,7 +161,7 @@ STRICT = "\n\nReply with the JSON object ONLY - no analysis, no explanation, no 
 class Pipeline:
     def __init__(self, store, retriever, llm, k_clauses=14, k_bills=4, extra_rounds=1, keep_max=8,
                  evidence_chars=14000, on_event=None, grade_effort=None, answer_effort=None, answer_llm=None,
-                 translate_mode="script", translator=None):
+                 translate_mode="script", translator=None, direct_local=True, official_chars=2500):
         self.store, self.retriever, self.llm = store, retriever, llm
         self.k_clauses, self.k_bills, self.extra_rounds = k_clauses, k_bills, extra_rounds
         self.keep_max, self.evidence_chars = keep_max, evidence_chars
@@ -158,6 +170,8 @@ class Pipeline:
         self.answer_llm = answer_llm or llm  # the answer step may use a different model than grading
         self.translate_mode = translate_mode  # off | script | ai (see translate.py)
         self.translator = translator or translate.Translator(llm, grade_effort)  # may use a dedicated translation model
+        self.direct_local = direct_local  # Sinhala question + official Sinhala text -> answer in Sinhala in one step
+        self.official_chars = official_chars
         self.history = []
 
     # ------------------------------------------------------------ steps
@@ -251,20 +265,43 @@ class Pipeline:
             out.append(e)
         return out
 
-    def summarise(self, question, evidence, enough, missing, res):
+    def summarise(self, question, evidence, enough, missing, res, local=None):
+        """local: (lang code, {(bill, section): official text}) -> write the answer directly in that language."""
         if not evidence:
             return "I could not find anything in the indexed bills that answers this question."
+        code, official = local or (None, {})
+        lang = translate.language_name(code) if code else ""
         blocks = []
         for e in evidence:
             c = e.chunk
             label = f"[{e.key} §{e.section}]" if e.section is not None else f"[{e.key}]"
             kind = "bill-level description" if c["kind"] == "overview" else f"p.{c['page']}"
             also = f" (identical text also in {', '.join(c['also_in'])})" if c.get("also_in") else ""
-            blocks.append(f"{label} {c['title']} ({c['bill_kind']}, {c['date'][:10]}), {kind}{also}\n{c['text']}")
+            block = f"{label} {c['title']} ({c['bill_kind']}, {c['date'][:10]}), {kind}{also}\n{c['text']}"
+            if (e.key, e.section) in official:  # label without [ ] in the header so it is not a second citation form
+                block += f"\n--- OFFICIAL {lang.upper()} TEXT of this section ---\n{official[(e.key, e.section)][:self.official_chars]}"
+            blocks.append(block)
         note = "" if enough else (f"\n\nNOTE: the grader judged this evidence INCOMPLETE. Missing: {missing or 'unspecified'}. "
                                    "Answer what the evidence supports and state clearly what is missing.")
         user = f"QUESTION: {question}\n\nEVIDENCE:\n\n" + "\n\n".join(blocks) + note
-        return self._llm(ANSWER_SYSTEM, user, 1800, res, self.answer_effort, llm=self.answer_llm)
+        system = ANSWER_SYSTEM + (LOCAL_NOTE.format(lang=lang, LANG=lang.upper()) if code else "")
+        return self._llm(system, user, 2400 if code else 1800, res, self.answer_effort, llm=self.answer_llm)
+
+    def answer_direct(self, question, user_question, evidence, enough, missing, res, code):
+        """One-step answer in the user's language when the bill's official text in that language exists for the evidence.
+        -> (answer, official refs) or (None, reason) so the caller falls back to English answer + translation."""
+        refs = self.official_texts(evidence, code)
+        if not refs:
+            return None, "no official text"
+        official = {(k, n): t for k, n, t in refs}
+        q = f"{user_question}\n(English rendering used for search: {question})"
+        out = self.summarise(q, evidence, enough, missing, res, local=(code, official))
+        why = translate.check_script(out, code) if out != LEAK_FALLBACK else "unusable output"
+        if not why and not CITE.search(out):
+            why = "no citations"
+        if not why and self.verify(out, evidence):
+            why = "citations not in the evidence: " + ", ".join(self.verify(out, evidence))
+        return (None, why) if why else (out, refs)
 
     @staticmethod
     def verify(answer, evidence):
@@ -311,9 +348,13 @@ class Pipeline:
         if not q_en:
             return Result(question=question, lang=lang, llm_calls=tr.calls, answer=(
                 "Sorry, I could not translate that question into English to search the bills. Please try again or ask in English."))
-        res = self._ask(q_en)
-        res.question, res.lang, res.answer_en = question, lang, res.answer
+        res = self._ask(q_en, local=(lang, question))
+        res.question, res.lang = question, lang
         res.seconds["translate_in"] = t_in
+        if res.path == "direct":  # written in the user's language from the official text: nothing to translate
+            res.llm_calls += tr.calls
+            return res
+        res.answer_en, res.path = res.answer, "translated"
         t = time.time()
         refs = self.official_texts(res.evidence, lang)
         out, reasons = tr.from_english(res.answer_en, lang, [(f"{k} \u00a7{n}", t) for k, n, t in refs])
@@ -340,11 +381,12 @@ class Pipeline:
                 row = self.store.local_section(key, e.section, lang)
                 if row and (e.key, e.section) not in seen:
                     seen.add((e.key, e.section))
-                    out.append((e.key, e.section, row["text"]))
+                    out.append((e.key, e.section, parse_si.join_marks(row["text"])))
                     break
         return out
 
-    def _ask(self, question: str) -> Result:
+    def _ask(self, question: str, local=None) -> Result:
+        """local: (lang code, the user's original question) for a non-English question; see answer_direct."""
         res = Result(question=question, answer="")
         plan = resolve.resolve_question(self.store, question)
         if plan["action"] == "reply":  # greeting, or an abbreviation we cannot ground: no search, no model call
@@ -381,11 +423,22 @@ class Pipeline:
             res.queries += more
         res.enough, res.queries, res.graded = enough, [q] + res.queries, graded
         res.evidence = self.build_evidence(graded)
-        t = time.time()
-        res.answer = self.summarise(q, res.evidence, enough, missing, res)
-        res.seconds["summarise"] = time.time() - t
-        if notes:
-            res.answer = " ".join(notes) + "\n\n" + res.answer
+        if local and self.direct_local and res.evidence:
+            t = time.time()
+            user_q = local[1] + ("\n(State this first: " + " ".join(notes) + ")" if notes else "")
+            out, info = self.answer_direct(q, user_q, res.evidence, enough, missing, res, local[0])
+            res.seconds["answer_direct"] = time.time() - t
+            if out:
+                res.answer, res.official, res.path = out, [(k, n) for k, n, _ in info], "direct"
+            elif info != "no official text":
+                res.direct_fallback = info
+                self.on_event("answer_direct", {"fallback": info})
+        if res.path != "direct":
+            t = time.time()
+            res.answer = self.summarise(q, res.evidence, enough, missing, res)
+            res.seconds["summarise"] = time.time() - t
+            if notes:
+                res.answer = " ".join(notes) + "\n\n" + res.answer
         if not res.evidence:
             near = resolve.closest_bills(self.store, question, int(m.group(0)) if (m := re.search(r"\b(19|20)\d{2}\b", question)) else None)
             if near:
