@@ -88,6 +88,21 @@ def cites(text):
     return sorted(m.replace("【", "[").replace("】", "]") for m in CITE.findall(text))
 
 
+OFFICIAL_NOTE = (" After the answer you are given the OFFICIAL {lang} TEXT of the bill sections it relies on, published with "
+                 "the bill. Use that text's exact wording for legal terms and names, and when the answer quotes a clause, quote "
+                 "the official {lang} text instead of translating the English quote. Translate ONLY the answer: do not add "
+                 "anything from the reference that the answer does not say, and do not reproduce the reference labels.")
+
+
+def official_block(official, code, max_chars=2500, max_items=4):
+    """Reference block appended after the answer. Labels carry no [ ] so they can never pass as citations."""
+    if not official:
+        return ""
+    parts = [f"{label.strip('[]')}:\n{text[:max_chars]}" for label, text in list(official)[:max_items]]
+    return (f"\n\n=== OFFICIAL {language_name(code).upper()} TEXT (reference only; do not translate or copy this block) ===\n"
+            + "\n\n".join(parts))
+
+
 LEAKED = re.compile(r"^\s*(analysis|assistant\s*final|we need to)\b", re.I)
 RETRY = "\n\nReply with ONLY the translation - no analysis, no notes, nothing before or after it."
 
@@ -180,8 +195,11 @@ class Translator:
                 return drop_invented_refs(text, out)
         return None
 
-    def from_english(self, answer, code):
-        """-> (translation or None, reasons for every failed attempt)."""
+    def from_english(self, answer, code, official=()):
+        """-> (translation or None, reasons for every failed attempt).
+
+        official: [(label, text)] the bill's own text in the target language for the sections the answer relies on (see
+        parse_si); chat models get it as a terminology/quote reference, the MT model ignores it."""
         reasons = []
         if self.mt:
             self.calls += 1
@@ -193,9 +211,10 @@ class Translator:
             if not why:
                 return out, reasons
             reasons.append(f"{self.mt.model}: {why}")
-        system = FROM_EN.format(lang=language_name(code))
+        system = FROM_EN.format(lang=language_name(code)) + (OFFICIAL_NOTE.format(lang=language_name(code)) if official else "")
+        answer_in = answer + official_block(official, code)
         for i, (llm, effort) in enumerate(self._chats()):
-            for prompt in ((answer, answer + RETRY) if i == len(self._chats()) - 1 else (answer,)):  # one firmer retry on the last model
+            for prompt in ((answer_in, answer_in + RETRY) if i == len(self._chats()) - 1 else (answer_in,)):  # one firmer retry on the last model
                 self.calls += 1
                 try:
                     out = _chat(llm, system, prompt, 2400, effort)
