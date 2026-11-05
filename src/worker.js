@@ -1,4 +1,16 @@
-// Worker entrypoint. Kept to a single default export: workerd rejects any other non-handler named export.
+// Worker entrypoint: the login gate (auth.js) in front of the Python UI container.
+// Kept to a default export plus the Durable Object class: workerd rejects any other non-handler named export.
+import { getContainer } from "@cloudflare/containers";
 import { createHandler } from "./auth.js";
 
-export default { fetch: createHandler() };
+export { BillragContainer } from "./container.js";
+
+// Signed-in requests are forwarded to the container with the shared secret; the browser's session cookie is not.
+async function upstream(request, env) {
+  const headers = new Headers(request.headers);
+  headers.delete("Cookie");
+  headers.set("X-Proxy-Secret", env.PROXY_SECRET);
+  return getContainer(env.BILLRAG).fetch(new Request(request, { headers }));
+}
+
+export default { fetch: createHandler({ upstream }) };

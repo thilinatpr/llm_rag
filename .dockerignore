@@ -1,0 +1,8 @@
+data/
+.git/
+node_modules/
+.wrangler/
+evals/
+tests/
+public/
+*.ipynb

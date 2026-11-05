@@ -179,7 +179,8 @@ $('f2').onsubmit = async (e) => { e.preventDefault();
   catch (x) { msg(x.message, true); } };
 </script></main></body></html>`;
 
-export function createHandler({ sendMail = sendMailViaCloudflare } = {}) {
+// upstream(request, env): optional, forwards signed-in requests (e.g. to a container). Used when env.BILLRAG is bound.
+export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null } = {}) {
   return async function fetch(request, env) {
     const url = new URL(request.url);
     const { pathname } = url;
@@ -199,6 +200,10 @@ export function createHandler({ sendMail = sendMailViaCloudflare } = {}) {
       return json({ error: "Not signed in." }, 401);
     }
 
+    if (upstream && env.BILLRAG) {
+      if (!env.PROXY_SECRET) return json({ error: "Server is not configured." }, 500);
+      return upstream(request, env);
+    }
     if (env.ORIGIN) {
       // Forward to the app server without leaking our session cookie to it.
       const headers = new Headers(request.headers);

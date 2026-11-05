@@ -1,10 +1,16 @@
 """Minimal web UI (stdlib only): python -m billrag serve [--host H] [--port P] [--mode pipeline|agent]
 
+Set BILLRAG_PROXY_SECRET to require an `X-Proxy-Secret` header on every request (the login Worker adds it); serving on
+a non-loopback host without it is refused.
+
 GET  /            single-page chat UI
 POST /api/ask     {"session": str, "question": str} -> {"answer": str}   (needs a chat model/API key)
 POST /api/search  {"query": str, "k": int}          -> {"results": [str]} (retrieval only, no key needed)
 """
+import hmac
 import json
+import os
+import sys
 import threading
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,7 +43,8 @@ PAGE = """<!doctype html>
 <body>
 <header>
   <h1>Sri Lanka Bills Chat</h1>
-  <label><input type="checkbox" id="searchOnly"> Search only (no LLM)</label>
+  <span><label><input type="checkbox" id="searchOnly"> Search only (no LLM)</label>
+  <button id="out" type="button" title="Sign out" style="margin-left:12px;padding:4px 10px">Sign out</button></span>
 </header>
 <div id="log"><div class="hint">Ask about bills from documents.gov.lk, e.g. "How does the 2026 terrorism bill limit detention?".
 Answers explain the text and are not legal advice.</div></div>
@@ -46,6 +53,10 @@ Answers explain the text and are not legal advice.</div></div>
 <script>
 const log = document.getElementById('log'), q = document.getElementById('q'),
       btn = document.getElementById('send'), so = document.getElementById('searchOnly');
+document.getElementById('out').onclick = async () => {
+  try { await fetch('/logout', {method: 'POST'}); } catch (e) {}
+  location.href = '/login';
+};
 let session = null;
 try { session = localStorage.getItem('billrag-session'); } catch (e) {}
 if (!session) {
@@ -77,33 +88,44 @@ document.getElementById('f').addEventListener('submit', async (e) => {
 
 
 class App:
-    def __init__(self, settings, mode="pipeline"):
+    def __init__(self, settings, mode="pipeline", secret=None):
         from .store import Store
-        self.s, self.mode = settings, mode
+        self.s, self.mode, self.secret = settings, mode, secret
         self.store = Store(settings.db_path)
         self.lock = threading.Lock()
         self.sessions = OrderedDict()  # session id -> responder; capped so a small container's memory can't grow without bound
         self._llm = None
-        self._search = None
+        self._retr = None
+
+    def _retriever(self):
+        """One Retriever for everyone: it holds the vectors (~66 MB) and checks the index fingerprint, so build it once."""
+        from .llm import make_embedder, make_llm, make_reranker
+        from .retrieve import Retriever
+        if self._retr is None:
+            llm = None
+            if self.s.rerank == "llm":
+                self._llm = self._llm or make_llm(self.s)
+                llm = self._llm
+            self._retr = Retriever(self.store, make_embedder(self.s), self.s.vectors_path, llm,
+                                   self.s.rerank, make_reranker(self.s))
+        return self._retr
+
+    def warm(self):
+        """Load vectors and verify the index now, so the first user request isn't the one that pays for it."""
+        with self.lock:
+            self._retriever()
 
     def search(self, query, k=6):
         from .agent import fmt_passage
-        from .llm import make_embedder, make_reranker
-        from .retrieve import Retriever
         with self.lock:
-            if self._search is None:
-                self._search = Retriever(self.store, make_embedder(self.s), self.s.vectors_path, None,
-                                         self.s.rerank, make_reranker(self.s))
-            return [fmt_passage(c, 700) for c in self._search.search(query, k)]
+            return [fmt_passage(c, 700) for c in self._retriever().search(query, k)]
 
     def _new_responder(self):
         """One conversation: pipeline (default: retrieve -> evidence grading -> summary) or the free-form agent."""
-        from .llm import make_embedder, make_llm, make_reranker
-        from .retrieve import Retriever
+        from .llm import make_llm
         if self._llm is None:
             self._llm = make_llm(self.s)
-        r = Retriever(self.store, make_embedder(self.s), self.s.vectors_path, self._llm,
-                      self.s.rerank, make_reranker(self.s))
+        r = self._retriever()
         if self.mode == "agent":
             from .agent import Agent
             return Agent(self.store, r, self._llm).ask
@@ -141,13 +163,28 @@ def make_handler(app):
             self.end_headers()
             self.wfile.write(data)
 
+        def _allowed(self):
+            """With BILLRAG_PROXY_SECRET set, only requests carrying it (i.e. via the login Worker) are served."""
+            secret = getattr(app, "secret", None)
+            if not secret:
+                return True
+            got = self.headers.get("X-Proxy-Secret", "")
+            if hmac.compare_digest(got.encode(), secret.encode()):
+                return True
+            self._send(403, json.dumps({"error": "forbidden"}))
+            return False
+
         def do_GET(self):
+            if not self._allowed():
+                return
             if self.path in ("/", "/index.html"):
                 self._send(200, PAGE, "text/html")
             else:
                 self._send(404, json.dumps({"error": "not found"}))
 
         def do_POST(self):
+            if not self._allowed():
+                return
             try:
                 n = int(self.headers.get("Content-Length", 0))
                 body = json.loads(self.rfile.read(n) or b"{}")
@@ -174,7 +211,19 @@ def make_handler(app):
 
 
 def serve(settings, host="127.0.0.1", port=8000, mode="pipeline"):
-    app = App(settings, mode)
+    secret = os.environ.get("BILLRAG_PROXY_SECRET") or None
+    if secret and len(secret) < 16:
+        sys.exit("BILLRAG_PROXY_SECRET must be at least 16 characters.")
+    if host not in ("127.0.0.1", "localhost", "::1") and not secret:
+        sys.exit(f"Refusing to listen on {host} without BILLRAG_PROXY_SECRET: the UI has no login of its own.")
+    app = App(settings, mode, secret)
+    if os.environ.get("BILLRAG_WARM", "1") != "0":
+        def _warm():
+            try:
+                app.warm()
+            except Exception as e:  # surfaced again, with the real error, on the first request
+                print(f"warm-up failed: {type(e).__name__}: {e}", file=sys.stderr)
+        threading.Thread(target=_warm, daemon=True).start()
     srv = ThreadingHTTPServer((host, port), make_handler(app))
     print(f"Serving on http://{host}:{port}  (Ctrl-C to stop)")
     try:
