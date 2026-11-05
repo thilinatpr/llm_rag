@@ -810,3 +810,50 @@ def test_chatlog_r2_key_layout(monkeypatch, tmp_path):
     chatlog._write({"question": "q"}, "2026-11-05", "123456789-abc-1")
     assert puts[0]["Bucket"] == "b" and puts[0]["Key"] == "chatlogs/2026-11-05/123456789-abc-1.json"
     assert json.loads(puts[0]["Body"])["question"] == "q"
+
+
+BILLS_FOR_RESOLVE = [
+    {"key": "070/2026", "title": "Protection of the State from Terrorism - GS", "year": 2026},
+    {"key": "078/2026", "title": "Protection of the State from Terrorism - Bill", "year": 2026},
+    {"key": "085/2026", "title": "Prevention of Foreign Terrorist Fighters - Bill", "year": 2026},
+    {"key": "171/2022", "title": "Prevention of Terrorism (Temporary Provisions) (Amendment) - GS", "year": 2022},
+    {"key": "100/2020", "title": "Pradeshiya Sabha (Amendment) - Bill", "year": 2020},
+]
+
+
+def test_acronym_matching_allows_transposition_and_act_suffix():
+    from billrag import resolve
+    assert resolve.acronym_score("PSTA", "PSTA") == 1.0
+    assert resolve.acronym_score("PTSA", "PSTA") == 0.9  # letters transposed
+    assert "PSTA" in resolve.acronym_variants("Protection of the State from Terrorism - Bill")
+    assert {"PT", "PTA"} <= resolve.acronym_variants("Prevention of Terrorism (Temporary Provisions) (Amendment) - GS")
+    top = resolve.match_acronym("PTSA", BILLS_FOR_RESOLVE, year=2026)[0]
+    assert top[1] == "Protection of the State from Terrorism" and top[2] == ["070/2026", "078/2026"]
+    assert resolve.match_acronym("ZZQX", BILLS_FOR_RESOLVE) == []
+
+
+def test_resolve_question_cases(monkeypatch):
+    from billrag import resolve
+    monkeypatch.setattr(resolve, "all_bills", lambda store: BILLS_FOR_RESOLVE)
+    monkeypatch.setattr(resolve, "known_in_corpus", lambda store, tok: tok in ("GS",))
+    r = resolve.resolve_question(None, "Hi")
+    assert r["action"] == "reply" and "bills of the Parliament" in r["text"]
+    assert "welcome" in resolve.resolve_question(None, "thanks!")["text"]
+    r = resolve.resolve_question(None, "Summarise PTSA 2026")
+    assert r["action"] == "answer" and "070/2026, 078/2026" in r["question"] and "PTSA" not in r["question"]
+    assert "PTSA" in r["notes"][0]
+    r = resolve.resolve_question(None, "Summarise ZZQX 2026")
+    assert r["action"] == "reply" and "don't recognise" in r["text"]
+    r = resolve.resolve_question(None, "Summarise PTSA")  # no year: PTA-style titles compete -> ask
+    assert r["action"] == "reply" and "Did you mean" in r["text"] and "Protection of the State" in r["text"]
+    assert resolve.resolve_question(None, "What does the GS version change?")["action"] == "answer"
+    assert resolve.resolve_question(None, "help me understand section 4")["action"] == "answer"
+
+
+def test_pipeline_replies_without_calling_the_model_for_greetings(tmp_path):
+    from billrag.pipeline import Pipeline
+    st = make_store(tmp_path)
+    pipe = Pipeline(st, Retriever(st), FakeLLM([]))  # an empty script raises if the model is called
+    res = pipe.ask("Hi")
+    assert "bills of the Parliament" in res.answer and res.llm_calls == 0 and not res.evidence
+    assert pipe.history[-1][0] == "Hi"
