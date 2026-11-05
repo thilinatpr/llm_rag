@@ -81,7 +81,8 @@ Container: restores index.sqlite + vectors.npz from R2 (gov-rag/bills/) on start
 | Email | zone `tripletrackr.com`; sender `login@tripletrackr.com` via the Email Service REST API (`/accounts/<id>/email/sending/send`) - no per-recipient verification in Cloudflare; `ALLOWED_EMAILS` is the only allowlist |
 
 **Worker vars** (`wrangler.toml`): `ALLOWED_EMAILS`, `FROM_ADDRESS`, `CF_ACCOUNT_ID`, `R2_BUCKET`; optional `CHAT_MODEL`
-(default `@cf/openai/gpt-oss-120b`), `ORIGIN` (ignored when the container is bound).
+(default `@cf/openai/gpt-oss-120b`), `ORIGIN` (ignored when the container is bound), `TRANSLATE` (`off`|`script`|`ai`, passed to the container as
+`BILLRAG_TRANSLATE`; currently `ai`).
 **Worker secrets** (`npx wrangler secret put NAME`): `OTP_PEPPER`, `CF_EMAIL_TOKEN` (Email Sending), `PROXY_SECRET` (shared with the
 container; >= 16 chars), `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (the container needs only read access: use a read-only R2
 token if you can), `CLOUDFLARE_API_TOKEN` (Workers AI). `container.js` copies these into the container's env as
