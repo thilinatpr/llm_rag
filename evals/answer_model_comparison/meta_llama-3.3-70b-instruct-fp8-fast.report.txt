@@ -1,0 +1,6 @@
+== answer=@cf/meta/llama-3.3-70b-instruct-fp8-fast (judge/grader gpt-oss-120b)
+                           n              strict          cited_gold             correct         avg_seconds           cand_gold           kept_gold       avg_llm_calls
+all                       24                0.75                0.83                0.88               16.98                0.96                0.88                2.29
+clause                    16                0.62                0.75                0.81               16.82                0.94                0.81                2.31
+bill                       8                1.00                1.00                1.00               17.29                1.00                1.00                2.25
+(wall 174s)
