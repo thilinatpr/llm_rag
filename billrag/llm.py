@@ -21,6 +21,11 @@ class ToolCall:
 class Reply:
     text: str = ""
     tool_calls: list = field(default_factory=list)
+    stop: str = ""  # provider stop reason; "length" / "max_tokens" = the reply was cut off at max_tokens
+
+    @property
+    def truncated(self):
+        return self.stop in ("length", "max_tokens")
 
 
 def to_anthropic_messages(messages):
@@ -70,7 +75,8 @@ class AnthropicLLM:
         r = self.client.messages.create(model=self.model, max_tokens=max_tokens, system=system,
                                         messages=to_anthropic_messages(messages), **kw)
         return Reply("".join(b.text for b in r.content if b.type == "text"),
-                     [ToolCall(b.id, b.name, dict(b.input)) for b in r.content if b.type == "tool_use"])
+                     [ToolCall(b.id, b.name, dict(b.input)) for b in r.content if b.type == "tool_use"],
+                     getattr(r, "stop_reason", "") or "")
 
 
 class OpenAILLM:
@@ -96,7 +102,7 @@ class OpenAILLM:
             except json.JSONDecodeError:
                 args = {}
             calls.append(ToolCall(tc.id, tc.function.name, args))
-        return Reply(msg.content or "", calls)
+        return Reply(msg.content or "", calls, getattr(r.choices[0], "finish_reason", "") or "")
 
 
 def make_llm(settings):

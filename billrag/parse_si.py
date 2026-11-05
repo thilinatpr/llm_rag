@@ -32,6 +32,13 @@ def clean(text: str) -> str:
     return text
 
 
+def join_marks(text: str) -> str:
+    """A line that starts with a vowel sign continues the previous word, and the sign is usually doubled there
+    ("ත්‍රස්තවා\nාදී" -> "ත්‍රස්තවාදී"; 646 of 3,456 stored sections had this). Applied when a section's text is built
+    and when stored text is read (rows ingested before this fix still contain it)."""
+    return clean(re.sub(rf"\n[ \t]*(?={MARKS})", "", text))
+
+
 def sinhala_share(text: str) -> float:
     letters = sum(c.isalpha() for c in text) or 1
     return sum(1 for c in text if "඀" <= c <= "෿") / letters
@@ -46,7 +53,7 @@ class SiSection:
 
     @property
     def text(self):
-        return re.sub(r"[ \t]+", " ", "\n".join(self.lines)).strip()
+        return join_marks(re.sub(r"[ \t]+", " ", "\n".join(self.lines)).strip())
 
 
 def page_lines(blocks, width, height):

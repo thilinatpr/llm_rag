@@ -1174,3 +1174,178 @@ def test_no_official_text_means_plain_translation(tmp_path):
     st, llm = make_store(tmp_path), OfficialSeeingLLM()
     r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
     assert "OFFICIAL" not in llm.translate_out[0] and r.official == []
+
+
+# ---------------------------------------------------------------- one-step Sinhala answer + garble check
+LIVE_GARBLE = "ආන්ඩ්‍රාත්‍රාත්‍රාත්‍රාය‑අධිකාරී අපරාධය"  # from the first live Sinhala answer (2026-11-05)
+SI_ANS = "සංශෝධනය මගින් දින දහය වෙනුවට දින පහළොව ආදේශ කරයි"
+
+
+def test_sinhala_text_is_not_mistaken_for_punctuation_junk():
+    from billrag.pipeline import degenerate
+    assert not degenerate("ත්‍රස්තවාදී ක්‍රියාවක් [070/2026 §3(1)] [070/2026 §3(2)] - 2026.") and degenerate("!" * 50)
+
+
+def test_garble_check_rejects_the_live_repetition_and_other_degenerate_output():
+    assert "repeated text" in translate.garbled(LIVE_GARBLE)
+    assert translate.check_out(SI_ANS + " " + LIVE_GARBLE + " [086/2026 §2]", "x [086/2026 §2]", "si").startswith("repeated")
+    assert translate.garbled("ලලලලලල") and translate.garbled("ත" * 3 + "ා" * 6)
+    assert "overlong" in translate.garbled("අ" + "කුසල" * 0 + "ම්බරස්තවාදීප්‍රාණඇපකරුවන්භීෂණකාරීත්‍රස්තවාදයපිළිබඳවරදසහඅපරාධ" * 2)
+    assert "another script" in translate.check_script(SI_ANS + " 意图", "si")
+    assert "U+0DCD" in translate.garbled("මාතෘකා අනුව සමානම පෙත\u0dcdසම්")  # seen live: an unassigned Sinhala code point
+    # real text passes: dotted leaders, citations, markdown, numbers, a normal answer
+    for ok in (SI_ANS + " [086/2026 §2(1)(a)]", "වේලාව:......................................", "| --- | --- |", "1.1.1. 2026/2026",
+               "- **දඩය** රුපියල් 100,000 [070/2026 §3]", "The Bill replaces ten days with fifteen days."):
+        assert translate.garbled(ok) is None, ok
+
+
+class DirectLLM(TranslatingLLM):
+    """Writes the answer in Sinhala when the answer prompt asks for it (garble=True: a degenerate Sinhala answer)."""
+
+    def __init__(self, garble=False, **kw):
+        super().__init__(**kw)
+        self.garble, self.direct_prompt = garble, None
+
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+        if "LANGUAGE: the user asked in Sinhala" in system:
+            self.calls.append("DIRECT")
+            self.direct_prompt = messages[-1]["content"]
+            return Reply(SI_ANS + (" " + LIVE_GARBLE if self.garble else "") + " [086/2026 §2].")
+        return super().chat(system, messages, tools, max_tokens, effort)
+
+
+def _with_official(st):
+    st.replace_local("086/2026", "si", "ok", [(2, None, 2, "දින දහය වෙනුවට දින පහළොව ආදේශ කිරීම")], "x.pdf", 2)
+    st.commit()
+
+
+def test_sinhala_question_with_official_text_is_answered_in_sinhala_in_one_step(tmp_path):
+    st, llm = make_store(tmp_path), DirectLLM()
+    _with_official(st)
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert r.path == "direct" and "FROM_EN" not in llm.calls and llm.calls[-1] == "DIRECT"
+    assert r.llm_calls == 3  # question -> English, grade, Sinhala answer
+    assert "OFFICIAL SINHALA TEXT" in llm.direct_prompt and "දින දහය වෙනුවට දින පහළොව" in llm.direct_prompt
+    assert SI_Q in llm.direct_prompt and "fifteen days" in llm.direct_prompt  # the user's words + the English clause
+    assert r.answer.startswith(SI_ANS) and r.official == [("086/2026", 2)] and not r.warnings and r.answer_en == ""
+    assert "answer_direct" in r.seconds and "translate_out" not in r.seconds
+
+
+def test_garbled_direct_answer_falls_back_to_english_answer_and_translation(tmp_path):
+    st, llm = make_store(tmp_path), DirectLLM(garble=True)
+    _with_official(st)
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert r.path == "translated" and "repeated text" in r.direct_fallback and llm.calls[-1] == "FROM_EN"
+    assert "fifteen days" in r.answer_en and translate.detect(r.answer) == "si" and r.official == [("086/2026", 2)]
+
+
+def test_direct_answer_with_unbacked_citation_falls_back(tmp_path):
+    st, llm = make_store(tmp_path), DirectLLM()
+    _with_official(st)
+    llm.chat_orig = llm.chat
+    llm.chat = lambda system, messages, **kw: (Reply(SI_ANS + " [999/2026 §9].") if "LANGUAGE:" in system
+                                                else llm.chat_orig(system, messages, **kw))
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert r.path == "translated" and "999/2026" in r.direct_fallback and "999/2026" not in r.answer
+
+
+def test_direct_path_can_be_switched_off_and_english_is_unaffected(tmp_path):
+    st, llm = make_store(tmp_path), DirectLLM()
+    _with_official(st)
+    assert Pipeline(st, Retriever(st), llm, direct_local=False).ask(SI_Q).path == "translated" and "DIRECT" not in llm.calls
+    r = Pipeline(st, Retriever(st), llm).ask("How many days does the amendment allow?")
+    assert r.path == "en" and r.llm_calls == 2
+
+
+def test_web_meta_logs_path_and_english_answer(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from billrag import web
+    st = make_store(tmp_path)
+    app = web.App.__new__(web.App)
+    app.s = SimpleNamespace(chat_model="m", answer_model=None, translate_model=None, grade_effort=None, answer_effort=None,
+                            translate="script")
+    app.mode, app.store, app._llm, app._retr = "pipeline", st, TranslatingLLM(), Retriever(st)
+    _text, meta = app._new_responder()(SI_Q)
+    assert meta["path"] == "translated" and "fifteen days" in meta["answer_en"] and meta["direct_fallback"] is None
+
+
+def test_join_marks_repairs_vowel_signs_wrapped_onto_the_next_line():
+    assert parse_si.join_marks("ත්‍රස්තවා\nාදී සටන්කරු\nදෙවන පේළිය") == "ත්‍රස්තවාදී සටන්කරු\nදෙවන පේළිය"
+    assert parse_si.join_marks("කො\nොමිෂන් සභාව") == "කොමිෂන් සභාව" and parse_si.join_marks("නා\nාගාරය") == "නාගාරය"
+
+
+def test_fix_quotes_restores_official_spelling_inside_quotations_only():
+    ref = "(අ) ත්‍රස්තවාදී ක්‍රියා සිදු කිරීමේ, සැලසුම් කිරීමේ, එවැනි ක්‍රියාවලට සූදානම් වීමේ හෝ සහභාගී\nවීමේ කාර්යය සඳහා; හෝ"
+    ans = ("ථ්‍රස්තවාදී සටන්කරු: “ථ්‍රස්තවාදී ක්‍රියා සිදු කිරීමේ, සැලසුම් කිරීමේ, එවැනි ක්‍රියාවලට සූදානම් වීමේ හෝ සහභාගී "
+           "වීමේ කාර්යය සඳහා” [085/2026 §3] සහ “මෙය කිසිසේත් නිල පාඨයේ නැති වාක්‍යයකි” [085/2026 §3]")
+    out, fixes = translate.fix_quotes(ans, [ref])
+    assert len(fixes) == 1 and "“ත්‍රස්තවාදී ක්‍රියා සිදු" in out
+    assert out.startswith("ථ්‍රස්තවාදී සටන්කරු")                      # text outside quotes is never touched
+    assert "“මෙය කිසිසේත් නිල පාඨයේ නැති වාක්‍යයකි”" in out and translate.cites(out) == translate.cites(ans)
+    assert translate.fix_quotes("“" + ref.split("\n")[0][4:] + "”", [ref])[1] == []  # exact quote: unchanged
+    out, fixes = translate.fix_quotes("“ථ්‍රස්තවාදී ක්‍රියා සිදු කිරීමේ, සැලසුම් කිරීමේ … සහභාගී වීමේ කාර්යය සඳහා”", [ref])
+    assert out == "“ත්‍රස්තවාදී ක්‍රියා සිදු කිරීමේ, සැලසුම් කිරීමේ … සහභාගී වීමේ කාර්යය සඳහා”" and len(fixes) == 1
+
+
+def test_direct_answer_quotes_are_aligned_to_the_official_text(tmp_path):
+    st, llm = make_store(tmp_path), DirectLLM()
+    _with_official(st)
+    llm.chat_orig = llm.chat
+    llm.chat = lambda system, messages, **kw: (Reply("නියමය “දින දහය වෙනුවට දින පහළොව ආදේශ කිරිම” වේ [086/2026 §2].")
+                                                if "LANGUAGE:" in system else llm.chat_orig(system, messages, **kw))
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert r.path == "direct" and "“දින දහය වෙනුවට දින පහළොව ආදේශ කිරීම”" in r.answer and len(r.quote_fixes) == 1
+
+
+# ---------------------------------------------------------------- "this new bill": name the best-scored bill
+def _ev(key, sec, score, title, date="2026-10-01T00:00:00Z"):
+    from billrag.pipeline import Evidence
+    return Evidence({"bill_key": key, "section_no": sec, "kind": "section", "title": title, "bill_kind": "Bill", "date": date,
+                     "page": 1, "text": f"text of {key} §{sec}"}, score)
+
+
+def test_focus_bill_groups_versions_and_picks_the_best_scored_bill(tmp_path):
+    st = make_store(tmp_path)
+    p = Pipeline(st, Retriever(st), ScriptLLM())
+    ev = [_ev("085/2026", 14, 2, "Prevention of Foreign Terrorist Fighters - Bill", "2026-10-20T00:00:00Z"),
+          _ev("070/2026", 3, 3, "Protection of the State from Terrorism - GS", "2026-09-22T00:00:00Z"),
+          _ev("078/2026", None, 2, "Protection of the State from Terrorism - Bill", "2026-10-06T00:00:00Z")]
+    q = 'What criteria define a "terrorist act" in this new bill in 2026?'
+    f = p.focus_bill(q, ev)
+    assert f == {"title": "Protection of the State from Terrorism", "bills": ["070/2026", "078/2026"], "score": 3}
+    assert p.focus_bill(q, ev, keys=["085/2026"]) is None                      # the question names a bill
+    assert p.focus_bill("What criteria define a terrorist act?", ev) is None    # nothing unnamed to resolve
+    assert p.focus_bill(q, ev[1:]) is None                                      # one bill (two versions) anyway
+    # ties on the best score: more total score wins
+    tie = [_ev("001/2026", 1, 3, "A - Bill"), _ev("002/2026", 1, 3, "B - Bill"), _ev("002/2026", 2, 2, "B - Bill")]
+    assert p.focus_bill("what does this bill say", tie)["bills"] == ["002/2026"]
+
+
+def test_focus_note_reaches_the_answer_prompt_and_evidence_is_reordered(tmp_path, monkeypatch):
+    st, llm = make_store(tmp_path), ScriptLLM()
+    p = Pipeline(st, Retriever(st), llm)
+    other = _ev("070/2026", 3, 2, "Protection of the State from Terrorism - GS")
+    real = p.build_evidence
+    monkeypatch.setattr(p, "build_evidence", lambda graded: [other] + real(graded))  # a lookalike bill listed first
+    r = p.ask("How many days does this new bill allow?")
+    assert r.focus["title"] == "Trusts (Amendment)" and "086/2026" in r.focus["bills"] and r.focus["score"] == 3
+    assert r.evidence[0].key != "070/2026" and r.evidence[-1].key == "070/2026"
+    assert "best-matching evidence is from Trusts (Amendment) (" in llm.calls[-1]
+    r2 = p.ask("How many days does the Trusts amendment allow?")
+    assert r2.focus is None and "best-matching" not in llm.calls[-1]
+
+
+def test_cut_off_replies_are_rejected_in_both_sinhala_paths(tmp_path):
+    from billrag.llm import Reply as R
+    assert R("x", [], "length").truncated and R("x", [], "max_tokens").truncated and not R("x", [], "stop").truncated
+    st, llm = make_store(tmp_path), DirectLLM()
+    _with_official(st)
+    orig = llm.chat
+
+    def chat(system, messages, **kw):
+        r = orig(system, messages, **kw)
+        return R(r.text, [], "length") if ("LANGUAGE:" in system or system.startswith("Translate the answer")) else r
+    llm.chat = chat
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert r.direct_fallback == "cut off at the output limit" and r.direct_rejected.startswith(SI_ANS)
+    assert r.answer == r.answer_en and any("cut off" in w for w in r.warnings)  # translation cut off too -> English

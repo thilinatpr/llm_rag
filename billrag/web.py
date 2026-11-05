@@ -99,6 +99,9 @@ class App:
                 "step_seconds": {k: round(v, 2) for k, v in res.seconds.items()}, "events": list(events),
                 "model": getattr(self.s, "chat_model", None), "lang": res.lang,
                 "official": [f"{k} \u00a7{n}" for k, n in res.official],
+                "path": res.path, "answer_en": res.answer_en or None, "direct_fallback": res.direct_fallback or None,
+                "quote_fixes": res.quote_fixes or None, "focus": res.focus,
+                "direct_rejected": res.direct_rejected or None,
             }
             return out, meta
         return answer
