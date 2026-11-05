@@ -4,6 +4,7 @@ import re
 from collections import defaultdict
 
 RRF_K = 60
+SCAN_BLOCK = 4096  # rows per block when scoring float16 vectors (~12 MB of float32 at 768 dims)
 
 
 class VectorsError(RuntimeError):
@@ -34,7 +35,17 @@ class Retriever:
         z = np.load(path)
         if "fingerprint" not in z.files or str(z["fingerprint"]) != self.store.fingerprint():
             raise VectorsError(f"{path} was not built from the current index (stale or unstamped). {hint}")
-        self.ids, self.mat = z["ids"], z["vectors"]
+        self.ids, self.mat = z["ids"], z["vectors"]  # float32, or float16 (half the RAM; see scripts/shrink_vectors.py)
+
+    def _scores(self, q):
+        """Cosine scores for every chunk. Scans in blocks so a float16 matrix never needs a full float32 copy."""
+        import numpy as np
+        if self.mat.dtype == np.float32:
+            return self.mat @ q
+        out = np.empty(len(self.mat), dtype="float32")
+        for i in range(0, len(self.mat), SCAN_BLOCK):
+            out[i:i + SCAN_BLOCK] = self.mat[i:i + SCAN_BLOCK].astype("float32") @ q
+        return out
 
     def dense(self, query, limit, year=None, keys=None, kinds=None):
         if self.mat is None:
@@ -42,7 +53,7 @@ class Retriever:
         import numpy as np
         q = np.asarray(self.embedder.embed([query]), dtype="float32")[0]
         q /= (np.linalg.norm(q) or 1.0)
-        sims = self.mat @ q
+        sims = self._scores(q)
         order = np.argsort(-sims)[: limit * (4 if (year or keys) else 1) if not kinds else min(len(sims), limit * 25)]
         ids = [int(self.ids[i]) for i in order]
         if year or keys or kinds:

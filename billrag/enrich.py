@@ -8,8 +8,10 @@ def _chunk_hash(r):
     return hashlib.sha1(f"{r['id']}\x00{r['ctx']}".encode()).hexdigest()[:16]
 
 
-def embed_all(store, embedder, path, batch=256, incremental=True):
-    """Embed every chunk, reusing stored vectors for chunks whose (id, text) hash is unchanged."""
+def embed_all(store, embedder, path, batch=256, incremental=True, dtype="float32"):
+    """Embed every chunk, reusing stored vectors for chunks whose (id, text) hash is unchanged.
+
+    dtype="float16" stores the (L2-normalised) vectors at half the size/RAM with negligible ranking change."""
     import numpy as np
     rows = store.all_chunks()
     hashes = [_chunk_hash(r) for r in rows]
@@ -26,7 +28,7 @@ def embed_all(store, embedder, path, batch=256, incremental=True):
         else:
             old_h = None
         if old_h is not None and same_model:
-            reuse = {(int(i), h): v for i, h, v in zip(z["ids"], old_h, z["vectors"])}
+            reuse = {(int(i), h): v.astype("float32") for i, h, v in zip(z["ids"], old_h, z["vectors"])}
     todo = [n for n, (r, h) in enumerate(zip(rows, hashes)) if (r["id"], h) not in reuse]
     print(f"  {len(rows) - len(todo)} vectors reused, {len(todo)} to embed", file=sys.stderr)
     new = {}
@@ -39,7 +41,7 @@ def embed_all(store, embedder, path, batch=256, incremental=True):
     m = np.vstack([new[n] if n in new else reuse[(rows[n]["id"], hashes[n])] for n in range(len(rows))]) if rows \
         else np.zeros((0, dim), dtype="float32")
     m = m / np.maximum(np.linalg.norm(m, axis=1, keepdims=True), 1e-9)
-    np.savez_compressed(path, ids=np.asarray([r["id"] for r in rows]), vectors=m.astype("float32"),
+    np.savez_compressed(path, ids=np.asarray([r["id"] for r in rows]), vectors=m.astype(dtype),
                         fingerprint=np.asarray(fp), chunk_hashes=np.asarray(hashes), model=np.asarray(model))
     return len(todo)
 

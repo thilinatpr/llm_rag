@@ -48,6 +48,19 @@ BILLRAG_EMBED_PROVIDER=sentence-transformers BILLRAG_EMBED_MODEL=BAAI/bge-small-
 - Answers explain the text; they are not legal advice.
 - Tests: `pytest tests` (offline; uses a scripted fake LLM).
 
+### Small-memory hosting (e.g. Cloudflare Containers `lite`, 256 MiB)
+
+Measured on the real index (42,696 chunks x 768 dims; `index.sqlite` 201 MB, `vectors.npz` 114 MB as float32):
+
+- float32 vectors need 131 MB of RAM (plus a temporary copy while loading), which does not fit in 256 MiB with Python.
+- `python scripts/shrink_vectors.py` rewrites `vectors.npz` as float16: 61 MB file, 66 MB in RAM. Scoring runs in blocks
+  (`retrieve.SCAN_BLOCK`), so there is no full float32 copy. On 400 test queries the top-20 overlap with float32 was 99.8%
+  and the top-1 result was identical. New vectors can be written as float16 with `embed_all(..., dtype="float16")`.
+- Peak RSS of `python -m billrag serve` after a dense search: ~124 MB. Each LLM SDK adds roughly 35 MB when first used.
+- The web UI keeps at most 50 conversations in memory (`web.MAX_SESSIONS`).
+- Not measured: speed on a 1/16 vCPU. On a full core, startup work is ~0.9 s (fingerprint 0.16 s, vector load 0.7 s) and a
+  vector scan ~0.1 s.
+
 ## Cloudflare Worker with email OTP login
 
 `src/auth.js` (entry: `src/worker.js`) puts an email one-time-code login in front of the site (static `public/` page, or the Python UI via `ORIGIN`).
