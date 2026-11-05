@@ -751,3 +751,22 @@ def test_web_app_shares_one_retriever(monkeypatch):
     first = app._retriever()
     app.warm()
     assert app._retriever() is first and len(built) == 1
+
+
+def test_web_healthz_and_page_has_wakeup_handling():
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from billrag.web import make_handler
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(type("A", (), {})()))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        with urllib.request.urlopen(base + "/healthz") as r:
+            assert json.loads(r.read()) == {"ok": True}
+        with urllib.request.urlopen(base + "/") as r:
+            page = r.read().decode()
+        assert "waitUntilUp" in page and "HTTP ${r.status}" in page
+    finally:
+        srv.shutdown()
