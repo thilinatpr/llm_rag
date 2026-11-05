@@ -18,6 +18,23 @@ from .store import normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
 CITE = re.compile(r"[\[【](\d{3}/\d{4})(?:\s*§\s*(\d+))?")  # also the full-width brackets some models emit
+REASONING = re.compile(r"^\s*analysis\s*[:\uff1a]?", re.I)
+FINAL = re.compile(r"assistant\s*final\s*[:\uff1a]?\s*|\bfinal(?:\s+answer)?\s*[:\uff1a]\s*", re.I)
+RETRY_NOTE = "\n\nReply with ONLY the final answer, in the format requested. Do not include any analysis or reasoning text."
+LEAK_FALLBACK = ("I could not produce a reliable written answer this time. The sources below are the passages I found; "
+                 "please try asking again.")
+
+
+def strip_reasoning(txt):
+    """-> (text, leaked). gpt-oss sometimes returns its reasoning ("analysis: ...") instead of, or before, the answer."""
+    if not REASONING.match(txt):
+        return txt, False
+    m = FINAL.search(txt)
+    if m and txt[m.end():].strip():
+        return txt[m.end():].strip(), False
+    return txt, True
+
+
 LEAK = re.compile(r"<\|(?:call|start|end|channel|message|return|constrain)\|>|\bto=functions\b")
 
 EVAL_PROMPT = """You are a strict evidence grader for a question-answering system over Sri Lankan bills.
@@ -128,10 +145,20 @@ class Pipeline:
         self.history = []
 
     # ------------------------------------------------------------ steps
-    def _llm(self, system, user, max_tokens, res, effort=None):
-        res.llm_calls += 1
-        txt = self.llm.chat(system, [{"role": "user", "content": user}], max_tokens=max_tokens, effort=effort).text
-        return LEAK.split(txt)[0].strip() or txt.strip()
+    def _llm(self, system, user, max_tokens, res, effort=None, json_out=False):
+        def call(u):
+            res.llm_calls += 1
+            txt = self.llm.chat(system, [{"role": "user", "content": u}], max_tokens=max_tokens, effort=effort).text
+            txt = LEAK.split(txt)[0].strip() or txt.strip()
+            return (txt, False) if json_out else strip_reasoning(txt)
+
+        txt, leaked = call(user)
+        if leaked:  # (JSON replies from the grader are parsed, and retried, by evaluate())
+            txt, leaked = call(user + RETRY_NOTE)
+            if leaked:
+                res.warnings.append("the model returned its reasoning instead of an answer (twice)")
+                return LEAK_FALLBACK
+        return txt
 
     def condense(self, question, res):
         if not self.history:
@@ -162,9 +189,9 @@ class Pipeline:
             where = f"§{c['section_no']}" if c.get("section_no") is not None else c["kind"]
             blocks.append(f"[{i}] {tag}{c['bill_key']} {where} — {c['title']} ({c['bill_kind']}, {c['date'][:10]})\n{txt}")
         prompt = EVAL_PROMPT.format(question=question, candidates="\n\n".join(blocks))
-        d = parse_json(self._llm("You output only valid JSON.", prompt, 1500, res, self.grade_effort))
+        d = parse_json(self._llm("You output only valid JSON.", prompt, 1500, res, self.grade_effort, json_out=True))
         if not d or not isinstance(d.get("scores"), list):  # reasoning models sometimes answer in prose: retry once, firmer
-            d = parse_json(self._llm("You output only valid JSON.", prompt + STRICT, 2000, res, None))
+            d = parse_json(self._llm("You output only valid JSON.", prompt + STRICT, 2000, res, None, json_out=True))
         if not d or not isinstance(d.get("scores"), list):
             res.warnings.append("evaluation step returned unusable output; using retrieval order")
             return {i: (3 if i < 5 else 1) for i in range(len(cands))}, True, "", []

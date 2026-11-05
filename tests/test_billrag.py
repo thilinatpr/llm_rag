@@ -857,3 +857,42 @@ def test_pipeline_replies_without_calling_the_model_for_greetings(tmp_path):
     res = pipe.ask("Hi")
     assert "bills of the Parliament" in res.answer and res.llm_calls == 0 and not res.evidence
     assert pipe.history[-1][0] == "Hi"
+
+
+def test_strip_reasoning_cases():
+    from billrag.pipeline import strip_reasoning
+    assert strip_reasoning("**Answer** fine") == ("**Answer** fine", False)
+    assert strip_reasoning("analysis: thinking... assistantfinal **Answer** ok") == ("**Answer** ok", False)
+    assert strip_reasoning("Analysis We need X. Final answer: It says Y [1/2026 §2].") == ("It says Y [1/2026 §2].", False)
+    assert strip_reasoning("analysis: only reasoning, no answer") == ("analysis: only reasoning, no answer", True)
+    assert strip_reasoning("An analysis of the Act shows") == ("An analysis of the Act shows", False)  # not a prefix leak
+
+
+def test_pipeline_retries_once_when_the_model_leaks_reasoning(tmp_path):
+    from billrag.pipeline import LEAK_FALLBACK, Pipeline, Result
+    st = make_store(tmp_path)
+    p = Pipeline(st, Retriever(st), FakeLLM([Reply("analysis: we need to think"), Reply("**Answer** done")]))
+    res = Result(question="q", answer="")
+    assert p._llm("sys", "user", 100, res) == "**Answer** done" and res.llm_calls == 2 and not res.warnings
+    p = Pipeline(st, Retriever(st), FakeLLM([Reply("analysis: a"), Reply("analysis: b")]))
+    res = Result(question="q", answer="")
+    assert p._llm("sys", "user", 100, res) == LEAK_FALLBACK and res.llm_calls == 2 and "reasoning" in res.warnings[0]
+    # grader calls (json_out) are left to evaluate(), which has its own retry
+    p = Pipeline(st, Retriever(st), FakeLLM([Reply('analysis: hmm {"scores": [3]}')]))
+    res = Result(question="q", answer="")
+    assert '"scores"' in p._llm("sys", "user", 100, res, json_out=True) and res.llm_calls == 1
+
+
+def test_chatlog_records_carry_a_build_id(tmp_path, monkeypatch):
+    import time
+    from billrag import chatlog
+    monkeypatch.setenv("BILLRAG_LOG_DIR", str(tmp_path))
+    monkeypatch.delenv("R2_BUCKET", raising=False)
+    assert len(chatlog.build_id()) == 8 and chatlog.build_id() == chatlog.build_id()
+    chatlog.log_turn(type="ask", question="q")
+    for _ in range(50):
+        f = list(tmp_path.glob("*.jsonl"))
+        if f and f[0].read_text().strip():
+            break
+        time.sleep(0.05)
+    assert json.loads(f[0].read_text().splitlines()[0])["build"] == chatlog.build_id()
