@@ -3,7 +3,7 @@
 Set BILLRAG_PROXY_SECRET to require an `X-Proxy-Secret` header on every request (the login Worker adds it); serving on
 a non-loopback host without it is refused.
 
-GET  /            single-page chat UI
+GET  /            public/index.html when present (local use); in production the Worker serves it
 GET  /healthz     {"ok": true} (the page polls it while a sleeping container starts)
 POST /api/ask     {"session": str, "question": str} -> {"answer": str}   (needs a chat model/API key)
 POST /api/search  {"query": str, "k": int}          -> {"results": [str]} (retrieval only, no key needed)
@@ -15,103 +15,19 @@ import sys
 import threading
 import time
 from collections import OrderedDict
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .chatlog import Timer, log_turn
 
 MAX_SESSIONS = 50
 
-PAGE = """<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sri Lanka Bills Chat</title>
-<style>
-  :root { color-scheme: light dark; --bg:#fff; --fg:#1a1a1a; --mut:#6b6b6b; --line:#ddd; --me:#e8f0fe; --bot:#f5f5f5; --acc:#1a56db; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#121212; --fg:#eee; --mut:#999; --line:#333; --me:#1e2a44; --bot:#1e1e1e; --acc:#6ea0ff; } }
-  * { box-sizing: border-box; }
-  body { margin:0; font:16px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); display:flex; flex-direction:column; height:100dvh; }
-  header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:12px; }
-  header h1 { font-size:1rem; margin:0; }
-  label { font-size:.85rem; color:var(--mut); }
-  #log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; }
-  .msg { max-width:46rem; padding:10px 14px; border-radius:10px; white-space:pre-wrap; overflow-wrap:anywhere; }
-  .me { background:var(--me); align-self:flex-end; }
-  .bot { background:var(--bot); align-self:flex-start; }
-  .err { color:#d33; }
-  form { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); }
-  input[type=text] { flex:1; padding:10px 12px; font:inherit; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); }
-  button { padding:10px 16px; font:inherit; border:0; border-radius:8px; background:var(--acc); color:#fff; cursor:pointer; }
-  button:disabled { opacity:.5; cursor:default; }
-  .hint { color:var(--mut); font-size:.9rem; }
-</style></head>
-<body>
-<header>
-  <h1>Sri Lanka Bills Chat</h1>
-  <span><label><input type="checkbox" id="searchOnly"> Search only (no LLM)</label>
-  <button id="out" type="button" title="Sign out" style="margin-left:12px;padding:4px 10px">Sign out</button></span>
-</header>
-<div id="log"><div class="hint">Ask about bills from documents.gov.lk, e.g. "How does the 2026 terrorism bill limit detention?".
-Answers explain the text and are not legal advice.</div></div>
-<form id="f"><input type="text" id="q" placeholder="Ask a question..." autocomplete="off" autofocus>
-<button id="send">Send</button></form>
-<script>
-const log = document.getElementById('log'), q = document.getElementById('q'),
-      btn = document.getElementById('send'), so = document.getElementById('searchOnly');
-document.getElementById('out').onclick = async () => {
-  try { await fetch('/logout', {method: 'POST'}); } catch (e) {}
-  location.href = '/login';
-};
-let session = null;
-try { session = localStorage.getItem('billrag-session'); } catch (e) {}
-if (!session) {
-  session = Math.random().toString(36).slice(2);
-  try { localStorage.setItem('billrag-session', session); } catch (e) {}
-}
-function add(text, cls) {
-  const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
-  log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
-}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-// A dropped connection (TypeError) usually means the container was asleep and is starting; wait until it answers, then retry once.
-async function waitUntilUp(note) {
-  for (let i = 0; i < 60; i++) {
-    note.textContent = 'The server is waking up (this can take a minute or two)... ' + (i * 3) + 's';
-    try { const r = await fetch('/healthz', {cache: 'no-store'}); if (r.ok) return true; } catch (e) {}
-    await sleep(3000);
-  }
-  return false;
-}
-async function post(path, body, note) {
-  const send = () => fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
-  let r;
-  try { r = await send(); }
-  catch (e) {
-    if (!(await waitUntilUp(note))) throw new Error('The server did not come back after 3 minutes. Try again shortly.');
-    note.textContent = 'Server is up. Asking again...';
-    r = await send();
-  }
-  let j = {};
-  try { j = await r.json(); } catch (e) {}
-  if (!r.ok) throw new Error(`${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
-  return j;
-}
-document.getElementById('f').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const text = q.value.trim(); if (!text) return;
-  q.value = ''; btn.disabled = true; add(text, 'me');
-  const label = so.checked ? 'Searching...' : 'Thinking...';
-  const wait = add(label, 'bot');
-  const slow = setTimeout(() => { if (wait.textContent === label) wait.textContent = label + ' still working; answers take 15-30s, longer if the server was asleep.'; }, 8000);
-  try {
-    const j = await post(so.checked ? '/api/search' : '/api/ask',
-                         so.checked ? {query: text, k: 6} : {session, question: text}, wait);
-    wait.textContent = so.checked ? j.results.join('\\n\\n---\\n\\n') : j.answer;
-  } catch (err) { wait.textContent = 'Error: ' + err.message; wait.classList.add('err'); }
-  clearTimeout(slow);
-  btn.disabled = false; q.focus(); log.scrollTop = log.scrollHeight;
-});
-</script></body></html>
-"""
+def load_page():
+    """The UI is a static file (public/index.html). In production the Worker serves it; this is for local runs."""
+    f = Path(__file__).resolve().parent.parent / "public" / "index.html"
+    return f.read_text(encoding="utf-8") if f.exists() else None
+
+
 
 
 class App:
@@ -231,7 +147,10 @@ def make_handler(app):
             if not self._allowed():
                 return
             if self.path in ("/", "/index.html"):
-                self._send(200, PAGE, "text/html")
+                page = load_page()
+                if page is None:
+                    return self._send(404, json.dumps({"error": "UI is served by the Worker (public/index.html)."}))
+                self._send(200, page, "text/html")
             elif self.path == "/healthz":
                 self._send(200, json.dumps({"ok": True}))
             else:

@@ -201,8 +201,12 @@ export function createHandler({ sendMail = sendMailViaCloudflare, upstream = nul
     }
 
     if (upstream && env.BILLRAG) {
-      if (!env.PROXY_SECRET) return json({ error: "Server is not configured." }, 500);
-      return upstream(request, env);
+      // The page is static (instant, even if the container sleeps); only the API and the health probe need the container.
+      if (pathname.startsWith("/api/") || pathname === "/healthz") {
+        if (!env.PROXY_SECRET) return json({ error: "Server is not configured." }, 500);
+        return upstream(request, env);
+      }
+      return env.ASSETS.fetch(request);
     }
     if (env.ORIGIN) {
       // Forward to the app server without leaking our session cookie to it.

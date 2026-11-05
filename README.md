@@ -61,6 +61,12 @@ Measured on the real index (42,696 chunks x 768 dims; `index.sqlite` 201 MB, `ve
 - Not measured: speed on a 1/16 vCPU. On a full core, startup work is ~0.9 s (fingerprint 0.16 s, vector load 0.7 s) and a
   vector scan ~0.1 s.
 
+### Page and API are separate
+
+The chat page is the static file `public/index.html`, served by the Worker behind the login, so it loads instantly even when
+the container is asleep. The page pings `/healthz` on load to wake the container while you type. Only `/api/*` and `/healthz`
+go to the container. Local runs of `python -m billrag serve` also serve `public/index.html` at `/`.
+
 ### Chat model in the container
 
 The container uses Cloudflare Workers AI for everything (chat, query embeddings, rerank), so no Anthropic key is needed.
