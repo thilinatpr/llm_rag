@@ -78,7 +78,10 @@ def test_match_section_handles_doubled_numbers():
     assert match_section("1.1. This Act may", 1) == "This Act may"
     assert match_section("33. In the event", 3) == "In the event"
     assert match_section("12. Section 4", 12) == "Section 4"
-    assert match_section("12. section lowercase", 12) is None
+    assert match_section("12. section lowercase", 12) == "section lowercase"  # lower-cased bills
+    assert match_section("12. 5 per cent", 12) is None
+    assert match_section("2 (1) Income tax", 2) == "(1) Income tax"  # old style, no full stop
+    assert match_section("13 . (1) No person", 13) == "(1) No person"  # stray space before the full stop
     assert match_section("3. Text", 4) is None
 
 
@@ -200,3 +203,15 @@ def test_agent_step_limit_forces_answer(tmp_path):
 def test_tool_specs_valid():
     assert {t["name"] for t in TOOLS} == {"search_bills", "list_bills", "get_bill_overview", "get_section", "diff_bills"}
     assert all(t["parameters"]["type"] == "object" for t in TOOLS)
+
+
+def test_schedule_mode_exits_at_next_section():
+    pages = [COVER, "BE it enacted by the Parliament as follows:-\n" + "\n".join(
+        [f"{i}. Section {i} text here." for i in range(1, 7)] +
+        ["FIRST SCHEDULE", "1. Item one", "Column I Column II", "7. Section seven resumes the Act."])]
+    nos = [s.no for s in parse_pages(pages, "X").sections if s.kind == "section"]
+    assert nos == [1, 2, 3, 4, 5, 6, 7]
+    # short bill: numbered schedule items must NOT become sections
+    pages = [COVER, "BE it enacted by the Parliament as follows:-\n1. Short title text.\n2. Another clause here.\n"
+             "SCHEDULE\n3. Item three of the schedule"]
+    assert [s.no for s in parse_pages(pages, "X").sections if s.kind == "section"] == [1, 2]

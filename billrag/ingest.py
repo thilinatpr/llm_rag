@@ -74,7 +74,8 @@ def ingest(data_dir: Path, db_path: Path, limit=None, workers=4, since_year=0):
                 errors += 1
                 print(f"  ! {b['billNoText']}: {err or 'no sections found'}", file=sys.stderr)
                 continue
-            kind, tnorm = classify(b["descriptionEnglish"] or "")
+            b["descriptionEnglish"] = re.sub(r"\s+", " ", b["descriptionEnglish"] or "").strip()
+            kind, tnorm = classify(b["descriptionEnglish"])
             year = int(b["date"][:4])
             c = parsed.cover
             row = {"key": bill_key(b["billNo"], b["billSubNo"]), "bill_no": b["billNo"], "year": b["billSubNo"],

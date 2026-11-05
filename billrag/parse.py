@@ -19,7 +19,7 @@ NOISE = [re.compile(p, re.I) for p in (
     r"^Department of Government Printing$",
 )]
 END_PUNCT = (".", ";", ":", ",", ")", "-", "—")
-ROMAN_PART = re.compile(r"^PART\s+([IVXLC]+|\d+)\b\s*(.*)$")
+ROMAN_PART = re.compile(r"^(PART|CHAPTER)\s+([IVXLC]+|\d+)\b\s*(.*)$")
 SCHEDULE = re.compile(r"^(?:(?:FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH)\s+)?SCHEDULE\b")
 SECTION = re.compile(r"^(\d{1,3})\.\s+(\S.*)$")  # used for part-title guard only
 
@@ -80,6 +80,17 @@ def parse_cover(page1: str) -> dict:
             if lt:
                 cover["long_title"] = " ".join(lt)
             break
+    if "long_title" not in cover:
+        for i, l in enumerate(lines):
+            if re.match(r"^to\s+(amend|provide|make|repeal|incorporate|establish|consolidate|regulate|give|enact|"
+                        r"declare|validate|authori[sz]e|impose|revise|appropriate|ratify|approve)\b", l):
+                lt = [l]
+                for l2 in lines[i + 1:]:
+                    if COVER_STOP.match(l2) or l2 in ("A", "BILL") or (l2.isupper() and len(l2) > 3):
+                        break
+                    lt.append(l2)
+                cover["long_title"] = " ".join(lt)
+                break
     m = re.search(r"Presented by\s+(.+?)\s+on\s+(\d{1,2}\w*\s+(?:of\s+)?\w+,?\s+\d{4})", t, re.S)
     if m:
         cover["presented_by"] = re.sub(r"\s+", " ", m.group(1)).strip()
@@ -99,13 +110,17 @@ def parse_cover(page1: str) -> dict:
 
 def match_section(line: str, expected: int):
     """Return the text after the section number if `line` starts section `expected`.
-    Handles PDF-extraction artefacts where the number is doubled ('1.1. Text', '33. Text' for 3)."""
+    Handles extraction artefacts (doubled numbers: '1.1. Text', '33. Text' for 3), bills printed in
+    lower case, and the older '2   (1) Text' style with no full stop after the number."""
     s = str(expected)
-    for prefix in (f"{s}.{s}.", f"{s}{s}.", f"{s}."):
-        if line.startswith(prefix):
-            rest = line[len(prefix):].strip()
-            if rest and (rest[0].isupper() or rest[0] in "(\"\u201c\u2018'"):
+    for pat in (rf"{s}\s?\.\s?{s}\s?\.", rf"{s}{s}\s?\.", rf"{s}\s?\."):
+        m = re.match(pat, line)
+        if m:
+            rest = line[m.end():].strip()
+            if rest and (rest[0].isalpha() or rest[0] in "(\"\u201c\u2018'"):
                 return rest
+    if line.startswith(s + " (1)"):
+        return line[len(s):].strip()
     return None
 
 
@@ -114,7 +129,7 @@ def clean_page(text: str, titles: set):
     for raw in text.splitlines():
         ln = re.sub(r"\s+", " ", raw).strip()
         if (not ln or any(r.match(ln) for r in NOISE) or norm(ln) in titles
-                or norm(re.sub(r"^\d{1,3}\s+|\s+\d{1,3}$", "", ln)) in titles):
+                or norm(re.sub(r"^\d{1,3}\s*|\s*\d{1,3}$", "", ln)) in titles):
             continue
         lines.append(ln)
     # Marginal notes ("Short title", "Powers, duties / and functions / of ...") are extracted as short
@@ -136,7 +151,7 @@ def parse_pages(pages: list, listing_title: str = "") -> ParsedBill:
     body = [(i + 1, *clean_page(p, titles)) for i, p in enumerate(pages)]
 
     # Start after "BE it enacted ... as follows:-" (the sentence wraps over 2-3 lines).
-    start, found = (0, 0), False
+    start, found, enact = (0, 0), False, None
     for pi, (pno, lines, _) in enumerate(body):
         for li, ln in enumerate(lines):
             if re.search(r"\bBE\s+it\s+enacted\b", ln, re.I):
@@ -144,11 +159,24 @@ def parse_pages(pages: list, listing_title: str = "") -> ParsedBill:
                 while k < min(li + 3, len(lines)) and "follows" not in lines[k]:
                     k += 1
                 start, found = (pi, (k + 1) if k < min(li + 3, len(lines)) else li + 1), True
+                enact = (pi, li)
                 break
         if found:
             break
     if not found:
         start = (1 if len(body) > 1 else 0, 0)
+
+    if "long_title" not in cover and enact:
+        pre = [ln for pj in range(max(0, enact[0] - 1), enact[0] + 1)
+               for lj, ln in enumerate(body[pj][1]) if (pj, lj) < enact]
+        idx = [n for n, ln in enumerate(pre) if re.match(r"^An Act\b", ln, re.I)]
+        if idx:
+            lt = []
+            for ln in pre[idx[-1]:]:
+                if re.match(r"^(AND\s+)?WHEREAS|^NOW\s+THEREFORE", ln, re.I):
+                    break
+                lt.append(ln)
+            cover["long_title"] = re.sub(r"^An Act\s+", "", " ".join(lt), flags=re.I).strip(" .")[:1500]
 
     sections, cur, expected, part, in_sched = [], None, 1, None, False
     pending_part = False
@@ -168,15 +196,18 @@ def parse_pages(pages: list, listing_title: str = "") -> ParsedBill:
                 pending_part = False
             m = ROMAN_PART.match(ln)
             if m and not in_sched:
-                part, pending_part, part_lines = f"PART {m.group(1)}" + (f" {m.group(2)}" if m.group(2) else ""), True, 0
+                part, pending_part, part_lines = f"{m.group(1)} {m.group(2)}" + (f" {m.group(3)}" if m.group(3) else ""), True, 0
                 continue
             if SCHEDULE.match(ln) and len(ln) < 80 and ln.split("(")[0].strip().isupper():
                 in_sched = True
                 cur = Section("schedule", None, part, ln, pno)
                 sections.append(cur)
                 continue
-            rest = None if in_sched else match_section(ln, expected)
+            # Some Acts embed schedules mid-text; leave schedule mode when the next section number
+            # appears (only once expected >= 6, so numbered schedule items in short bills stay put).
+            rest = match_section(ln, expected) if (not in_sched or expected >= 6) else None
             if rest is not None:
+                in_sched = False
                 cur = Section("section", expected, part, None, pno, [rest])
                 sections.append(cur)
                 expected += 1
