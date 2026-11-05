@@ -68,7 +68,7 @@ class App:
 
     def _new_responder(self):
         """One conversation: pipeline (default: retrieve -> evidence grading -> summary) or the free-form agent."""
-        from .llm import make_llm
+        from .llm import make_answer_llm, make_llm
         if self._llm is None:
             self._llm = make_llm(self.s)
         r = self._retriever()
@@ -79,6 +79,7 @@ class App:
         from .pipeline import Pipeline
         events = []
         pipe = Pipeline(self.store, r, self._llm, grade_effort=self.s.grade_effort, answer_effort=self.s.answer_effort,
+                        answer_llm=make_answer_llm(self.s),
                         on_event=lambda name, data: events.append({"event": name, **(data if isinstance(data, dict) else {"data": data})}))
 
         def answer(q):

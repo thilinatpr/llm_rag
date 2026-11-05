@@ -76,7 +76,7 @@ def main(argv=None):
         serve(s, a.host, a.port, a.mode)
         return 0
 
-    from .llm import make_embedder, make_llm, make_reranker
+    from .llm import make_answer_llm, make_embedder, make_llm, make_reranker
     from .retrieve import Retriever
     from .agent import Agent, fmt_passage
     embedder = make_embedder(s)
@@ -101,7 +101,8 @@ def main(argv=None):
         from .pipeline import Pipeline
         llm = make_llm(s)
         retriever = Retriever(store, embedder, s.vectors_path, llm if s.rerank == "llm" else None, s.rerank, make_reranker(s))
-        make = ((lambda: Pipeline(store, retriever, llm, grade_effort=s.grade_effort, answer_effort=s.answer_effort))
+        make = ((lambda: Pipeline(store, retriever, llm, grade_effort=s.grade_effort, answer_effort=s.answer_effort,
+                                  answer_llm=make_answer_llm(s)))
                 if a.mode == "pipeline" else (lambda: Agent(store, retriever, llm)))
         items = [ae.expand_gold(store, i) for i in ae.select([i for i in load_items(a.file) if i["source"]["year"] >= a.since_year], a.limit)]
         t0 = time.time()
@@ -145,7 +146,8 @@ def main(argv=None):
     else:
         from .pipeline import Pipeline
         ev = (lambda n, d: print(f"  \u2192 {n}: {d}", file=sys.stderr)) if a.verbose else None
-        pipe = Pipeline(store, retriever, llm, on_event=ev, grade_effort=s.grade_effort, answer_effort=s.answer_effort)
+        pipe = Pipeline(store, retriever, llm, on_event=ev, grade_effort=s.grade_effort, answer_effort=s.answer_effort,
+                        answer_llm=make_answer_llm(s))
 
         def answer(q):
             r = pipe.ask(q)

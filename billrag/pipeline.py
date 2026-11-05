@@ -142,19 +142,20 @@ STRICT = "\n\nReply with the JSON object ONLY - no analysis, no explanation, no 
 
 class Pipeline:
     def __init__(self, store, retriever, llm, k_clauses=14, k_bills=4, extra_rounds=1, keep_max=8,
-                 evidence_chars=14000, on_event=None, grade_effort=None, answer_effort=None):
+                 evidence_chars=14000, on_event=None, grade_effort=None, answer_effort=None, answer_llm=None):
         self.store, self.retriever, self.llm = store, retriever, llm
         self.k_clauses, self.k_bills, self.extra_rounds = k_clauses, k_bills, extra_rounds
         self.keep_max, self.evidence_chars = keep_max, evidence_chars
         self.on_event = on_event or (lambda *_: None)
         self.grade_effort, self.answer_effort = grade_effort, answer_effort
+        self.answer_llm = answer_llm or llm  # the answer step may use a different model than grading
         self.history = []
 
     # ------------------------------------------------------------ steps
-    def _llm(self, system, user, max_tokens, res, effort=None, json_out=False):
+    def _llm(self, system, user, max_tokens, res, effort=None, json_out=False, llm=None):
         def call(u):
             res.llm_calls += 1
-            txt = self.llm.chat(system, [{"role": "user", "content": u}], max_tokens=max_tokens, effort=effort).text
+            txt = (llm or self.llm).chat(system, [{"role": "user", "content": u}], max_tokens=max_tokens, effort=effort).text
             txt = LEAK.split(txt)[0].strip() or txt.strip()
             if json_out:
                 return txt, False
@@ -254,7 +255,7 @@ class Pipeline:
         note = "" if enough else (f"\n\nNOTE: the grader judged this evidence INCOMPLETE. Missing: {missing or 'unspecified'}. "
                                    "Answer what the evidence supports and state clearly what is missing.")
         user = f"QUESTION: {question}\n\nEVIDENCE:\n\n" + "\n\n".join(blocks) + note
-        return self._llm(ANSWER_SYSTEM, user, 1800, res, self.answer_effort)
+        return self._llm(ANSWER_SYSTEM, user, 1800, res, self.answer_effort, llm=self.answer_llm)
 
     @staticmethod
     def verify(answer, evidence):

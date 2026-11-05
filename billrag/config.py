@@ -13,6 +13,8 @@ Embeddings (optional; without them retrieval is BM25 + structure-aware, which al
   BILLRAG_EMBED_BASE_URL / BILLRAG_EMBED_API_KEY   for OpenAI-compatible embedding servers
 
 Pipeline (retrieve -> grade -> summarise)
+  BILLRAG_ANSWER_MODEL    optional: a different chat model (same provider/endpoint) for the final answer step only;
+                          grading/condense/judging keep BILLRAG_CHAT_MODEL
   BILLRAG_GRADE_EFFORT    reasoning effort for the grading/condense calls (default low; empty = omit the field)
   BILLRAG_ANSWER_EFFORT   reasoning effort for the answer call (default: model default)
 
@@ -47,6 +49,7 @@ class Settings:
     embed_api_key: str | None
     rerank: str
     rerank_model: str
+    answer_model: str | None
     grade_effort: str | None
     answer_effort: str | None
     cf_account_id: str | None
@@ -80,6 +83,7 @@ def load_settings() -> Settings:
         embed_api_key=e("BILLRAG_EMBED_API_KEY") or None,
         rerank=e("BILLRAG_RERANK", cf_default).lower(),
         rerank_model=e("BILLRAG_RERANK_MODEL", "@cf/baai/bge-reranker-base"),
+        answer_model=e("BILLRAG_ANSWER_MODEL") or None,
         grade_effort=(e("BILLRAG_GRADE_EFFORT", "low") or None),
         answer_effort=(e("BILLRAG_ANSWER_EFFORT") or None),
         cf_account_id=cf_account,
