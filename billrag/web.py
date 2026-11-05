@@ -6,7 +6,10 @@ POST /api/search  {"query": str, "k": int}          -> {"results": [str]} (retri
 """
 import json
 import threading
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+MAX_SESSIONS = 50
 
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -79,7 +82,7 @@ class App:
         self.s, self.mode = settings, mode
         self.store = Store(settings.db_path)
         self.lock = threading.Lock()
-        self.sessions = {}
+        self.sessions = OrderedDict()  # session id -> responder; capped so a small container's memory can't grow without bound
         self._llm = None
         self._search = None
 
@@ -121,6 +124,9 @@ class App:
         with self.lock:
             if session not in self.sessions:
                 self.sessions[session] = self._new_responder()
+                while len(self.sessions) > MAX_SESSIONS:
+                    self.sessions.popitem(last=False)
+            self.sessions.move_to_end(session)
             responder = self.sessions[session]
             return responder(question)
 

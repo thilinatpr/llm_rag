@@ -655,3 +655,37 @@ def test_web_ui_endpoints(tmp_path):
         assert code == 500 and "no key" in body["error"]
     finally:
         srv.shutdown()
+
+
+def test_float16_vectors_rank_like_float32():
+    import numpy as np
+    from billrag import retrieve
+    rng = np.random.default_rng(1)
+    m = rng.normal(size=(300, 16)).astype("float32")
+    m /= np.linalg.norm(m, axis=1, keepdims=True)
+    q = m[7] + rng.normal(0, 0.01, 16).astype("float32")
+    q /= np.linalg.norm(q)
+    r32 = retrieve.Retriever.__new__(retrieve.Retriever)
+    r16 = retrieve.Retriever.__new__(retrieve.Retriever)
+    r32.mat, r16.mat = m, m.astype("float16")
+    old = retrieve.SCAN_BLOCK
+    retrieve.SCAN_BLOCK = 64  # force several blocks
+    try:
+        s32, s16 = r32._scores(q), r16._scores(q)
+    finally:
+        retrieve.SCAN_BLOCK = old
+    assert s16.dtype == np.float32 and len(s16) == 300
+    assert np.argmax(s32) == np.argmax(s16) == 7
+    assert abs(s32 - s16).max() < 5e-3
+
+
+def test_web_sessions_are_capped(monkeypatch):
+    from billrag import web
+    app = web.App.__new__(web.App)
+    app.lock = __import__("threading").Lock()
+    app.sessions = web.OrderedDict()
+    app._new_responder = lambda: (lambda q: "ok")
+    monkeypatch.setattr(web, "MAX_SESSIONS", 3)
+    for i in range(6):
+        assert app.ask(f"s{i}", "hi") == "ok"
+    assert list(app.sessions) == ["s3", "s4", "s5"]
