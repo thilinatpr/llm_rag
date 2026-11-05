@@ -18,6 +18,10 @@ Pipeline (retrieve -> grade -> summarise)
   BILLRAG_GRADE_EFFORT    reasoning effort for the grading/condense calls (default low; empty = omit the field)
   BILLRAG_ANSWER_EFFORT   reasoning effort for the answer call (default: model default)
 
+Translation (questions in other languages; the index is English only - see translate.py)
+  BILLRAG_TRANSLATE       off | script (default: Sinhala/Tamil by Unicode script, no extra call for English) |
+                          ai (one model call names ANY language and translates; +1 call per non-Sinhala/Tamil question)
+
 Retrieval
   BILLRAG_RERANK          default: "cloudflare" when Cloudflare credentials are set, else "none"
                           none | llm | cloudflare | cloudflare-fused
@@ -52,6 +56,7 @@ class Settings:
     answer_model: str | None
     grade_effort: str | None
     answer_effort: str | None
+    translate: str
     cf_account_id: str | None
     cf_api_token: str | None
 
@@ -86,6 +91,7 @@ def load_settings() -> Settings:
         answer_model=e("BILLRAG_ANSWER_MODEL") or None,
         grade_effort=(e("BILLRAG_GRADE_EFFORT", "low") or None),
         answer_effort=(e("BILLRAG_ANSWER_EFFORT") or None),
+        translate=e("BILLRAG_TRANSLATE", "script").lower(),
         cf_account_id=cf_account,
         cf_api_token=cf_token,
     )

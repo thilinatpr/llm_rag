@@ -908,3 +908,110 @@ def test_chatlog_records_carry_a_build_id(tmp_path, monkeypatch):
             break
         time.sleep(0.05)
     assert json.loads(f[0].read_text().splitlines()[0])["build"] == chatlog.build_id()
+
+
+# ---------------------------------------------------------------- translation layer (Sinhala / Tamil)
+from billrag import translate  # noqa: E402
+
+SI_Q = "\u0db1\u0dd2\u0dc0\u0dd0\u0dbb\u0daf\u0dd2 \u0daf\u0dd2\u0db1 \u0d9a\u0dd3\u0dba\u0daf?"  # Sinhala text
+TA_ANS = "\u0baa\u0ba4\u0bbf\u0ba9\u0bc8\u0ba8\u0bcd\u0ba4\u0bc1 \u0ba8\u0bbe\u0b9f\u0bcd\u0b95\u0bb3\u0bcd"  # Tamil text
+
+
+class TranslatingLLM(ScriptLLM):
+    def __init__(self, lang="si", drop_cites=False, **kw):
+        super().__init__(**kw)
+        self.lang, self.drop_cites = lang, drop_cites
+
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+        if system.startswith("Translate the user's question"):
+            self.calls.append("TO_EN")
+            return Reply("How many days does the amendment allow?")
+        if system.startswith("Translate the answer"):
+            self.calls.append("FROM_EN")
+            cite = "" if self.drop_cites else " [086/2026 \u00a72]"
+            return Reply((SI_Q if self.lang == "si" else TA_ANS) + cite)
+        return super().chat(system, messages, tools, max_tokens, effort)
+
+
+def test_detect_language_by_script():
+    assert translate.detect("How many days?") == "en" and translate.detect("Bill 077/2026 \u00a712") == "en"
+    assert translate.detect(SI_Q) == "si" and translate.detect(TA_ANS) == "ta"
+    assert translate.detect("Does the bill mention " + SI_Q[:3]) == "en"  # a stray character is not a language switch
+
+
+def test_english_questions_make_no_translation_calls(tmp_path):
+    st, llm = make_store(tmp_path), TranslatingLLM()
+    r = Pipeline(st, Retriever(st), llm).ask("How many days does the amendment allow?")
+    assert "TO_EN" not in llm.calls and "FROM_EN" not in llm.calls and r.lang == "en" and r.llm_calls == 2
+
+
+def test_sinhala_question_is_translated_in_and_out(tmp_path):
+    st, llm = make_store(tmp_path), TranslatingLLM()
+    p = Pipeline(st, Retriever(st), llm)
+    r = p.ask(SI_Q)
+    assert llm.calls[0] == "TO_EN" and llm.calls[-1] == "FROM_EN" and r.llm_calls == 4
+    assert r.lang == "si" and r.question == SI_Q and translate.detect(r.answer) == "si" and "[086/2026 \u00a72]" in r.answer
+    assert "fifteen days" in r.answer_en and not r.warnings
+    assert p.history[-1][0].startswith("How many days")  # follow-ups are condensed in English
+
+
+def test_translation_that_alters_citations_falls_back_to_english(tmp_path):
+    st = make_store(tmp_path)
+    r = Pipeline(st, Retriever(st), TranslatingLLM(drop_cites=True)).ask(SI_Q)
+    assert r.answer == r.answer_en and "fifteen days" in r.answer and any("translate" in w for w in r.warnings)
+
+
+class AILangLLM(TranslatingLLM):
+    """Also answers the one-call detect+translate prompt, like a model would."""
+
+    def __init__(self, reply, **kw):
+        super().__init__(**kw)
+        self.reply = reply
+
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+        if system.startswith("You prepare questions"):
+            self.calls.append("DETECT")
+            return Reply(self.reply)
+        return super().chat(system, messages, tools, max_tokens, effort)
+
+
+FR_Q = "Combien de jours l'amendement accorde-t-il ?"
+
+
+def test_ai_mode_detects_and_translates_any_language_in_one_call(tmp_path):
+    st = make_store(tmp_path)
+    llm = AILangLLM('analysis first... {"language": "French", "english": "How many days does the amendment allow?"}')
+    llm.lang = "fr"
+    r = Pipeline(st, Retriever(st), llm, translate_mode="ai").ask(FR_Q)
+    assert llm.calls[0] == "DETECT" and llm.calls[-1] == "FROM_EN" and r.lang == "french" and r.llm_calls == 4
+    assert "fifteen days" in r.answer_en and r.answer not in ("", r.answer_en) and not r.warnings
+
+
+def test_ai_mode_english_costs_one_extra_call_and_script_mode_none(tmp_path):
+    st = make_store(tmp_path)
+    reply = '{"language": "English", "english": "x"}'
+    llm = AILangLLM(reply)
+    r = Pipeline(st, Retriever(st), llm, translate_mode="ai").ask("How many days does the amendment allow?")
+    assert r.lang == "en" and r.llm_calls == 3 and "FROM_EN" not in llm.calls
+    llm2 = AILangLLM(reply)
+    assert Pipeline(st, Retriever(st), llm2, translate_mode="script").ask(FR_Q).lang == "en" and "DETECT" not in llm2.calls
+
+
+def test_ai_mode_unusable_detection_falls_back_to_english_with_warning(tmp_path):
+    st = make_store(tmp_path)
+    r = Pipeline(st, Retriever(st), AILangLLM("sorry, no json"), translate_mode="ai").ask("How many days?")
+    assert r.lang == "en" and any("language detection failed" in w for w in r.warnings)
+
+
+def test_off_mode_never_translates(tmp_path):
+    st, llm = make_store(tmp_path), TranslatingLLM()
+    r = Pipeline(st, Retriever(st), llm, translate_mode="off").ask(SI_Q)
+    assert "TO_EN" not in llm.calls and r.lang == "en"
+
+
+def test_settings_translate_switch(monkeypatch):
+    from billrag.config import load_settings
+    monkeypatch.delenv("BILLRAG_TRANSLATE", raising=False)
+    assert load_settings().translate == "script"
+    monkeypatch.setenv("BILLRAG_TRANSLATE", "AI")
+    assert load_settings().translate == "ai"

@@ -147,7 +147,7 @@ def main(argv=None):
         from .pipeline import Pipeline
         ev = (lambda n, d: print(f"  \u2192 {n}: {d}", file=sys.stderr)) if a.verbose else None
         pipe = Pipeline(store, retriever, llm, on_event=ev, grade_effort=s.grade_effort, answer_effort=s.answer_effort,
-                        answer_llm=make_answer_llm(s))
+                        answer_llm=make_answer_llm(s), translate_mode=s.translate)
 
         def answer(q):
             r = pipe.ask(q)

@@ -18,6 +18,7 @@ billrag/store.py          SQLite schema, BM25 search, section/outline/version qu
 billrag/retrieve.py       BM25 (+ optional dense) -> RRF -> optional LLM rerank -> dedup of identical text -> diversity cap
 billrag/pipeline.py       DEFAULT chat engine, two steps: retrieve -> AI evidence grading -> AI summary (+ citation check)
 billrag/answer_eval.py    answer-level eval: cites-the-gold-clause, LLM judge, latency (`billrag eval-answers`)
+billrag/translate.py       translation layer: Sinhala/Tamil question -> English -> pipeline -> answer back (script detection, no model call for English)
 billrag/agent.py          (`--mode agent`) tool-calling loop: search_bills, list_bills, get_bill_overview, get_section, diff_bills
 billrag/llm.py            Anthropic + OpenAI-compatible chat adapters, OpenAI/sentence-transformers embedders
 billrag/enrich.py         optional: dense vectors (`embed`) and LLM bill summaries (`summarize`)
@@ -124,6 +125,17 @@ Lessons (all cost us a debugging round):
 - `BILLRAG_GRADE_EFFORT=low` (default) makes grading ~3x faster; low effort on the answer call did not help (latency is dominated
   by hosted-model variance). Models without `reasoning_effort` support: set `BILLRAG_GRADE_EFFORT=` (empty).
 - Models may emit citations in full-width brackets 【..】; the verifier accepts both.
+
+## Translation layer (any language -> English -> any language)
+
+`BILLRAG_TRANSLATE` switch: `off` | `script` (default) | `ai`. `script`: `translate.detect` recognises Sinhala/Tamil from the
+Unicode script (no model call; English costs nothing extra). `ai`: everything else first goes through ONE call
+(`translate.detect_ai`, JSON `{language, english}`) that names the language and translates, so any language and romanised
+Sinhala/Tamil work, at +1 call on every non-Sinhala/Tamil question (English included). A non-English question then costs one
+more call to translate the answer back. The English answer is citation-verified first and kept in `Result.answer_en`; the
+translation must reproduce every `[NNN/YYYY §s]` citation exactly, else we return the English answer with a warning. If `ai`
+detection returns unusable output, the question is treated as English (warning). Bill titles stay English (English-only index).
+Translation quality is unmeasured: no non-English eval set yet.
 
 ## Product priority: recent bills
 
