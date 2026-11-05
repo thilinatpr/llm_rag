@@ -1192,6 +1192,7 @@ def test_garble_check_rejects_the_live_repetition_and_other_degenerate_output():
     assert translate.garbled("ලලලලලල") and translate.garbled("ත" * 3 + "ා" * 6)
     assert "overlong" in translate.garbled("අ" + "කුසල" * 0 + "ම්බරස්තවාදීප්‍රාණඇපකරුවන්භීෂණකාරීත්‍රස්තවාදයපිළිබඳවරදසහඅපරාධ" * 2)
     assert "another script" in translate.check_script(SI_ANS + " 意图", "si")
+    assert "U+0DCD" in translate.garbled("මාතෘකා අනුව සමානම පෙත\u0dcdසම්")  # seen live: an unassigned Sinhala code point
     # real text passes: dotted leaders, citations, markdown, numbers, a normal answer
     for ok in (SI_ANS + " [086/2026 §2(1)(a)]", "වේලාව:......................................", "| --- | --- |", "1.1.1. 2026/2026",
                "- **දඩය** රුපියල් 100,000 [070/2026 §3]", "The Bill replaces ten days with fifteen days."):

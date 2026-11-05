@@ -131,6 +131,9 @@ def garbled(text):
     for m in REPEAT_CHAR.finditer(body):
         if m.group(1).isalpha() or unicodedata.category(m.group(1)) in ("Mn", "Mc"):
             return f"repeated character {m.group(0)[:20]!r}"
+    bad = [c for c in body if unicodedata.category(c) in ("Cn", "Co")]  # unassigned / private-use code points
+    if bad:
+        return f"invalid characters ({' '.join(f'U+{ord(c):04X}' for c in bad[:3])})"
     for tok in re.split(r"[\s/|]+", body):
         if len(tok.strip(".,;:()[]*\"'-")) > MAX_TOKEN:
             return f"overlong word {tok[:30]!r}..."

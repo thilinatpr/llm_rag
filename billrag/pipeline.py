@@ -90,7 +90,9 @@ LANGUAGE: the user asked in {lang}. Write the WHOLE answer in {lang} (same rules
 square brackets exactly as shown, e.g. [NNN/YYYY §N]; citation labels and bill numbers stay as they are).
 For sections marked OFFICIAL {LANG} TEXT you are given the bill's own {lang} text, published with the bill (the {lang} text is
 authoritative): take legal terms, names and any quotation from it word for word; do not re-translate the English for those
-parts. Use the English text only to understand the clause. Bill titles may stay in English. Write correct, natural {lang}."""
+parts. For offences, penalties, time limits, powers and definitions, quote the official {lang} phrase exactly, in quotation
+marks, copying its spelling character by character. Use the English text only to understand the clause. Bill titles may stay
+in English. Write correct, natural {lang}."""
 
 CONDENSE_PROMPT = """Rewrite the follow-up question as a standalone question that can be understood without the conversation.
 Keep bill names, numbers and years. If it is already standalone, return it unchanged. Return ONLY the question.
