@@ -1,3 +1,6 @@
 data/bills/
 node_modules/
 .wrangler/
+__pycache__/
+*.pyc
+.pytest_cache/
