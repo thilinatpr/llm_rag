@@ -683,8 +683,9 @@ def test_web_sessions_are_capped(monkeypatch):
     from billrag import web
     app = web.App.__new__(web.App)
     app.lock = __import__("threading").Lock()
-    app.sessions = web.OrderedDict()
-    app._new_responder = lambda: (lambda q: "ok")
+    app.sessions, app.turns = web.OrderedDict(), {}
+    app._new_responder = lambda: (lambda q: ("ok", {}))
+    monkeypatch.setenv("BILLRAG_CHATLOG", "0")
     monkeypatch.setattr(web, "MAX_SESSIONS", 3)
     for i in range(6):
         assert app.ask(f"s{i}", "hi") == "ok"
@@ -770,3 +771,42 @@ def test_web_healthz_and_page_has_wakeup_handling():
         assert "waitUntilUp" in page and "HTTP ${r.status}" in page
     finally:
         srv.shutdown()
+
+
+def test_chatlog_records_a_turn_and_can_be_disabled(tmp_path, monkeypatch):
+    import time
+    from billrag import chatlog
+    monkeypatch.setenv("BILLRAG_LOG_DIR", str(tmp_path))
+    for k in ("R2_ACCOUNT_ID", "R2_BUCKET"):
+        monkeypatch.delenv(k, raising=False)
+    chatlog.log_turn(type="ask", session="abc-123", turn=2, question="Summarise PTSA 2026", answer="x",
+                     error=None, queries=["q1", "q2"], enough=False, evidence=[{"bill": "070/2026", "section": 3, "score": 3}])
+    for _ in range(50):  # the write happens on a background thread
+        files = list(tmp_path.glob("*.jsonl"))
+        if files and files[0].read_text().strip():
+            break
+        time.sleep(0.05)
+    rec = json.loads(files[0].read_text().splitlines()[0])
+    assert rec["question"] == "Summarise PTSA 2026" and rec["turn"] == 2 and rec["queries"] == ["q1", "q2"]
+    assert rec["enough"] is False and rec["evidence"][0]["bill"] == "070/2026" and "ts" in rec
+    monkeypatch.setenv("BILLRAG_CHATLOG", "0")
+    before = files[0].read_text()
+    chatlog.log_turn(type="ask", question="should not be written")
+    time.sleep(0.2)
+    assert files[0].read_text() == before
+
+
+def test_chatlog_r2_key_layout(monkeypatch, tmp_path):
+    from billrag import chatlog
+    puts = []
+
+    class S3:
+        def put_object(self, **kw):
+            puts.append(kw)
+    monkeypatch.setattr(chatlog, "_r2", lambda: S3())
+    monkeypatch.setenv("R2_BUCKET", "b")
+    (tmp_path / "afile").write_text("x")
+    monkeypatch.setenv("BILLRAG_LOG_DIR", str(tmp_path / "afile" / "sub"))  # local sink fails; R2 must still be written
+    chatlog._write({"question": "q"}, "2026-11-05", "123456789-abc-1")
+    assert puts[0]["Bucket"] == "b" and puts[0]["Key"] == "chatlogs/2026-11-05/123456789-abc-1.json"
+    assert json.loads(puts[0]["Body"])["question"] == "q"

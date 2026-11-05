@@ -13,8 +13,11 @@ import json
 import os
 import sys
 import threading
+import time
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from .chatlog import Timer, log_turn
 
 MAX_SESSIONS = 50
 
@@ -117,6 +120,7 @@ class App:
         self.s, self.mode, self.secret = settings, mode, secret
         self.store = Store(settings.db_path)
         self.lock = threading.Lock()
+        self.turns = {}  # session id -> number of questions so far (for the log)
         self.sessions = OrderedDict()  # session id -> responder; capped so a small container's memory can't grow without bound
         self._llm = None
         self._retr = None
@@ -141,8 +145,10 @@ class App:
 
     def search(self, query, k=6):
         from .agent import fmt_passage
-        with self.lock:
-            return [fmt_passage(c, 700) for c in self._retriever().search(query, k)]
+        with self.lock, Timer() as tm:
+            out = [fmt_passage(c, 700) for c in self._retriever().search(query, k)]
+        log_turn(type="search", question=query, k=k, results=len(out), seconds=tm.seconds)
+        return out
 
     def _new_responder(self):
         """One conversation: pipeline (default: retrieve -> evidence grading -> summary) or the free-form agent."""
@@ -152,18 +158,29 @@ class App:
         r = self._retriever()
         if self.mode == "agent":
             from .agent import Agent
-            return Agent(self.store, r, self._llm).ask
+            agent = Agent(self.store, r, self._llm)
+            return lambda q: (agent.ask(q), {"mode": "agent"})
         from .pipeline import Pipeline
-        pipe = Pipeline(self.store, r, self._llm, grade_effort=self.s.grade_effort, answer_effort=self.s.answer_effort)
+        events = []
+        pipe = Pipeline(self.store, r, self._llm, grade_effort=self.s.grade_effort, answer_effort=self.s.answer_effort,
+                        on_event=lambda name, data: events.append({"event": name, **(data if isinstance(data, dict) else {"data": data})}))
 
         def answer(q):
+            events.clear()
             res = pipe.ask(q)
             out = res.answer
             if res.warnings:
                 out += "\n\n\u26a0 " + "\n\u26a0 ".join(res.warnings)
             if res.evidence:
                 out += "\n\nSources:\n" + "\n".join("  " + x for x in res.sources())
-            return out
+            meta = {
+                "mode": "pipeline", "queries": res.queries, "enough": res.enough, "warnings": res.warnings,
+                "evidence": [{"bill": e.key, "section": e.section, "score": e.score} for e in res.evidence],
+                "candidates_graded": len(res.graded), "llm_calls": res.llm_calls,
+                "step_seconds": {k: round(v, 2) for k, v in res.seconds.items()}, "events": list(events),
+                "model": getattr(self.s, "chat_model", None),
+            }
+            return out, meta
         return answer
 
     def ask(self, session, question):
@@ -174,7 +191,19 @@ class App:
                     self.sessions.popitem(last=False)
             self.sessions.move_to_end(session)
             responder = self.sessions[session]
-            return responder(question)
+            self.turns[session] = self.turns.get(session, 0) + 1
+            turn = self.turns[session]
+            err, text, meta = None, None, {}
+            with Timer() as tm:
+                try:
+                    text, meta = responder(question)
+                    return text
+                except Exception as e:
+                    err = f"{type(e).__name__}: {e}"
+                    raise
+                finally:
+                    log_turn(type="ask", session=session, turn=turn, question=question, answer=text, error=err,
+                             seconds=round(time.time() - tm.t, 2), **meta)
 
 
 def make_handler(app):
