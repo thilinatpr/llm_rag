@@ -1,5 +1,27 @@
 name = "gov-rag-llm"
+main = "src/worker.js"
 compatibility_date = "2026-11-01"
 
+# Static pages are only reachable through the Worker, so they sit behind the OTP login.
 [assets]
 directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+
+# Sessions and one-time codes. Create with: npx wrangler kv namespace create AUTH   (paste the id below)
+[[kv_namespaces]]
+binding = "AUTH"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Email Routing send binding. Mail can only go to destination addresses verified under
+# Email -> Email Routing -> Destination addresses, so this is effectively an allowlist.
+[[send_email]]
+name = "EMAIL"
+
+[vars]
+# Comma-separated; every address must also be a verified Email Routing destination.
+ALLOWED_EMAILS = "you@example.com"
+# Must be an address on a domain with Email Routing enabled (any local part, e.g. login@yourdomain.com).
+FROM_ADDRESS = "login@example.com"
+# Optional: proxy signed-in requests to the Python UI (python -m billrag serve) instead of serving ./public.
+# ORIGIN = "https://billrag.example.com"
