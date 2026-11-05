@@ -99,3 +99,22 @@ test("REST sender posts to the Email Service endpoint, retries 429, throws on fa
     globalThis.fetch = real;
   }
 });
+
+test("signed-in requests go to the upstream only when it is bound and configured", async () => {
+  const t = setup();
+  const cookie = await login(t);
+  const seen = [];
+  const withUp = createHandler({ sendMail: async () => {}, upstream: async (req, env) => (seen.push(req.url), new Response("from container")) });
+  const call = (env, path = "/x") => withUp(new Request("https://x.test" + path, { headers: { Cookie: cookie } }), env);
+  // no BILLRAG binding -> falls through to static assets
+  assert.equal(await (await call(t.env)).text(), "hello page");
+  // bound but PROXY_SECRET missing -> fail closed
+  assert.equal((await call({ ...t.env, BILLRAG: {} })).status, 500);
+  assert.equal(seen.length, 0);
+  const ok = await call({ ...t.env, BILLRAG: {}, PROXY_SECRET: "s".repeat(16) });
+  assert.equal(await ok.text(), "from container");
+  // unauthenticated requests never reach the upstream
+  const anon = await withUp(new Request("https://x.test/api/ask", { method: "POST" }), { ...t.env, BILLRAG: {}, PROXY_SECRET: "s".repeat(16) });
+  assert.equal(anon.status, 401);
+  assert.equal(seen.length, 1);
+});

@@ -689,3 +689,65 @@ def test_web_sessions_are_capped(monkeypatch):
     for i in range(6):
         assert app.ask(f"s{i}", "hi") == "ok"
     assert list(app.sessions) == ["s3", "s4", "s5"]
+
+
+def test_web_requires_proxy_secret_when_configured():
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from billrag.web import make_handler
+
+    class StubApp:
+        secret = "s3cret-s3cret-s3cret"
+
+        def ask(self, sid, q):
+            return "ok"
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(StubApp()))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+
+    def call(path, secret=None, post=False):
+        h = {"Content-Type": "application/json", **({"X-Proxy-Secret": secret} if secret else {})}
+        req = urllib.request.Request(base + path, b'{"question":"q"}' if post else None, h)
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    try:
+        assert call("/") == 403 and call("/api/ask", post=True) == 403
+        assert call("/", "wrong-wrong-wrong-wrong") == 403
+        assert call("/", StubApp.secret) == 200 and call("/api/ask", StubApp.secret, post=True) == 200
+    finally:
+        srv.shutdown()
+
+
+def test_serve_refuses_public_bind_without_secret(monkeypatch):
+    import pytest
+    from billrag import web
+    monkeypatch.delenv("BILLRAG_PROXY_SECRET", raising=False)
+    with pytest.raises(SystemExit, match="Refusing"):
+        web.serve(None, host="0.0.0.0")
+    monkeypatch.setenv("BILLRAG_PROXY_SECRET", "short")
+    with pytest.raises(SystemExit, match="16 characters"):
+        web.serve(None, host="127.0.0.1")
+
+
+def test_web_app_shares_one_retriever(monkeypatch):
+    import threading
+    from billrag import web
+    built = []
+    app = web.App.__new__(web.App)
+    app.lock, app._retr, app._llm = threading.Lock(), None, None
+
+    class S:
+        rerank, vectors_path = "none", None
+    app.s, app.store = S(), None
+    monkeypatch.setattr("billrag.llm.make_embedder", lambda s: None)
+    monkeypatch.setattr("billrag.llm.make_reranker", lambda s: None)
+    monkeypatch.setattr("billrag.retrieve.Retriever", lambda *a: built.append(a) or object())
+    first = app._retriever()
+    app.warm()
+    assert app._retriever() is first and len(built) == 1

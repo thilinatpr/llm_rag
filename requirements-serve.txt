@@ -1,0 +1,5 @@
+# Runtime for `python -m billrag serve` in the container (no PDF parsing, no local embedding models)
+numpy
+anthropic
+openai
+boto3
