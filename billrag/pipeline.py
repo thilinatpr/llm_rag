@@ -146,13 +146,15 @@ STRICT = "\n\nReply with the JSON object ONLY - no analysis, no explanation, no 
 
 class Pipeline:
     def __init__(self, store, retriever, llm, k_clauses=14, k_bills=4, extra_rounds=1, keep_max=8,
-                 evidence_chars=14000, on_event=None, grade_effort=None, answer_effort=None, answer_llm=None):
+                 evidence_chars=14000, on_event=None, grade_effort=None, answer_effort=None, answer_llm=None,
+                 translate_mode="script"):
         self.store, self.retriever, self.llm = store, retriever, llm
         self.k_clauses, self.k_bills, self.extra_rounds = k_clauses, k_bills, extra_rounds
         self.keep_max, self.evidence_chars = keep_max, evidence_chars
         self.on_event = on_event or (lambda *_: None)
         self.grade_effort, self.answer_effort = grade_effort, answer_effort
         self.answer_llm = answer_llm or llm  # the answer step may use a different model than grading
+        self.translate_mode = translate_mode  # off | script | ai (see translate.py)
         self.history = []
 
     # ------------------------------------------------------------ steps
@@ -279,19 +281,33 @@ class Pipeline:
 
     # ------------------------------------------------------------ driver
     def ask(self, question: str) -> Result:
-        """Translation layer around `_ask`: Sinhala/Tamil question -> English -> pipeline -> answer in that language."""
-        lang = translate.detect(question)
+        """Translation layer around `_ask`: any language -> English -> pipeline -> answer in the question's language."""
+        mode, lang, q_en, calls, t = self.translate_mode, "en", question, 0, time.time()
+        if mode != "off":
+            lang = translate.detect(question)  # Sinhala / Tamil by script: free
+            if lang != "en":
+                calls += 1
+                q_en = translate.to_english(self.llm, question, lang, self.grade_effort)
+            elif mode == "ai":  # any other language (or romanised Sinhala/Tamil): one call detects and translates
+                calls += 1
+                got = translate.detect_ai(self.llm, question, self.grade_effort)
+                if got is None:
+                    res = self._ask(question)
+                    res.llm_calls += calls
+                    res.warnings.append("language detection failed; treated the question as English")
+                    return res
+                lang, q_en = got
         if lang == "en":
-            return self._ask(question)
+            res = self._ask(question)
+            res.llm_calls += calls
+            return res
         name = translate.language_name(lang)
-        t = time.time()
-        q_en = translate.to_english(self.llm, question, lang, self.grade_effort)
         if not q_en:
-            return Result(question=question, lang=lang, llm_calls=1, answer=(
+            return Result(question=question, lang=lang, llm_calls=calls, answer=(
                 "Sorry, I could not translate that question into English to search the bills. Please try again or ask in English."))
         res = self._ask(q_en)
         res.question, res.lang, res.answer_en = question, lang, res.answer
-        res.llm_calls += 1
+        res.llm_calls += calls
         res.seconds["translate_in"] = time.time() - t
         t = time.time()
         out = translate.from_english(self.llm, res.answer_en, lang, self.grade_effort)

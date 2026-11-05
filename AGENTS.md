@@ -126,13 +126,16 @@ Lessons (all cost us a debugging round):
   by hosted-model variance). Models without `reasoning_effort` support: set `BILLRAG_GRADE_EFFORT=` (empty).
 - Models may emit citations in full-width brackets 【..】; the verifier accepts both.
 
-## Translation layer (Sinhala / Tamil)
+## Translation layer (any language -> English -> any language)
 
-`Pipeline.ask` detects the question's script (`translate.detect`, deterministic). English: unchanged. Sinhala/Tamil: +2 LLM
-calls - question -> English before retrieval, English answer -> user's language after. The English answer is citation-verified
-first and kept in `Result.answer_en`; the translation must reproduce every `[NNN/YYYY §s]` citation exactly, else we return the
-English answer with a warning. Bill titles stay English (the index is English only). Not handled: romanised Sinhala/Tamil
-("Singlish") and mixed-script text below a 20% share. Quality of translation is unmeasured: no Sinhala/Tamil eval set yet.
+`BILLRAG_TRANSLATE` switch: `off` | `script` (default) | `ai`. `script`: `translate.detect` recognises Sinhala/Tamil from the
+Unicode script (no model call; English costs nothing extra). `ai`: everything else first goes through ONE call
+(`translate.detect_ai`, JSON `{language, english}`) that names the language and translates, so any language and romanised
+Sinhala/Tamil work, at +1 call on every non-Sinhala/Tamil question (English included). A non-English question then costs one
+more call to translate the answer back. The English answer is citation-verified first and kept in `Result.answer_en`; the
+translation must reproduce every `[NNN/YYYY §s]` citation exactly, else we return the English answer with a warning. If `ai`
+detection returns unusable output, the question is treated as English (warning). Bill titles stay English (English-only index).
+Translation quality is unmeasured: no non-English eval set yet.
 
 ## Product priority: recent bills
 

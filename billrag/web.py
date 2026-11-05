@@ -79,7 +79,7 @@ class App:
         from .pipeline import Pipeline
         events = []
         pipe = Pipeline(self.store, r, self._llm, grade_effort=self.s.grade_effort, answer_effort=self.s.answer_effort,
-                        answer_llm=make_answer_llm(self.s),
+                        answer_llm=make_answer_llm(self.s), translate_mode=getattr(self.s, "translate", "script"),
                         on_event=lambda name, data: events.append({"event": name, **(data if isinstance(data, dict) else {"data": data})}))
 
         def answer(q):
