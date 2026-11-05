@@ -421,3 +421,19 @@ def test_search_bills_returns_clauses_only_and_find_bills_returns_overviews(tmp_
     clauses = ag.run_tool("search_bills", {"query": "trustee accounts summary"})
     assert "overview" not in clauses and "auto-generated" not in clauses  # summaries never crowd out clauses
     assert "Long title:" in ag.run_tool("find_bills", {"query": "trustee accounts"})
+
+
+def test_agent_recovers_from_leaked_tool_call_text(tmp_path):
+    st = make_store(tmp_path)
+    llm = FakeLLM([
+        Reply("analysis ... <|end|><|start|>assistant to=functions search_b billscommentaryjson{ \"query\": \"x\"}<|call|>"),
+        Reply("", [ToolCall("1", "list_bills", {})]),
+        Reply("Done: 086/2026 exists."),
+    ])
+    ag = Agent(st, Retriever(st), llm)
+    assert ag.ask("q") == "Done: 086/2026 exists."
+    assert any("malformed tool-call text" in m["content"] for m in llm.seen[1] if m["role"] == "user")
+    assert not any("<|call|>" in (m.get("content") or "") for m in ag.messages)  # leak not kept in history
+    # a model that keeps leaking is cut off with the text before the leak, never the raw tokens
+    llm2 = FakeLLM([Reply("Partial answer <|call|> junk")] * 3)
+    assert Agent(st, Retriever(st), llm2).ask("q") == "Partial answer"

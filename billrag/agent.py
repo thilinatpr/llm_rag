@@ -66,6 +66,9 @@ TOOLS = [
 ]
 
 MAX_TOOL_CHARS = 12000
+# Some models (gpt-oss via Workers AI) occasionally emit their raw tool-call syntax as plain text instead of a
+# structured call; treat that as a failed turn and ask again rather than showing it as the answer.
+LEAK = re.compile(r"<\|(?:call|start|end|channel|message|return|constrain)\|>|\bto=functions\b")
 
 
 def fmt_passage(c, limit=1100):
@@ -171,12 +174,20 @@ class Agent:
     # ------------------------------------------------------------ loop
     def ask(self, question: str) -> str:
         self.messages.append({"role": "user", "content": question})
-        for _ in range(self.max_steps):
+        leaks = 0
+        for _ in range(self.max_steps + 2):
             reply = self.llm.chat(SYSTEM, self.messages, TOOLS)
             self.messages.append({"role": "assistant", "content": reply.text,
                                   "tool_calls": [{"id": t.id, "name": t.name, "args": t.args} for t in reply.tool_calls]})
+            if not reply.tool_calls and LEAK.search(reply.text) and leaks < 2:
+                leaks += 1
+                self.messages[-1]["content"] = ""  # do not keep the malformed text in the history
+                self.messages.append({"role": "user", "content": "Your last message contained malformed tool-call text "
+                                      "instead of a real tool call or an answer. Use the tool-calling interface, or "
+                                      "give your final answer in plain prose."})
+                continue
             if not reply.tool_calls:
-                return reply.text
+                return LEAK.split(reply.text)[0].strip() or reply.text
             for t in reply.tool_calls:
                 self.on_event(t.name, t.args)
                 self.messages.append({"role": "tool", "tool_call_id": t.id, "name": t.name,
