@@ -17,7 +17,7 @@ id = "a44e7e8cc8f0444ba865ea162820193d"
 [[containers]]
 class_name = "BillragContainer"
 image = "./Dockerfile"
-instance_type = "lite"   # 256 MiB, 1/16 vCPU. If it runs out of memory or is too slow, change to "basic" (1 GiB).
+instance_type = "basic"  # 1/4 vCPU, 1 GiB. "lite" (256 MiB, 1/16 vCPU) fit in memory but was too slow.
 max_instances = 1
 
 [[durable_objects.bindings]]

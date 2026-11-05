@@ -48,7 +48,7 @@ BILLRAG_EMBED_PROVIDER=sentence-transformers BILLRAG_EMBED_MODEL=BAAI/bge-small-
 - Answers explain the text; they are not legal advice.
 - Tests: `pytest tests` (offline; uses a scripted fake LLM).
 
-### Small-memory hosting (e.g. Cloudflare Containers `lite`, 256 MiB)
+### Small-memory hosting (e.g. Cloudflare Containers `lite`, 256 MiB; the deployment now uses `basic`)
 
 Measured on the real index (42,696 chunks x 768 dims; `index.sqlite` 201 MB, `vectors.npz` 114 MB as float32):
 
