@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHandler, buildMime, newCode, normalizeEmail } from "../src/auth.js";
+import { createHandler, buildMessage, sendMailViaCloudflare, newCode, normalizeEmail } from "../src/auth.js";
 
 function kv() {
   const m = new Map();
@@ -75,6 +75,27 @@ test("resend cooldown and failed send cleanup", async () => {
 test("helpers", () => {
   assert.match(newCode(), /^\d{6}$/);
   assert.equal(normalizeEmail(" A@B.C "), "a@b.c");
-  const mime = buildMime("login@example.com", "me@example.com", "123456");
-  assert.match(mime, /^From: .*<login@example\.com>\r\nTo: me@example\.com\r\nSubject: Your sign-in code: 123456/);
+  const m = buildMessage("login@example.com", "me@example.com", "123456");
+  assert.equal(m.to, "me@example.com");
+  assert.match(m.subject, /123456/);
+  assert.match(m.text, /123456/);
+});
+
+test("REST sender posts to the Email Service endpoint, retries 429, throws on failure", async () => {
+  const env = { CF_ACCOUNT_ID: "acc", CF_EMAIL_TOKEN: "tok", FROM_ADDRESS: "login@example.com" };
+  const real = globalThis.fetch, calls = [];
+  const reply = [new Response("slow down", { status: 429 }), new Response("{}", { status: 200 })];
+  globalThis.fetch = async (url, init) => (calls.push({ url, init }), reply.shift());
+  try {
+    await sendMailViaCloudflare(env, "me@example.com", "123456");
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].url, "https://api.cloudflare.com/client/v4/accounts/acc/email/sending/send");
+    assert.equal(calls[0].init.headers.Authorization, "Bearer tok");
+    assert.equal(JSON.parse(calls[0].init.body).to, "me@example.com");
+    globalThis.fetch = async () => new Response("denied", { status: 403 });
+    await assert.rejects(sendMailViaCloudflare(env, "me@example.com", "1"), /HTTP 403/);
+    await assert.rejects(sendMailViaCloudflare({}, "me@example.com", "1"), /not configured/);
+  } finally {
+    globalThis.fetch = real;
+  }
 });

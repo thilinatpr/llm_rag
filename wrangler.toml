@@ -13,15 +13,12 @@ run_worker_first = true
 binding = "AUTH"
 id = "REPLACE_WITH_KV_NAMESPACE_ID"
 
-# Email Routing send binding. Mail can only go to destination addresses verified under
-# Email -> Email Routing -> Destination addresses, so this is effectively an allowlist.
-[[send_email]]
-name = "EMAIL"
-
 [vars]
-# Comma-separated; every address must also be a verified Email Routing destination.
+# Comma-separated. This is the only allowlist: nothing needs verifying on the Cloudflare side.
 ALLOWED_EMAILS = "thilinatpr@gmail.com"
-# Must be an address on a domain with Email Routing enabled (any local part, e.g. login@yourdomain.com).
+# Any address on a domain onboarded under Cloudflare Email -> Email Sending.
 FROM_ADDRESS = "login@tripletrackr.com"
+# Cloudflare account id (not secret). The API token goes in the CF_EMAIL_TOKEN secret.
+CF_ACCOUNT_ID = "REPLACE_WITH_ACCOUNT_ID"
 # Optional: proxy signed-in requests to the Python UI (python -m billrag serve) instead of serving ./public.
 # ORIGIN = "https://billrag.example.com"

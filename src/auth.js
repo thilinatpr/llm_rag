@@ -4,8 +4,10 @@
 //       POST /login/verify {email, code} -> session cookie
 //       everything else requires the cookie; it is proxied to ORIGIN if set, else served from static assets.
 //
-// Bindings (see wrangler.toml): AUTH (KV), EMAIL (send_email), ASSETS, vars ALLOWED_EMAILS / FROM_ADDRESS / ORIGIN.
-// Secret: OTP_PEPPER (random string, `wrangler secret put OTP_PEPPER`).
+// Bindings (see wrangler.toml): AUTH (KV), ASSETS, vars ALLOWED_EMAILS / FROM_ADDRESS / CF_ACCOUNT_ID / ORIGIN.
+// Secrets: OTP_PEPPER (random string) and CF_EMAIL_TOKEN (Cloudflare API token allowed to send email).
+// Mail goes out through the Cloudflare Email Service REST API, so recipients need no Cloudflare-side verification;
+// ALLOWED_EMAILS is the only allowlist.
 
 const OTP_TTL = 300; // seconds a code is valid
 const RESEND_COOLDOWN = 60; // seconds between code requests per address
@@ -41,24 +43,33 @@ function safeEqual(a, b) {
   return d === 0;
 }
 
-export function buildMime(from, to, code) {
-  const body = `Your sign-in code is ${code}\r\n\r\nIt expires in ${OTP_TTL / 60} minutes. If you did not request it, ignore this email.\r\n`;
-  return [
-    `From: gov-rag-llm <${from}>`,
-    `To: ${to}`,
-    `Subject: Your sign-in code: ${code}`,
-    `Message-ID: <${crypto.randomUUID()}@${from.split("@")[1]}>`,
-    `Date: ${new Date().toUTCString()}`,
-    "MIME-Version: 1.0",
-    "Content-Type: text/plain; charset=utf-8",
-    "",
-    body,
-  ].join("\r\n");
+export function buildMessage(from, to, code) {
+  const mins = OTP_TTL / 60;
+  return {
+    from,
+    to,
+    subject: `Your sign-in code: ${code}`,
+    text: `Your sign-in code is ${code}\n\nIt expires in ${mins} minutes. If you did not request it, ignore this email.`,
+    html: `<p style="font:16px sans-serif">Your sign-in code is</p><p style="font:600 32px monospace;letter-spacing:6px">${code}</p><p style="font:13px sans-serif;color:#666">It expires in ${mins} minutes. If you did not request it, ignore this email.</p>`,
+  };
 }
 
-async function sendMailViaCloudflare(env, to, code) {
-  const { EmailMessage } = await import("cloudflare:email");
-  await env.EMAIL.send(new EmailMessage(env.FROM_ADDRESS, to, buildMime(env.FROM_ADDRESS, to, code)));
+export async function sendMailViaCloudflare(env, to, code) {
+  if (!env.CF_ACCOUNT_ID || !env.CF_EMAIL_TOKEN || !env.FROM_ADDRESS) throw new Error("email sending is not configured");
+  const url = `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/email/sending/send`;
+  for (let attempt = 0; ; attempt++) {
+    const res = await globalThis.fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${env.CF_EMAIL_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify(buildMessage(env.FROM_ADDRESS, to, code)),
+    });
+    if (res.ok) return;
+    if (res.status === 429 && attempt < 2) {
+      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      continue;
+    }
+    throw new Error(`Cloudflare email send failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+  }
 }
 
 const json = (obj, status = 200, headers = {}) =>
@@ -99,7 +110,7 @@ async function requestCode(env, request, sendMail) {
     await env.AUTH.delete(`otp:${email}`);
     await env.AUTH.delete(`cool:${email}`);
     console.error("send failed", e && e.message);
-    return json({ error: "Could not send the code. Check that the address is a verified destination." }, 502);
+    return json({ error: "Could not send the code. Try again shortly." }, 502);
   }
   return reply;
 }
