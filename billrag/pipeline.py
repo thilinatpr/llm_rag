@@ -131,6 +131,7 @@ class Result:
     lang: str = "en"  # language of the user's question; the answer is in the same language when translation worked
     answer_en: str = ""  # the verified English answer (set only for translated results)
     official: list = field(default_factory=list)  # [(bill, section)] whose official local-language text informed the answer
+    quote_fixes: list = field(default_factory=list)  # [(quoted, official)] misspelt quotations replaced by the official text
     direct_fallback: str = ""  # why a one-step local-language answer was rejected (then: English answer + translation)
     path: str = "en"  # how the answer was written: en | direct (in the user's language from official text) | translated
 
@@ -298,6 +299,8 @@ class Pipeline:
         official = {(k, n): t for k, n, t in refs}
         q = f"{user_question}\n(English rendering used for search: {question})"
         out = self.summarise(q, evidence, enough, missing, res, local=(code, official))
+        out, fixes = translate.fix_quotes(out, list(official.values()))
+        res.quote_fixes += fixes
         why = translate.check_script(out, code) if out != LEAK_FALLBACK else "unusable output"
         if not why and not CITE.search(out):
             why = "no citations"
@@ -364,7 +367,8 @@ class Pipeline:
         res.seconds["translate_out"] = time.time() - t
         res.llm_calls += tr.calls
         if out:
-            res.answer = out
+            res.answer, fixes = translate.fix_quotes(out, [t for _, _, t in refs])
+            res.quote_fixes += fixes
         else:
             res.warnings.append(f"could not translate the answer into {name} reliably ({'; '.join(reasons) or 'no output'}); "
                                 "showing English")
@@ -432,7 +436,9 @@ class Pipeline:
             res.seconds["answer_direct"] = time.time() - t
             if out:
                 res.answer, res.official, res.path = out, [(k, n) for k, n, _ in info], "direct"
-            elif info != "no official text":
+            elif info == "no official text":
+                del res.seconds["answer_direct"]
+            else:
                 res.direct_fallback = info
                 self.on_event("answer_direct", {"fallback": info})
         if res.path != "direct":

@@ -18,7 +18,7 @@ billrag/store.py          SQLite schema, BM25 search, section/outline/version qu
 billrag/retrieve.py       BM25 (+ optional dense) -> RRF -> optional LLM rerank -> dedup of identical text -> diversity cap
 billrag/pipeline.py       DEFAULT chat engine, two steps: retrieve -> AI evidence grading -> AI summary (+ citation check)
 billrag/answer_eval.py    answer-level eval: cites-the-gold-clause, LLM judge, latency (`billrag eval-answers`)
-billrag/translate.py       translation layer: Sinhala/Tamil question -> English -> pipeline -> answer back (script detection, no model call for English)
+billrag/translate.py       translation layer: question -> English -> pipeline -> answer back; garble check, quote alignment to official text
 billrag/parse_si.py       official Sinhala text per section (Unicode PDFs, 2025+) -> table local_sections; `ingest-si`
 billrag/agent.py          (`--mode agent`) tool-calling loop: search_bills, list_bills, get_bill_overview, get_section, diff_bills
 billrag/llm.py            Anthropic + OpenAI-compatible chat adapters, OpenAI/sentence-transformers embedders
@@ -430,6 +430,48 @@ bill's own Sinhala wording, not a machine translation of the English. `billrag/p
   inconsistent (0-2/3, one reasoning leak). Reference is capped at 2,500 chars per section. Translate-out stays the slow step.
 - **Production:** the container restores `index.sqlite` from R2, so after `ingest-si` upload it (`upload_r2.py --include-index`)
   as part of the deploy. Old code ignores the new tables, so the upload is safe before the code is live.
+
+### One-step Sinhala answer (`Result.path`, log fields `path`, `answer_en`, `direct_fallback`, `quote_fixes`)
+The first live Sinhala question (2026-11-05 17:41) took 118 s, 103 s of it Llama translate-out, and the answer contained a
+degenerate repetition (ආන්ඩ්‍රාත්‍රාත්‍රාත්‍රාය) that `check_out` let through. Now:
+- **`path = "direct"`:** a Sinhala question whose kept evidence has official Sinhala text (`official_texts`) is answered by the
+  answer model (gpt-oss) directly in Sinhala: the answer prompt gets each section's English text plus its official Sinhala text
+  (`LOCAL_NOTE`: take terms from the official text, quote penalties/offences/definitions from it). The user's Sinhala question
+  and the English search rendering both go in. The answer must pass `translate.check_script` (script, other scripts, garble),
+  contain a citation and pass `Pipeline.verify`; otherwise `direct_fallback` records why and we take the old path.
+  `Pipeline(direct_local=False)` turns it off. `answer_en` is empty on this path (no English answer exists).
+- **`path = "translated"`:** English answer + translate-out (as before): bills without official text, evidence that is only
+  bill-level (no sections), Tamil/other languages, or a rejected direct answer. `answer_en` is logged now.
+- **Garble check (`translate.garbled`)**, used by `check_out` and the direct path: a 2-12 char unit containing a letter repeated
+  3+ times in a row, one letter/mark 5+ times, a word > 45 chars (after stripping dotted leaders), unassigned code points (a
+  live answer had U+0DCD), and for si/ta any character from another script (e.g. Chinese). Zero hits on all 3,456 official
+  Sinhala sections; on 21,630 English 2020+ sections it flags 11, all genuinely broken PDF text.
+- **`degenerate()` counted only `isalpha()`**: Sinhala vowel signs are marks, so real Sinhala sits at 46-53% "letters", right
+  at the 40% junk cutoff; a short Sinhala answer with citations was treated as junk. Marks now count and citations are ignored.
+- **`translate.fix_quotes`**: gpt-oss writes ථ්‍රස්තවාදී for ත්‍රස්තවාදී even *inside a quotation of the official text*. A quoted
+  span (or each piece between `…`) that is >= 93% similar to a same-length window of the official text is replaced by that
+  window, so a quote is always the official wording. Text outside quotes is never changed. **A word-level "snap to official
+  spelling" was tried and rejected:** on official text vs. other sections of the same bill it changed 602 of 669k correct words,
+  some changing meaning (නීතියක් "law" -> රීතියක් "rule", ප්‍රදාන "grant" <-> ප්‍රධාන "main"; case endings ක/ට/ල are consonants).
+- **Stored text artifact:** 646 of 3,456 sections had a vowel sign wrapped onto the next line and doubled (ත්‍රස්තවා\nාදී).
+  `parse_si.join_marks` repairs it when the text is read (and for future `ingest-si`); the R2 copy is unchanged. Still in the
+  stored text: a doubled ය after ්‍ය in 444 sections (ජාත්‍යයන්තර, අමාත්‍යයවරයා; but රාජ්‍යය is correct, so no blind fix), and
+  words split across lines (නැතහො\nත්). The model copies these.
+- **Measured live 2026-11-05** (gpt-oss answers, Llama 3.3 translates, same index; 4 Sinhala questions, 10 runs; read the outputs):
+
+  | question | path | total s | answer step s | notes |
+  |---|---|---|---|---|
+  | live Q (terrorist act, "this new bill") | direct x2 | 47.7 / 64.3 | 35.3 / 42.1 | official terms (භීෂණය); one "හනිය" typo, one "ගෞරවදායක" ("honourable") for serious harm; relies on 085/2026 §14 only |
+  | same, old path (`direct_local=False`) | translated | 64.3 | 5.9 + 39.7 translate-out | output cut off mid-word; "ප්‍රතිකාර" ("treatment") for Prevention |
+  | same, run 3 | translated | 43.8 | 6.1 + 30.4 | grader kept only the 078/2026 bill overview -> no sections -> no official text |
+  | 085/2026 foreign terrorist fighter | direct x3 | 17.2 / 54.4 / 36.5 | 10.5 / 45.6 / 22.8 | run 1 (before the quote-the-penalty prompt line) made up "ද්විත්ව වරදකරු ගැණුම" for "imprisonment of either description"; runs 2-3 quoted the official text (run 2's ථ misspelling is fixed by `fix_quotes`) |
+  | 071/2026 visa cancellation | direct x2 | 15.8 / 26.5 | 4.4 / 18.3 | accurate; official terms (පාලක ජනරාල්වරයා, අවනිශේධනය, ඇතුළුවීමේ පිටසන) |
+  | 078/2026 hostage penalty | translated | 18.6 | - | **translate-in failure:** Llama rendered the title as "Prevention of Terrorism Act" -> nothing kept -> "not found" (the right English finds 078/2026 §13) |
+
+  Zero citation warnings, zero garble hits, zero direct-path fallbacks in these runs. Hosted-model latency varies 3-10x between
+  runs of the same prompt, so n=2 per question says little about speed; the direct path removes the translate-out call
+  (30-103 s). Quality is better than translate-out but not clean: expect occasional wrong words. Open problems: translate-in
+  can lose a bill title; the answer model ignores 070/2026 §3 in favour of 085/2026 §14 on the live question.
 
 ## Product priority: recent bills
 

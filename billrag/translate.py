@@ -163,6 +163,47 @@ def check_out(out, answer, code):
     return None
 
 
+QUOTE = re.compile(r"[“\"]([^”\"\n]{15,600})[”\"]")
+
+
+def fix_quotes(text, refs, min_ratio=0.93):
+    """-> (text, fixes). A quotation that is ALMOST a passage of the official text (gpt-oss spells ථ්‍රස්තවාදී for
+    ත්‍රස්තවාදී even when copying) is replaced by that passage: what is quoted should be the official wording, so swapping
+    in the official words cannot add content. Quotes that match exactly, or not closely enough, are left alone."""
+    import difflib
+    words = [w for r in refs for w in ([None] + r.split())]  # None separates documents: no window spans two
+    joined = [" ".join(r.split()) for r in refs]
+    fixes = []
+
+    def fix(m):
+        inner = m.group(1)
+        parts = re.split(r"(\s*(?:…|\.\.\.)\s*)", inner)  # "a … b": each piece is a quotation of its own
+        out = "".join(piece if i % 2 or len(piece.strip()) < 15 else one(piece) for i, piece in enumerate(parts))
+        return m.group(0)[0] + out + m.group(0)[-1]
+
+    def one(piece):
+        q = " ".join(piece.split())
+        if any(q in j for j in joined):
+            return piece
+        n, best = len(q.split()), (0.0, None)
+        for i in range(len(words) - n + 1):
+            win = words[i:i + n]
+            if None in win:
+                continue
+            cand = " ".join(win)
+            sm = difflib.SequenceMatcher(None, q, cand, autojunk=False)
+            if sm.real_quick_ratio() >= min_ratio and sm.quick_ratio() >= min_ratio:
+                r = sm.ratio()
+                if r > best[0]:
+                    best = (r, cand)
+        if best[0] >= min_ratio:
+            fixes.append((q[:60], best[1][:60]))
+            return best[1].strip(".,;:")
+        return piece
+
+    return QUOTE.sub(fix, text), fixes
+
+
 class M2M:
     """Dedicated machine-translation model on Workers AI (e.g. @cf/meta/m2m100-1.2b): {text, source_lang, target_lang}."""
 

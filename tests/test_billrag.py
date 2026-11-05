@@ -1272,3 +1272,26 @@ def test_web_meta_logs_path_and_english_answer(tmp_path, monkeypatch):
 def test_join_marks_repairs_vowel_signs_wrapped_onto_the_next_line():
     assert parse_si.join_marks("ත්‍රස්තවා\nාදී සටන්කරු\nදෙවන පේළිය") == "ත්‍රස්තවාදී සටන්කරු\nදෙවන පේළිය"
     assert parse_si.join_marks("කො\nොමිෂන් සභාව") == "කොමිෂන් සභාව" and parse_si.join_marks("නා\nාගාරය") == "නාගාරය"
+
+
+def test_fix_quotes_restores_official_spelling_inside_quotations_only():
+    ref = "(අ) ත්‍රස්තවාදී ක්‍රියා සිදු කිරීමේ, සැලසුම් කිරීමේ, එවැනි ක්‍රියාවලට සූදානම් වීමේ හෝ සහභාගී\nවීමේ කාර්යය සඳහා; හෝ"
+    ans = ("ථ්‍රස්තවාදී සටන්කරු: “ථ්‍රස්තවාදී ක්‍රියා සිදු කිරීමේ, සැලසුම් කිරීමේ, එවැනි ක්‍රියාවලට සූදානම් වීමේ හෝ සහභාගී "
+           "වීමේ කාර්යය සඳහා” [085/2026 §3] සහ “මෙය කිසිසේත් නිල පාඨයේ නැති වාක්‍යයකි” [085/2026 §3]")
+    out, fixes = translate.fix_quotes(ans, [ref])
+    assert len(fixes) == 1 and "“ත්‍රස්තවාදී ක්‍රියා සිදු" in out
+    assert out.startswith("ථ්‍රස්තවාදී සටන්කරු")                      # text outside quotes is never touched
+    assert "“මෙය කිසිසේත් නිල පාඨයේ නැති වාක්‍යයකි”" in out and translate.cites(out) == translate.cites(ans)
+    assert translate.fix_quotes("“" + ref.split("\n")[0][4:] + "”", [ref])[1] == []  # exact quote: unchanged
+    out, fixes = translate.fix_quotes("“ථ්‍රස්තවාදී ක්‍රියා සිදු කිරීමේ, සැලසුම් කිරීමේ … සහභාගී වීමේ කාර්යය සඳහා”", [ref])
+    assert out == "“ත්‍රස්තවාදී ක්‍රියා සිදු කිරීමේ, සැලසුම් කිරීමේ … සහභාගී වීමේ කාර්යය සඳහා”" and len(fixes) == 1
+
+
+def test_direct_answer_quotes_are_aligned_to_the_official_text(tmp_path):
+    st, llm = make_store(tmp_path), DirectLLM()
+    _with_official(st)
+    llm.chat_orig = llm.chat
+    llm.chat = lambda system, messages, **kw: (Reply("නියමය “දින දහය වෙනුවට දින පහළොව ආදේශ කිරිම” වේ [086/2026 §2].")
+                                                if "LANGUAGE:" in system else llm.chat_orig(system, messages, **kw))
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert r.path == "direct" and "“දින දහය වෙනුවට දින පහළොව ආදේශ කිරීම”" in r.answer and len(r.quote_fixes) == 1
