@@ -216,3 +216,28 @@ def test_schedule_mode_exits_at_next_section():
     pages = [COVER, "BE it enacted by the Parliament as follows:-\n1. Short title text.\n2. Another clause here.\n"
              "SCHEDULE\n3. Item three of the schedule"]
     assert [s.no for s in parse_pages(pages, "X").sections if s.kind == "section"] == [1, 2]
+
+
+# ---------------------------------------------------------------- evaluation metrics
+def test_eval_rank_and_summary():
+    from billrag.evaluate import first_hit_rank, summarize
+    clause = {"level": "clause", "type": "detail", "gold": [{"bill": "A/1", "section": 3}]}
+    res = [{"bill_key": "B/1", "section_no": 3}, {"bill_key": "B/1", "section_no": 4},
+           {"bill_key": "C/1", "section_no": 3, "also_in": ["A/1"]}]  # identical text also in the gold bill
+    assert first_hit_rank(clause, res) == 3
+    assert first_hit_rank(clause, res[:2]) is None  # right section number, wrong bill
+    bill = {"level": "bill", "type": "bill-purpose", "gold": [{"bill": "B/1"}]}
+    assert first_hit_rank(bill, [{"bill_key": "Z/1", "section_no": None}, {"bill_key": "B/1", "section_no": None}]) == 2
+    s = summarize([{"item": clause, "rank": 3}, {"item": bill, "rank": 1}, {"item": bill, "rank": None}])
+    assert s["all"]["n"] == 3 and s["all"]["r@1"] == 1 / 3 and s["all"]["r@5"] == 2 / 3
+    assert abs(s["all"]["mrr"] - (1 / 3 + 1) / 3) < 1e-9 and s["by_type"]["bill-purpose"]["n"] == 2
+
+
+def test_eval_file_is_well_formed():
+    import pathlib
+    from billrag.evaluate import load_items
+    items = load_items(pathlib.Path(__file__).parent.parent / "evals" / "retrieval_eval.jsonl")
+    assert len(items) >= 40 and len({i["id"] for i in items}) == len(items)
+    for i in items:
+        assert i["level"] in ("clause", "bill") and i["question"].strip() and i["gold"]
+        assert all("section" in g for g in i["gold"]) if i["level"] == "clause" else all("bill" in g for g in i["gold"])

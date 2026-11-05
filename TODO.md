@@ -9,6 +9,8 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
 - [x] SQLite FTS5 index: 1,513 bills / 42,696 chunks; keyless `search` command
 - [x] Hybrid retrieval plumbing (RRF, optional dense, optional LLM rerank, GS/Bill text dedup, diversity cap)
 - [x] Agent loop + 5 tools + Anthropic/OpenAI-compatible adapters; 15 offline tests
+- [x] Retrieval eval set (`evals/retrieval_eval.jsonl`, 47 reviewed questions) + `python -m billrag eval`.
+      BM25 baseline: R@1 0.38, R@5 0.66, R@10 0.66, MRR 0.48.
 - [x] Verified live on Cloudflare Workers AI: `@cf/openai/gpt-oss-120b` via the OpenAI-compatible endpoint does multi-step
       tool calling and a correctly cited, source-checked answer (~18 s, 4 tool calls). `bge-reranker-base` and
       `bge-base-en-v1.5` (768-d) respond too; neither is wired into billrag yet.
@@ -18,8 +20,12 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
       `result.data`) and reranking (`/ai/run/@cf/baai/bge-reranker-base`, `{"query","contexts":[{"text"}]}` ->
       `result.response[{id,score}]`). Note: in a first trial the reranker scores saturated (top 3 all ~0.997), so judge it
       on the eval set, don't assume it helps. Still unverified live: the Anthropic adapter.
-- [ ] **Build an eval set** (~30-50 questions with expected bill/section) and a script reporting recall@k for
-      BM25 vs hybrid vs +rerank, plus answer-citation checks. Without it, tuning is guesswork.
+- [ ] **Compare retrieval configs on the eval set** (`python -m billrag eval -k 10 --label "<name>"`): BM25 only (done),
+      + Workers AI dense embeddings, + `bge-reranker-base`, + both. Keep the config that wins per question type.
+      Weakest today: bill-level "which law is this?" (R@10 0.40) and paraphrased clause questions.
+- [ ] Grow/harden the eval set: 47 questions gives roughly +/-0.14 on any rate, so only large differences are
+      meaningful. Add real user questions, multi-clause questions, and answer-level grading of `agent.ask` output
+      (the stored `answer` field is the reference).
 - [ ] Upload `data/bills/index.sqlite` to R2 (`scripts/upload_r2.py --include-index`) so a fresh session skips ingest.
 - [ ] Run `python -m billrag summarize` (LLM bill summaries) and measure whether "which bill is about X?" improves.
 - [ ] Rotate the R2 API token: it was pasted into a chat transcript. Revoke it and issue a new one.

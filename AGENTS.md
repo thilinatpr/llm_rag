@@ -19,6 +19,8 @@ billrag/agent.py          tool-calling loop: search_bills, list_bills, get_bill_
 billrag/llm.py            Anthropic + OpenAI-compatible chat adapters, OpenAI/sentence-transformers embedders
 billrag/enrich.py         optional: dense vectors (`embed`) and LLM bill summaries (`summarize`)
 billrag/config.py         all settings come from BILLRAG_* env vars (documented at the top of the file)
+evals/retrieval_eval.jsonl  47 reviewed Q&A items with gold (bill, section); results log in evals/results.jsonl
+billrag/evaluate.py       recall@k / MRR metrics; scripts/make_eval.py generates + `--review` prints a draft
 tests/test_billrag.py     offline tests (synthetic bills + scripted fake LLM); no network or keys
 ```
 
@@ -30,6 +32,7 @@ python scripts/scrape_bills.py [--langs ENGLISH] [--since-year N]   # resumable;
 python -m billrag ingest [--since-year N]                           # ~1 min for everything
 python -m billrag search "query" [-k 5 --year 2024 --bill 077/2026]  # retrieval only, no key needed
 python -m billrag chat -v | ask "question"                          # needs a chat model (see config.py)
+python -m billrag eval -k 10 --misses 10 --label NAME   # retrieval quality; run before/after any retrieval change
 python -m pytest tests -q                                           # must pass before every commit
 ```
 
@@ -81,3 +84,14 @@ export BILLRAG_CHAT_PROVIDER=openai BILLRAG_CHAT_MODEL=@cf/openai/gpt-oss-120b \
 - Needs `api.cloudflare.com` in the environment's network allowlist and `CLOUDFLARE_API_TOKEN` as an env secret.
 - Workers AI rejects `content: null` on assistant tool-call messages; `llm.to_openai_messages` sends `""` (tested).
 - Model list: `GET /accounts/<id>/ai/models/search`. Reranker is listed under task "Text Classification".
+
+## Eval set notes
+
+- Questions were written by an LLM from a single source clause (told to paraphrase) and then reviewed by hand; the gold
+  is that clause plus identical clauses in other versions of the same title. Strict single-clause gold means some
+  "misses" are defensible alternatives (e.g. several clauses of an amending bill touch the same rule) - read the miss
+  list, don't just trust the number.
+- Known weakness of the set: it was LLM-generated from clauses, so it favours questions answerable by one clause, and
+  many incorporation-of-foundation bills share boilerplate (we dropped most such items). Bills with near-identical
+  names (e.g. "Al Hasan" 2013 vs "Alhasan" 2015) make ambiguous gold; drop those items rather than loosen gold.
+- Always compare configs on the same file; n=47 means differences under ~0.15 are noise.

@@ -23,6 +23,11 @@ def main(argv=None):
     p.add_argument("-v", "--verbose", action="store_true")
     p = sub.add_parser("chat", help="interactive chat")
     p.add_argument("-v", "--verbose", action="store_true")
+    p = sub.add_parser("eval", help="retrieval recall@k / MRR on an eval set (uses the env-configured retriever)")
+    p.add_argument("--file", default="evals/retrieval_eval.jsonl")
+    p.add_argument("-k", type=int, default=10)
+    p.add_argument("--misses", type=int, default=0, help="print N missed questions with what was retrieved")
+    p.add_argument("--label", default="", help="append the result to evals/results.jsonl under this label")
     sub.add_parser("embed", help="compute dense vectors (needs BILLRAG_EMBED_*)")
     p = sub.add_parser("summarize", help="LLM-summarise each bill to improve overview retrieval")
     p.add_argument("--since-year", type=int, default=0)
@@ -57,6 +62,22 @@ def main(argv=None):
         keys = [normalize_ref(a.bill)] if a.bill else None
         for c in r.search(a.query, a.k, a.year, keys):
             print(fmt_passage(c, 500), "\n")
+        return 0
+
+    if a.cmd == "eval":
+        import json, pathlib
+        from .evaluate import evaluate, format_report, load_items
+        r = Retriever(store, embedder, s.vectors_path, make_llm(s) if s.rerank == "llm" else None, s.rerank)
+        items = load_items(a.file)
+        summary, rows, secs = evaluate(r, items, a.k)
+        print(format_report(summary, a.label or f"rerank={s.rerank} dense={'on' if r.mat is not None else 'off'}"))
+        print(f"({len(items)} questions, {secs:.1f}s)")
+        for row in [x for x in rows if not x["rank"]][: a.misses]:
+            it = row["item"]
+            print(f"\nMISS [{it['type']}] {it['question']}\n   gold: {[(g['bill'], g.get('section')) for g in it['gold'][:3]]}\n   got:  {row['top']}")
+        if a.label:
+            with open(pathlib.Path(a.file).parent / "results.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps({"label": a.label, "file": a.file, "k": a.k, "summary": summary}) + "\n")
         return 0
 
     llm = make_llm(s)
