@@ -1,0 +1,9 @@
+pypdf>=4
+numpy
+# chat model (install the one you use; "openai" also covers any OpenAI-compatible server)
+anthropic
+openai
+# optional local embeddings
+# sentence-transformers
+# tests
+pytest
