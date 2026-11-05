@@ -1,5 +1,5 @@
+# Chat, embeddings and rerank all go to Cloudflare Workers AI (OpenAI-compatible client); no Anthropic SDK needed.
 # Runtime for `python -m billrag serve` in the container (no PDF parsing, no local embedding models)
 numpy
-anthropic
 openai
 boto3
