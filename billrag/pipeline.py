@@ -25,6 +25,12 @@ LEAK_FALLBACK = ("I could not produce a reliable written answer this time. The s
                  "please try asking again.")
 
 
+def degenerate(txt):
+    """Text that is not a written answer at all (e.g. a long run of '!!!!'): too few letters to be sentences."""
+    letters = sum(c.isalpha() for c in txt)
+    return letters == 0 or (len(txt) >= 40 and letters < 0.4 * len(txt))
+
+
 def strip_reasoning(txt):
     """-> (text, leaked). gpt-oss sometimes returns its reasoning ("analysis: ...") instead of, or before, the answer."""
     if not REASONING.match(txt):
@@ -150,13 +156,16 @@ class Pipeline:
             res.llm_calls += 1
             txt = self.llm.chat(system, [{"role": "user", "content": u}], max_tokens=max_tokens, effort=effort).text
             txt = LEAK.split(txt)[0].strip() or txt.strip()
-            return (txt, False) if json_out else strip_reasoning(txt)
+            if json_out:
+                return txt, False
+            txt, leaked = strip_reasoning(txt)
+            return txt, leaked or degenerate(txt)
 
         txt, leaked = call(user)
         if leaked:  # (JSON replies from the grader are parsed, and retried, by evaluate())
             txt, leaked = call(user + RETRY_NOTE)
             if leaked:
-                res.warnings.append("the model returned its reasoning instead of an answer (twice)")
+                res.warnings.append("the model returned reasoning or unusable text instead of an answer (twice)")
                 return LEAK_FALLBACK
         return txt
 

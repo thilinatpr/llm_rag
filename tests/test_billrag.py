@@ -868,6 +868,14 @@ def test_strip_reasoning_cases():
     assert strip_reasoning("An analysis of the Act shows") == ("An analysis of the Act shows", False)  # not a prefix leak
 
 
+def test_degenerate_answers_are_detected():
+    from billrag.pipeline import degenerate
+    assert degenerate("!" * 400) and degenerate("") and degenerate("... --- ... ...")
+    assert not degenerate("Yes [078/2026 §3].") and not degenerate("No.")
+    assert not degenerate("The Act applies from 1 January 2027 [078/2026 §3(2)].")
+    assert not degenerate("**Answer**\n\n| Section | Effect |\n|---|---|\n| 3 | Offence of terrorism |")
+
+
 def test_pipeline_retries_once_when_the_model_leaks_reasoning(tmp_path):
     from billrag.pipeline import LEAK_FALLBACK, Pipeline, Result
     st = make_store(tmp_path)
@@ -877,6 +885,10 @@ def test_pipeline_retries_once_when_the_model_leaks_reasoning(tmp_path):
     p = Pipeline(st, Retriever(st), FakeLLM([Reply("analysis: a"), Reply("analysis: b")]))
     res = Result(question="q", answer="")
     assert p._llm("sys", "user", 100, res) == LEAK_FALLBACK and res.llm_calls == 2 and "reasoning" in res.warnings[0]
+    # a run of "!!!!" is retried too
+    p = Pipeline(st, Retriever(st), FakeLLM([Reply("!" * 300), Reply("**Answer** fine")]))
+    res = Result(question="q", answer="")
+    assert p._llm("sys", "user", 100, res) == "**Answer** fine" and res.llm_calls == 2
     # grader calls (json_out) are left to evaluate(), which has its own retry
     p = Pipeline(st, Retriever(st), FakeLLM([Reply('analysis: hmm {"scores": [3]}')]))
     res = Result(question="q", answer="")
