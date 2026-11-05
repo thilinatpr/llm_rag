@@ -130,21 +130,73 @@ Secrets: `npx wrangler secret put NAME` (stdin) / `npx wrangler secret list`. Th
 container reads them from the Worker env when it (re)starts, so restart it (redeploy or let it sleep) after changing one.
 Rotating a token: create the new one, `secret put` it, then revoke the old one.
 
-### Deploying from the cloud sandbox (what worked, and the traps)
-Needs: the environment's network allowlist includes `registry.cloudflare.com` (it answers 401 when reachable), and a token
-with Containers permission (`npx wrangler containers list` must work). The sandbox proxy re-signs HTTPS, which breaks `pip`
-inside `docker build`, and Docker Hub rate-limits anonymous pulls (HTTP 429), so do NOT build the repo `Dockerfile` as is:
-1. `dockerd > /tmp/dockerd.log 2>&1 &` (wait ~8 s); `docker pull python:3.12-slim && docker tag python:3.12-slim local-python:3.12`.
-2. Make a scratch build context (outside the repo): copy `billrag/`, `scripts/fetch_index.py`, `scripts/upload_r2.py`,
-   `docker/entrypoint.sh`, `requirements-serve.txt` and the proxy CA bundle (`/root/.ccr/ca-bundle.crt`) into it, with a Dockerfile
-   identical to the repo's except `FROM local-python:3.12` and
-   `RUN --mount=type=bind,source=ca-bundle.crt,target=/ca.crt PIP_CERT=/ca.crt pip install -r requirements-serve.txt`
-   (the mount keeps the proxy CA out of the final image - never bake it in).
-3. Copy `wrangler.toml` to a temporary `wrangler.deploy.toml` with `image = "<scratch>/Dockerfile"` and
-   `image_build_context = "<scratch>"`; run `npx wrangler deploy -c wrangler.deploy.toml`; delete the temp file; `pkill dockerd`.
-4. Watch the rollout as above. `workers.dev` and `wrangler tail` (websocket, HTTP 403) are NOT reachable from the sandbox, so
-   verify through the API, the rollout status and the chat logs rather than by loading the site.
-The harness blocks production deploys unless the owner asked for one in that turn.
+### Deploying from the cloud sandbox (verified 2026-11-05, build `4cfb4b63`)
+Only when the owner asked for a deploy in that turn. Deploy a commit that is on `main` (or merge it right after, with a merge
+commit, not a squash, so the deployed SHA stays in `main`'s history), and always deploy green.
+
+**Why not just `npx wrangler deploy`:** the sandbox proxy re-signs HTTPS, so `pip` inside `docker build` fails with
+`CERTIFICATE_VERIFY_FAILED`. Docker Hub also rate-limits anonymous pulls (HTTP 429) and the Docker daemon is not running by
+default. Never disable TLS verification and never bake the proxy CA into the image: bind-mount it for the `pip` step only.
+
+**0. Pre-flight: token and network.** The deploy token needs Workers Scripts: Edit, Workers KV Storage: Edit,
+Containers: Edit, Zone: Read. It does NOT need Workers AI (the container uses its own `CLOUDFLARE_API_TOKEN` Worker
+secret). A Workers-AI-only token fails late, after the image build, with `Failed to automatically retrieve account IDs` or
+`403 No access to the specified service`, so check first:
+```bash
+cd /home/user/llm_rag && export CLOUDFLARE_ACCOUNT_ID=$CF_ACCOUNT_ID      # wrangler cannot look the account up itself
+H="Authorization: Bearer $CLOUDFLARE_API_TOKEN"; B=https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID
+for u in containers/applications storage/kv/namespaces workers/subdomain; do
+  printf "%-26s" $u; curl -sS -H "$H" "$B/$u" | python3 -c 'import sys,json; d=json.load(sys.stdin); print("ok" if d["success"] else d["errors"])'
+done                                                                     # all three must say ok
+curl -s -o /dev/null -w "%{http_code}\n" https://registry.cloudflare.com/v2/   # 401 = reachable; anything else = add it to the allowlist
+```
+**1. Green tests, Docker up, base image cached.**
+```bash
+pip install -q -r requirements-billrag.txt pytest && python -m pytest tests -q
+npm ci && npm test
+pgrep dockerd || (nohup dockerd > /tmp/dockerd.log 2>&1 &); sleep 8; docker info | grep "Server Version"
+docker pull python:3.12-slim && docker tag python:3.12-slim local-python:3.12
+```
+**2. Note what is live now (your rollback target) and the build id you are about to ship.**
+```bash
+npx wrangler containers info a03f4f3c-2efb-4e69-a1b6-c408e6f9b8dc | grep -E '"version"|"image"'   # e.g. version 8, sha256:...
+python -c "from billrag.chatlog import build_id; print(build_id())"                               # appears as `build` in chat logs
+```
+**3. Scratch build context outside the repo** (the repo `Dockerfile` stays untouched):
+```bash
+S=<scratchpad>/build; rm -rf $S; mkdir -p $S/scripts $S/docker
+cp -r billrag $S/ && cp scripts/fetch_index.py scripts/upload_r2.py $S/scripts/ && cp docker/entrypoint.sh $S/docker/
+cp requirements-serve.txt /root/.ccr/ca-bundle.crt $S/ && find $S -name __pycache__ -prune -exec rm -rf {} +
+sed -e 's|^FROM python:3.12-slim|FROM local-python:3.12|' \
+    -e 's|^RUN pip install -r requirements-serve.txt|RUN --mount=type=bind,source=ca-bundle.crt,target=/ca.crt PIP_CERT=/ca.crt pip install -r requirements-serve.txt|' \
+    Dockerfile > $S/Dockerfile
+diff Dockerfile $S/Dockerfile          # must show exactly those two lines
+sed "s|^image = \"./Dockerfile\"|image = \"$S/Dockerfile\"\nimage_build_context = \"$S\"|" wrangler.toml > wrangler.deploy.toml
+```
+If `Dockerfile` gains new `COPY` lines, copy those files into `$S` too.
+**4. Deploy, then clean up** (the build + push takes ~1 min):
+```bash
+npx wrangler deploy -c wrangler.deploy.toml    # ends with "Current Version ID: <worker version>" and "Modified application ..."
+rm -f wrangler.deploy.toml; pkill dockerd; git status --short   # must be clean
+```
+**5. Watch the container rollout** (took ~2 min; the old instance answers until it completes):
+```bash
+A=a03f4f3c-2efb-4e69-a1b6-c408e6f9b8dc
+for i in $(seq 1 12); do
+  s=$(curl -sS -H "$H" "$B/containers/applications/$A/rollouts" | python3 -c 'import sys,json; r=sorted(json.load(sys.stdin)["result"],key=lambda x:x["created_at"])[-1]; print(r["status"], "v"+str(r["target_version"]), r["progress"].get("updated_instances"), "/", r["progress"].get("total_instances"))')
+  echo "$(date +%T) $s"; case "$s" in completed*) break;; esac; sleep 30
+done
+```
+**6. Verify and record.** `workers.dev` and `wrangler tail` are NOT reachable from the sandbox, so verify from the chat
+logs once someone has asked a question (`pip install boto3` first; it is not in `requirements-billrag.txt`):
+```bash
+env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY python scripts/read_chatlogs.py --since $(date +%F) --out /tmp/logs.jsonl --show 5
+python3 -c "import json,collections; print(collections.Counter(json.loads(l).get('build') for l in open('/tmp/logs.jsonl')))"
+```
+Then update **Deployed vs main** below (build id, commit, Worker version, container version, previous version) in the same PR
+or a follow-up, and tell the owner exactly what is live and what is only merged.
+**Rollback:** check out the previous deployed commit and repeat steps 1-5; the old image digest stays in
+`registry.cloudflare.com`, and `wrangler deployments list` shows earlier Worker versions.
 
 ### Reading the chat logs
 Every question the live app answers is logged (best-effort, off the request path) to `r2://gov-rag/chatlogs/YYYY-MM-DD/<HHMMSSfff>-<session>-<turn>.json`
@@ -177,6 +229,8 @@ Worker-side errors (`upstream_failed`, with path, ms, error) go to Workers Logs 
 | `VectorsError` at startup | `vectors.npz` does not match `index.sqlite` (re-ingested without re-embedding). Re-run `embed`, `upload_r2.py --include-index`. |
 | workerd: "provided value is not of type function or ExportedHandler" | `src/worker.js` may only export the default handler and the Durable Object class; keep helpers in `auth.js`/`container.js`. |
 | `docker build` 429 or pip SSL errors in the sandbox | See "Deploying from the cloud sandbox". |
+| `wrangler deploy`: "Failed to automatically retrieve account IDs" / "403 No access to the specified service" | Token lacks deploy scopes (e.g. the Workers-AI-only token) or `CLOUDFLARE_ACCOUNT_ID` is unset: run the pre-flight check in "Deploying from the cloud sandbox". |
+| `wrangler deploy`: "The Docker CLI is needed ... could not be launched" | The Docker daemon is not running: `nohup dockerd > /tmp/dockerd.log 2>&1 &`. |
 | Out of memory in the container | `lite` (256 MiB) fit in memory but was too slow; `basic` is current. Vectors are float16 (66 MB); sessions are capped at 50 (`web.MAX_SESSIONS`). |
 
 ### Cost
