@@ -110,3 +110,33 @@ def ingest(data_dir: Path, db_path: Path, limit=None, workers=4, since_year=0):
     print(f"Indexed {st['bills']} bills / {st['chunks']} chunks; {errors} failed; "
           f"{skipped} bills without an English PDF skipped", file=sys.stderr)
     return st
+
+
+def ingest_si(data_dir: Path, db_path: Path, since_year=2025, lo=0.4, hi=2.5):
+    """Link the official Sinhala text of each bill (date >= since_year) to its English sections (store.local_sections).
+
+    Only Unicode Sinhala PDFs that line up with the English bill section-for-section are linked (see parse_si); within a
+    linked bill, a section whose length is outside lo..hi x the English one (boundary slip, tables) is left out."""
+    from . import parse_si
+    store = Store(db_path)
+    keys = [r[0] for r in store.db.execute("SELECT key FROM bills WHERE substr(date,1,4) >= ? ORDER BY date DESC",
+                                           (str(since_year),))]
+    for n, key in enumerate(keys, 1):
+        hits = sorted((data_dir / "pdfs").glob(f"*/{key.replace('/', '_')}_SINHALA.pdf"))
+        en = store.section_map(key)
+        if not hits or not en:
+            store.replace_local(key, "si", "no Sinhala PDF" if not hits else "no English sections", [])
+            continue
+        try:
+            secs, why = parse_si.parse_pdf(str(hits[0]), max(en))
+        except Exception as e:  # odd PDF: record and continue
+            secs, why = [], f"error: {type(e).__name__}: {e}"[:200]
+        keep = [s for s in secs if s.no in en and (len(en[s.no]) < 150 or lo <= len(s.text) / len(en[s.no]) <= hi)]
+        store.replace_local(key, "si", why or "ok", [(s.no, s.heading, s.page, s.text) for s in keep],
+                            str(hits[0]), max(en))
+        if n % 25 == 0:
+            store.commit()
+            print(f"  {n}/{len(keys)}", file=sys.stderr)
+    store.commit()
+    for r in store.local_stats("si"):
+        print(f"  {r['n']:4d} bills  {r['status']}" + (f"  ({r['kept']} sections linked)" if r["kept"] else ""), file=sys.stderr)

@@ -19,6 +19,7 @@ billrag/retrieve.py       BM25 (+ optional dense) -> RRF -> optional LLM rerank 
 billrag/pipeline.py       DEFAULT chat engine, two steps: retrieve -> AI evidence grading -> AI summary (+ citation check)
 billrag/answer_eval.py    answer-level eval: cites-the-gold-clause, LLM judge, latency (`billrag eval-answers`)
 billrag/translate.py       translation layer: Sinhala/Tamil question -> English -> pipeline -> answer back (script detection, no model call for English)
+billrag/parse_si.py       official Sinhala text per section (Unicode PDFs, 2025+) -> table local_sections; `ingest-si`
 billrag/agent.py          (`--mode agent`) tool-calling loop: search_bills, list_bills, get_bill_overview, get_section, diff_bills
 billrag/llm.py            Anthropic + OpenAI-compatible chat adapters, OpenAI/sentence-transformers embedders
 billrag/enrich.py         optional: dense vectors (`embed`) and LLM bill summaries (`summarize`)
@@ -51,6 +52,8 @@ python -m billrag ask --mode agent "question"                      # the older f
 python -m billrag eval-answers --mode pipeline --since-year 2025 --limit 24   # answer quality + latency (~3 min, ~70 LLM calls)
 python -m billrag eval -k 10 --since-year 2025 --misses 10 --label NAME   # retrieval quality on RECENT bills (the ones users ask about)
 python -m billrag summarize --since-year 2024 --workers 8   # LLM bill summaries + search keywords (resumable, newest first)
+env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY python scripts/fetch_index.py --bucket gov-rag --pdfs SINHALA --since-year 2025 --no-index
+python -m billrag ingest-si [--since-year 2025]                     # link official Sinhala sections (~3 min; needs pymupdf)
 python -m pytest tests -q                                           # must pass before every commit
 ```
 
@@ -271,10 +274,11 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". Live since 2026-11-05 16:06 UTC: build `4cfb4b63` = commit `a2ad066` (PR #14: translation layer #12 +
-`TRANSLATE = "ai"`), Worker version `d0bf988b`, container app version 8. Previous: build `3bbe2bc6`, container version 7. Anything
-merged to `main` later is NOT live until someone runs `wrangler deploy`. Check `git log origin/main` against the `build` seen in the
-latest chat log before telling the owner a change is live.
+"Merged" is not "live". Live since 2026-11-05 16:47 UTC: build `af86776e` = `main` at `fca8f3a` (merge of PR #14: translation
+layer, `TRANSLATE = "ai"`, `TRANSLATE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"`), Worker version `e56e31b8`, container
+app version 9 (image `sha256:f647ba62...`). Previous: build `4cfb4b63` (commit `a2ad066`), container v8 (`sha256:38b7eaea...`);
+before that build `3bbe2bc6`, v7. Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
+`git log origin/main` against the `build` seen in the latest chat log before telling the owner a change is live.
 
 ## Rules
 
@@ -284,7 +288,10 @@ latest chat log before telling the owner a change is live.
   are in that transcript forever: rotate them afterwards. `data/` is git-ignored; keep it that way (PDFs are ~700 MB).
 - **Production deploys need the owner's explicit go-ahead** in that turn (the harness blocks them otherwise). Merging a PR
   does NOT deploy: there is no GitHub auto-deploy. Always say what is merged vs what is live.
-- **English only.** Sinhala/Tamil PDFs use legacy font encodings and extract as garbage; do not index them without OCR.
+- **Search is English only.** Retrieval, embeddings and evals run on the English text. The official Sinhala text of
+  2025+ bills is stored alongside (`local_sections`, see "Official Sinhala text") and used only to word Sinhala answers;
+  never put it into `chunks` (that changes `fingerprint()` and invalidates `vectors.npz`). Sinhala PDFs up to 2024 (FM
+  Abhaya legacy font) and all Tamil PDFs are not handled yet.
 - **Never fabricate legal content.** The agent prompt (`agent.SYSTEM`) requires citations like `[077/2026 §12(2)]`
   and "say so if not found". Do not weaken it. Answers explain text; they are not legal advice.
 - Bill keys are `NNN/YYYY` using the listing's number (`billNoText`), not the number printed on the PDF cover
@@ -395,6 +402,34 @@ attempt's reason. `drop_invented_refs` removes any `NNN/YYYY` the translation ad
 `@cf/ai4bharat/indictrans2-en-indic-1B` (Translation) is listed too, untested. With an example bill number in the prompt
 (`like 077/2026`), both Llama models added "077/2026" to a question that named no bill: never put concrete numbers in prompts.
 To trade quality for speed, unset `TRANSLATE_MODEL` (gpt-oss translates, ~30 s faster on a Sinhala answer).
+
+## Official Sinhala text (2025+ bills)
+
+Bills are enacted in Sinhala and Tamil with an English translation, and bills say so themselves: e.g. 078/2026 §75: "In the
+event of any inconsistency between the Sinhala and Tamil texts of this Act, the Sinhala text shall prevail." So a Sinhala answer should use the
+bill's own Sinhala wording, not a machine translation of the English. `billrag/parse_si.py` + `python -m billrag ingest-si`:
+
+- **What extracts:** Sinhala PDFs from 2025 on use Unicode fonts (IskoolaPota) and extract as real Sinhala with **PyMuPDF**
+  (`pypdf` and `pdfminer` both scramble the pre-base vowel sign: හෝ -> "තෝහා"). Up to 2024 they use **FM Abhaya** (Sinhala glyphs on
+  Latin code points: needs an FM -> Unicode table, not done). 35 of the 180 bills from 2025-26 use a **visual-order** font
+  (ෙ before the consonant, ්‍ර conjunct dropped: "ශී ලංකා"): letters are missing, so they are rejected rather than quoted misspelt.
+- **Cleanup:** the font map doubles vowel signs (ආරක්ෂාා, හෝ�ෝ˪) and some ligatures (රාජ්‍යයය): `clean` collapses repeats and
+  drops stray glyphs. Layout by PyMuPDF block geometry: running header (top 10%), line numbers 5/10/15/20/25 (digit-only blocks),
+  margin notes (blocks outside the text column; kept as `heading`).
+- **Sections:** start after the enacting clause ("... මෙසේ පනවනු ලැබේ", may wrap mid-word); each number is printed twice ("13." alone,
+  then "13. text"); text may start with a digit ("13. 6 වන ..."); a ZWJ can precede the number. Sequence-checked like English.
+- **Linking (fail-safe):** a bill is linked only if its Sinhala sections are exactly the English bill's 1..max(section_no); within
+  it, a section whose length is outside 0.4-2.5x the English one is left out (schedules or tables slipping into a section).
+  `local_bills` records every bill's status. **Result (2026-11-05): 143 of 180 bills linked, 3,456 sections**; 35 visual-order
+  font, 2 with no English sections. Length ratio Sinhala/English over 3,164 sections: median 0.99, p5 0.76, p95 1.18.
+- **Use:** retrieval and the English answer are unchanged. For a Sinhala question, `Pipeline.official_texts` looks up the evidence
+  sections (or a sibling GS/Bill version) and the translate-out call gets them as a reference block (labels without [ ] so they
+  cannot pass the citation check). `Result.official` / log field `official` lists them; sources say "official Sinhala text used".
+- **Measured** (one question, 070/2026 §3; official terms terror/hostage/protest): Llama 3.3 without reference 0/3 in 45 s, with
+  1,400 chars 2/3 in 38 s, with all 3.4k chars 3/3 but 2 citation-check failures first (79 s). gpt-oss with reference: ~7 s but
+  inconsistent (0-2/3, one reasoning leak). Reference is capped at 2,500 chars per section. Translate-out stays the slow step.
+- **Production:** the container restores `index.sqlite` from R2, so after `ingest-si` upload it (`upload_r2.py --include-index`)
+  as part of the deploy. Old code ignores the new tables, so the upload is safe before the code is live.
 
 ## Product priority: recent bills
 

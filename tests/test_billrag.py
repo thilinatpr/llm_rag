@@ -1091,3 +1091,86 @@ def test_translation_never_adds_bill_numbers():
     assert translate.drop_invented_refs("q", "What does Bill No. 77/2026 say?") == "What does Bill say?"
     assert translate.drop_invented_refs("\u0db8\u0dd9\u0db8 086/2026", "What does 086/2026 say?") == "What does 086/2026 say?"
     assert "077" not in translate.TO_EN + translate.DETECT_AND_TRANSLATE  # no example numbers for models to copy
+
+
+# ---------------------------------------------------------------- official Sinhala text (parse_si, local_sections)
+from billrag import parse_si  # noqa: E402
+
+ENACT_SI = "ශ්‍රී ලංකා ප්‍රජාතාන්ත්‍රික සමාජවාදී ජනරජයේ පාර්ලිමේන්තුව විසින් මෙසේ පනවනු ලැබේ:-"
+
+
+def test_clean_collapses_doubled_marks_and_drops_junk():
+    assert parse_si.clean("ආරක්ෂාා කිරීමේȼ") == "ආරක්ෂා කිරීමේ"
+    assert parse_si.clean("හෝ�ෝ˪") == "හෝ"                       # extracted as හෝ + junk + ෝ
+    assert parse_si.clean("රාාජ්‍යයය ලංංකා දෙෙස්්") == "රාජ්‍යය ලංකා දෙස්"
+    assert parse_si.clean("3(2)(ඒ) වන") == "3(2)(ඒ) වන"                     # digits/brackets untouched
+
+
+def test_page_lines_drops_header_and_line_numbers_and_keeps_margin_notes():
+    blocks = [(60, 39, 261, 52, "6\nධාවන ශීර්ෂය"),                         # running header (top 10%)
+              (60, 76, 302, 153, "(1) මේ පනතේ වගන්තිය\nදෙවන පේළිය"),
+              (49, 140, 54, 154, "5\n"),                                      # line number
+              (306, 170, 355, 227, "සිංහල\nපාඨය\n")]                         # margin note right of the column
+    lines, notes = parse_si.page_lines(blocks, 420, 595)
+    assert lines == ["(1) මේ පනතේ වගන්තිය", "දෙවන පේළිය"] and notes == ["සිංහල පාඨය"]
+
+
+def si_pages():
+    return [(1, ["1. කෙටි නාමය", "2. අර්ථ නිරූපණය"], []),                    # table of contents: ignored
+            (2, ["විසින් මෙසේ පනව", "නු ලැබේ:-", "1.", "1. මේ පනත ... යනුවෙන් හඳුන්වනු ලැබේ."], ["කෙටි නාමය"]),
+            (3, ["2.2. (1) යම් තැනැත්තකු විසින්", "‍3. 6 වන හෝ 7 වන වගන්තිය යටතේ වරදක්"], []),
+            (4, ["පළමුවන උපලේඛනය", "1. ගිවිසුම"], [])]
+
+
+def test_parse_pages_handles_wrapped_enacting_clause_duplicates_digits_zwj_and_schedules():
+    pages = [(p, [s.strip("‍") for s in ls], ns) for p, ls, ns in si_pages()]
+    secs = parse_si.parse_pages(pages, 3)
+    assert [s.no for s in secs] == [1, 2, 3]
+    assert secs[0].text == "මේ පනත ... යනුවෙන් හඳුන්වනු ලැබේ." and secs[0].heading == "කෙටි නාමය"  # "1." line de-duplicated
+    assert secs[1].text.startswith("(1) යම්") and secs[2].text.startswith("6 වන")           # '3. 6 වන' starts with a digit
+    assert "ගිවිසුම" not in secs[2].text                                                     # schedule cut off
+    assert parse_si.check(secs, 3) is None
+    assert parse_si.check(secs, 4) == "found 3 sections, English has 4"
+    assert parse_si.parse_pages([(1, ["1. no enacting clause"], [])], 1) == []
+
+
+def test_visual_order_fonts_are_rejected():
+    assert parse_si.visual_order("ෙමෙසේ පනවනු ලැෙබ්: ෙම් පනත ශී ලංකා " * 3)
+    assert not parse_si.visual_order(ENACT_SI + " මේ පනත යනුවෙන් හඳුන්වනු ලැබේ")
+
+
+def test_local_sections_store_roundtrip_and_fingerprint_unchanged(tmp_path):
+    st = make_store(tmp_path)
+    fp = st.fingerprint()
+    st.replace_local("086/2026", "si", "ok", [(2, "සංශෝධනය", 2, "දින දහය වෙනුවට දින පහළොව")], "x.pdf", 2)
+    assert st.local_section("086/2026", 2)["text"] == "දින දහය වෙනුවට දින පහළොව"
+    assert st.local_section("086/2026", 2, "ta") is None and st.local_section("086/2026", 3) is None
+    assert st.local_stats("si") == [{"status": "ok", "n": 1, "kept": 1}]
+    assert st.fingerprint() == fp  # vectors.npz stays valid: local text is not part of the search index
+    st.replace_local("086/2026", "si", "ok", [], "x.pdf", 2)  # re-ingest replaces, does not duplicate
+    assert st.local_section("086/2026", 2) is None
+
+
+class OfficialSeeingLLM(TranslatingLLM):
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+        if system.startswith("Translate the answer"):
+            self.translate_out = (system, messages[-1]["content"])
+        return super().chat(system, messages, tools, max_tokens, effort)
+
+
+def test_sinhala_answer_translation_gets_the_official_sinhala_text(tmp_path):
+    st, llm = make_store(tmp_path), OfficialSeeingLLM()
+    st.replace_local("086/2026", "si", "ok", [(2, None, 2, "දින දහය වෙනුවට දින පහළොව ආදේශ කිරීම")], "x.pdf", 2)
+    st.commit()
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    system, user = llm.translate_out
+    assert "OFFICIAL Sinhala TEXT" in system and "දින දහය වෙනුවට දින පහළොව" in user
+    assert "086/2026 §2:" in user and "[086/2026 §2]:" not in user  # reference labels are not citations
+    assert r.official == [("086/2026", 2)] and "official Sinhala text used" in r.sources()[0]
+    assert not r.warnings and translate.detect(r.answer) == "si"
+
+
+def test_no_official_text_means_plain_translation(tmp_path):
+    st, llm = make_store(tmp_path), OfficialSeeingLLM()
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert "OFFICIAL" not in llm.translate_out[0] and r.official == []

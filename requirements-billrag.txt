@@ -1,4 +1,6 @@
 pypdf>=4
+# Sinhala PDFs (`ingest-si` only; not needed to serve). pypdf/pdfminer scramble Sinhala vowel signs. AGPL-licensed.
+pymupdf
 numpy
 # chat model (install the one you use; "openai" also covers any OpenAI-compatible server)
 anthropic

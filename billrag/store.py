@@ -13,7 +13,15 @@ CREATE TABLE IF NOT EXISTS chunks(
   heading TEXT, page INT, ord INT, text TEXT, ctx TEXT);
 CREATE INDEX IF NOT EXISTS chunks_bill ON chunks(bill_key, section_no, ord);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(ctx, tokenize='porter unicode61');
+CREATE TABLE IF NOT EXISTS local_sections(
+  bill_key TEXT NOT NULL, lang TEXT NOT NULL, section_no INT NOT NULL, heading TEXT, page INT, text TEXT,
+  PRIMARY KEY(bill_key, lang, section_no));
+CREATE TABLE IF NOT EXISTS local_bills(
+  bill_key TEXT NOT NULL, lang TEXT NOT NULL, status TEXT, n_sections INT, n_kept INT, pdf TEXT,
+  PRIMARY KEY(bill_key, lang));
 """
+# local_sections: the official Sinhala (later Tamil) text of a section, linked to the English index by (bill_key,
+# section_no). Kept OUT of `chunks` on purpose: retrieval stays English, and fingerprint()/vectors.npz are unaffected.
 
 STOP = set("a an the of to in on for and or is are was were be been by with as at from that this which "
            "what who whom how does do did it its any all under shall may can about into than then there "
@@ -157,6 +165,24 @@ class Store:
         return {"bills": q("SELECT COUNT(*) FROM bills"), "chunks": q("SELECT COUNT(*) FROM chunks"),
                 "sections": q("SELECT COUNT(*) FROM chunks WHERE kind='section'"),
                 "summaries": q("SELECT COUNT(*) FROM bills WHERE summary IS NOT NULL")}
+
+    def replace_local(self, key, lang, status, sections, pdf=None, n_sections=None):
+        """sections: [(no, heading, page, text)] for one bill; status is 'ok' or why the bill is not linked."""
+        self.db.execute("DELETE FROM local_sections WHERE bill_key=? AND lang=?", (key, lang))
+        self.db.executemany("INSERT INTO local_sections VALUES(?,?,?,?,?,?)",
+                            [(key, lang, no, heading, page, text) for no, heading, page, text in sections])
+        self.db.execute("INSERT OR REPLACE INTO local_bills VALUES(?,?,?,?,?,?)",
+                        (key, lang, status, n_sections, len(sections), pdf))
+
+    def local_section(self, key, no, lang="si"):
+        r = self.db.execute("SELECT * FROM local_sections WHERE bill_key=? AND section_no=? AND lang=?",
+                            (key, int(no), lang)).fetchone()
+        return dict(r) if r else None
+
+    def local_stats(self, lang="si"):
+        rows = self.db.execute("SELECT status, COUNT(*) AS n, SUM(n_kept) AS kept FROM local_bills WHERE lang=? "
+                               "GROUP BY status ORDER BY n DESC", (lang,)).fetchall()
+        return [dict(r) for r in rows]
 
     def update_overview(self, key, text):
         r = self.db.execute("SELECT id FROM chunks WHERE bill_key=? AND kind='overview'", (key,)).fetchone()

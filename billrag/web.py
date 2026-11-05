@@ -98,6 +98,7 @@ class App:
                 "candidates_graded": len(res.graded), "llm_calls": res.llm_calls,
                 "step_seconds": {k: round(v, 2) for k, v in res.seconds.items()}, "events": list(events),
                 "model": getattr(self.s, "chat_model", None), "lang": res.lang,
+                "official": [f"{k} \u00a7{n}" for k, n in res.official],
             }
             return out, meta
         return answer

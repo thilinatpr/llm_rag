@@ -118,13 +118,15 @@ class Result:
     seconds: dict = field(default_factory=dict)
     lang: str = "en"  # language of the user's question; the answer is in the same language when translation worked
     answer_en: str = ""  # the verified English answer (set only for translated results)
+    official: list = field(default_factory=list)  # [(bill, section)] whose official local-language text informed the answer
 
     def sources(self):
         out = []
         for e in self.evidence:
             c = e.chunk
             where = f"§{e.section}" if e.section is not None else c["kind"]
-            out.append(f"[{e.key} {where}, p.{c['page']}] {c['title']} ({c['bill_kind']}, {c['date'][:10]})")
+            official = " - official Sinhala text used" if (e.key, e.section) in self.official else ""
+            out.append(f"[{e.key} {where}, p.{c['page']}] {c['title']} ({c['bill_kind']}, {c['date'][:10]}){official}")
         return out
 
 
@@ -313,7 +315,9 @@ class Pipeline:
         res.question, res.lang, res.answer_en = question, lang, res.answer
         res.seconds["translate_in"] = t_in
         t = time.time()
-        out, reasons = tr.from_english(res.answer_en, lang)
+        refs = self.official_texts(res.evidence, lang)
+        out, reasons = tr.from_english(res.answer_en, lang, [(f"{k} \u00a7{n}", t) for k, n, t in refs])
+        res.official = [(k, n) for k, n, _ in refs]
         res.seconds["translate_out"] = time.time() - t
         res.llm_calls += tr.calls
         if out:
@@ -322,6 +326,23 @@ class Pipeline:
             res.warnings.append(f"could not translate the answer into {name} reliably ({'; '.join(reasons) or 'no output'}); "
                                 "showing English")
         return res
+
+    def official_texts(self, evidence, lang):
+        """[(bill, section, text)]: the bill's own text in `lang` for the evidence sections (Sinhala only so far; parse_si).
+        A sibling GS/Bill version with identical English text may supply it when the cited version has none."""
+        if lang != "si" or not hasattr(self.store, "local_section"):
+            return []
+        out, seen = [], set()
+        for e in evidence:
+            if e.section is None:
+                continue
+            for key in [e.key] + list(e.chunk.get("also_in", [])):
+                row = self.store.local_section(key, e.section, lang)
+                if row and (e.key, e.section) not in seen:
+                    seen.add((e.key, e.section))
+                    out.append((e.key, e.section, row["text"]))
+                    break
+        return out
 
     def _ask(self, question: str) -> Result:
         res = Result(question=question, answer="")

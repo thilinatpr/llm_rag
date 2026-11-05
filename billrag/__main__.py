@@ -14,6 +14,8 @@ def main(argv=None):
     p.add_argument("--since-year", type=int, default=0)
     p.add_argument("--workers", type=int, default=4)
     sub.add_parser("stats")
+    p = sub.add_parser("ingest-si", help="link the official Sinhala text (Unicode PDFs, 2025+) to the English sections")
+    p.add_argument("--since-year", type=int, default=2025)
     p = sub.add_parser("search", help="retrieval only (no LLM / API key needed)")
     p.add_argument("query")
     p.add_argument("-k", type=int, default=6)
@@ -67,6 +69,10 @@ def main(argv=None):
     if not s.db_path.exists():
         sys.exit(f"No index at {s.db_path}. Run: python -m billrag ingest")
     store = Store(s.db_path)
+    if a.cmd == "ingest-si":
+        from .ingest import ingest_si
+        ingest_si(s.data_dir, s.db_path, a.since_year)
+        return 0
     if a.cmd == "stats":
         print(store.stats())
         return 0
