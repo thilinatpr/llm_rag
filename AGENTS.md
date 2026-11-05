@@ -18,6 +18,7 @@ billrag/store.py          SQLite schema, BM25 search, section/outline/version qu
 billrag/retrieve.py       BM25 (+ optional dense) -> RRF -> optional LLM rerank -> dedup of identical text -> diversity cap
 billrag/pipeline.py       DEFAULT chat engine, two steps: retrieve -> AI evidence grading -> AI summary (+ citation check)
 billrag/answer_eval.py    answer-level eval: cites-the-gold-clause, LLM judge, latency (`billrag eval-answers`)
+billrag/translate.py       translation layer: Sinhala/Tamil question -> English -> pipeline -> answer back (script detection, no model call for English)
 billrag/agent.py          (`--mode agent`) tool-calling loop: search_bills, list_bills, get_bill_overview, get_section, diff_bills
 billrag/llm.py            Anthropic + OpenAI-compatible chat adapters, OpenAI/sentence-transformers embedders
 billrag/enrich.py         optional: dense vectors (`embed`) and LLM bill summaries (`summarize`)
@@ -124,6 +125,14 @@ Lessons (all cost us a debugging round):
 - `BILLRAG_GRADE_EFFORT=low` (default) makes grading ~3x faster; low effort on the answer call did not help (latency is dominated
   by hosted-model variance). Models without `reasoning_effort` support: set `BILLRAG_GRADE_EFFORT=` (empty).
 - Models may emit citations in full-width brackets 【..】; the verifier accepts both.
+
+## Translation layer (Sinhala / Tamil)
+
+`Pipeline.ask` detects the question's script (`translate.detect`, deterministic). English: unchanged. Sinhala/Tamil: +2 LLM
+calls - question -> English before retrieval, English answer -> user's language after. The English answer is citation-verified
+first and kept in `Result.answer_en`; the translation must reproduce every `[NNN/YYYY §s]` citation exactly, else we return the
+English answer with a warning. Bill titles stay English (the index is English only). Not handled: romanised Sinhala/Tamil
+("Singlish") and mixed-script text below a 20% share. Quality of translation is unmeasured: no Sinhala/Tamil eval set yet.
 
 ## Product priority: recent bills
 

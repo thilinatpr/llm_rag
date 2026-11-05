@@ -13,7 +13,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from . import resolve
+from . import resolve, translate
 from .store import normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
@@ -116,6 +116,8 @@ class Result:
     warnings: list = field(default_factory=list)
     llm_calls: int = 0
     seconds: dict = field(default_factory=dict)
+    lang: str = "en"  # language of the user's question; the answer is in the same language when translation worked
+    answer_en: str = ""  # the verified English answer (set only for translated results)
 
     def sources(self):
         out = []
@@ -277,6 +279,31 @@ class Pipeline:
 
     # ------------------------------------------------------------ driver
     def ask(self, question: str) -> Result:
+        """Translation layer around `_ask`: Sinhala/Tamil question -> English -> pipeline -> answer in that language."""
+        lang = translate.detect(question)
+        if lang == "en":
+            return self._ask(question)
+        name = translate.language_name(lang)
+        t = time.time()
+        q_en = translate.to_english(self.llm, question, lang, self.grade_effort)
+        if not q_en:
+            return Result(question=question, lang=lang, llm_calls=1, answer=(
+                "Sorry, I could not translate that question into English to search the bills. Please try again or ask in English."))
+        res = self._ask(q_en)
+        res.question, res.lang, res.answer_en = question, lang, res.answer
+        res.llm_calls += 1
+        res.seconds["translate_in"] = time.time() - t
+        t = time.time()
+        out = translate.from_english(self.llm, res.answer_en, lang, self.grade_effort)
+        res.llm_calls += 1
+        res.seconds["translate_out"] = time.time() - t
+        if out:
+            res.answer = out
+        else:
+            res.warnings.append(f"could not translate the answer into {name} reliably (citations must stay intact); showing English")
+        return res
+
+    def _ask(self, question: str) -> Result:
         res = Result(question=question, answer="")
         plan = resolve.resolve_question(self.store, question)
         if plan["action"] == "reply":  # greeting, or an abbreviation we cannot ground: no search, no model call

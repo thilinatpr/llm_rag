@@ -69,5 +69,6 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
 
 ## Product
 - [ ] Web UI / API wrapper (streaming answers, clickable citations that open the PDF page from R2).
-- [ ] Multilingual question handling (answer in Sinhala/Tamil from English sources) once a model is chosen.
+- [x] Translation layer (`billrag/translate.py`): Sinhala/Tamil questions and answers via the chat model, citations preserved.
+- [ ] Evaluate the translation layer: a small Sinhala/Tamil question set, back-translation check, which model translates best.
 - [ ] Conversation memory limits (the agent keeps full history; trim or summarise for long chats).

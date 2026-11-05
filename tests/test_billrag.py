@@ -908,3 +908,54 @@ def test_chatlog_records_carry_a_build_id(tmp_path, monkeypatch):
             break
         time.sleep(0.05)
     assert json.loads(f[0].read_text().splitlines()[0])["build"] == chatlog.build_id()
+
+
+# ---------------------------------------------------------------- translation layer (Sinhala / Tamil)
+from billrag import translate  # noqa: E402
+
+SI_Q = "\u0db1\u0dd2\u0dc0\u0dd0\u0dbb\u0daf\u0dd2 \u0daf\u0dd2\u0db1 \u0d9a\u0dd3\u0dba\u0daf?"  # Sinhala text
+TA_ANS = "\u0baa\u0ba4\u0bbf\u0ba9\u0bc8\u0ba8\u0bcd\u0ba4\u0bc1 \u0ba8\u0bbe\u0b9f\u0bcd\u0b95\u0bb3\u0bcd"  # Tamil text
+
+
+class TranslatingLLM(ScriptLLM):
+    def __init__(self, lang="si", drop_cites=False, **kw):
+        super().__init__(**kw)
+        self.lang, self.drop_cites = lang, drop_cites
+
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+        if system.startswith("Translate the user's question"):
+            self.calls.append("TO_EN")
+            return Reply("How many days does the amendment allow?")
+        if system.startswith("Translate the answer"):
+            self.calls.append("FROM_EN")
+            cite = "" if self.drop_cites else " [086/2026 \u00a72]"
+            return Reply((SI_Q if self.lang == "si" else TA_ANS) + cite)
+        return super().chat(system, messages, tools, max_tokens, effort)
+
+
+def test_detect_language_by_script():
+    assert translate.detect("How many days?") == "en" and translate.detect("Bill 077/2026 \u00a712") == "en"
+    assert translate.detect(SI_Q) == "si" and translate.detect(TA_ANS) == "ta"
+    assert translate.detect("Does the bill mention " + SI_Q[:3]) == "en"  # a stray character is not a language switch
+
+
+def test_english_questions_make_no_translation_calls(tmp_path):
+    st, llm = make_store(tmp_path), TranslatingLLM()
+    r = Pipeline(st, Retriever(st), llm).ask("How many days does the amendment allow?")
+    assert "TO_EN" not in llm.calls and "FROM_EN" not in llm.calls and r.lang == "en" and r.llm_calls == 2
+
+
+def test_sinhala_question_is_translated_in_and_out(tmp_path):
+    st, llm = make_store(tmp_path), TranslatingLLM()
+    p = Pipeline(st, Retriever(st), llm)
+    r = p.ask(SI_Q)
+    assert llm.calls[0] == "TO_EN" and llm.calls[-1] == "FROM_EN" and r.llm_calls == 4
+    assert r.lang == "si" and r.question == SI_Q and translate.detect(r.answer) == "si" and "[086/2026 \u00a72]" in r.answer
+    assert "fifteen days" in r.answer_en and not r.warnings
+    assert p.history[-1][0].startswith("How many days")  # follow-ups are condensed in English
+
+
+def test_translation_that_alters_citations_falls_back_to_english(tmp_path):
+    st = make_store(tmp_path)
+    r = Pipeline(st, Retriever(st), TranslatingLLM(drop_cites=True)).ask(SI_Q)
+    assert r.answer == r.answer_en and "fifteen days" in r.answer and any("translate" in w for w in r.warnings)

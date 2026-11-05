@@ -95,7 +95,7 @@ class App:
                 "evidence": [{"bill": e.key, "section": e.section, "score": e.score} for e in res.evidence],
                 "candidates_graded": len(res.graded), "llm_calls": res.llm_calls,
                 "step_seconds": {k: round(v, 2) for k, v in res.seconds.items()}, "events": list(events),
-                "model": getattr(self.s, "chat_model", None),
+                "model": getattr(self.s, "chat_model", None), "lang": res.lang,
             }
             return out, meta
         return answer
