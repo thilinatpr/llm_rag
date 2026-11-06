@@ -69,7 +69,7 @@ TRANSLATE = "ai"
 TRANSLATE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 # Public (anonymous) questions behind a Cloudflare Turnstile check, with daily quotas: see src/public.js and AGENTS.md "Public lane".
 # OFF until set to "on". Needs the TURNSTILE_SECRET Worker secret (exists) and the site key below (public, not a secret).
-PUBLIC_CHAT = "off"
+PUBLIC_CHAT = "on"
 TURNSTILE_SITEKEY = "0x4AAAAAAF2W2gpEdNI7gfcY"
 # Daily allowances (reset at midnight in Sri Lanka). Per visitor / per IP (backstop: mobile users share IPs) / whole public lane.
 PUBLIC_DAILY_PER_COOKIE = "10"
