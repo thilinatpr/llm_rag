@@ -84,18 +84,11 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
 - [ ] Conversation memory limits (the agent keeps full history; trim or summarise for long chats).
 
 ## Procurement Rules (procurement.citizenlk.com)
-- [ ] **Owner's machine (needs `data/procurement/` PDFs):** `python -m procurement build`, then run the 38-question test set and
-      compare with and without the heading chain (`Under: ...`) and clause pointers (`Referred to by [..]`). Keep them only if
-      strict/cited results do not drop; add the four 2026-11-06 payment questions (project accountant, IPC) to the set.
-- [ ] Rebuild and deploy the container so the heading chain and pointers go live (`npx wrangler deploy -c workers/procurement/wrangler.toml`
-      from `main`; the Worker-only deploy of 2026-11-06 did not rebuild the image). Needs the owner's go-ahead.
-- [ ] Coverage gap: the index has nothing on a project accountant's authority over payments / certified IPCs (4 questions on
-      2026-11-06 all answered "not in the passages"). Find which documents cover contract administration and payment
-      certification (contract conditions, SBD, FIDIC-style general conditions, provincial council rules) and add them.
-- [ ] Follow-up questions: each question is standalone ("It's not conclusive" could not be answered). Condense follow-ups into a
-      standalone question as Bill Assistant does, or pass the last turn.
-- [ ] `read_chatlogs.py --prefix procurement-logs` counts these records as searches (no `type` field): add `type: "ask"` in
-      `workers/procurement/handler.js` `logAsk`.
+- [x] Eval set + harness (`python -m procurement.evaluate`); heading chain and pointers measured: no harm (deepseek-flash strict 1.00 both, clean 0.95 off / 0.99 on, coarse regexes). See `procurement/README.md`.
+- [x] Coverage: "IPC" search term, GPMCM guide added as non-binding; follow-ups (`history`, one rewrite call); `type: "ask"` in the log. Written 2026-11-07, NOT deployed.
+- [ ] Write 20+ unseen questions with an officer's review: the current set is a regression check, not an accuracy figure.
+- [ ] Rebuild and deploy the container from `main` (`python -m procurement build`, `npx wrangler deploy -c workers/procurement/wrangler.toml`). Needs the owner's go-ahead.
+- [ ] Watch payment answers in the logs: gpt-oss overstated what the sources say about a "project accountant"; deepseek-flash did not in the run read.
+- [ ] Find NPC's Contract Management Guidelines (PG2024 §1.4(c)) and the works SBD; not on the NPC site as of 2026-11-06. They would replace most of the 2017 guide.
 - [ ] Authority/scope tags per clause (who it applies to: PPC, MPC, provincial council, project; value band) so retrieval can filter.
-      Largest piece, least certain: only after the chain and pointers are measured.
-- [ ] Confirm the log records show the live Worker (`6b352ccd`): done, 4 records seen 2026-11-06. Update "Deployed vs main" when next deployed.
+      Largest piece, least certain, and the measurement gave no sign that retrieval is the limit (evidence 0.99): probably not worth doing yet.

@@ -8,6 +8,8 @@ TEXTS = Path("procurement/npc_texts")    # tracked: curated text of short NPC do
 
 # status: current = in force; transitional = only for procurement actions begun before 2025-01-01 (up to contract award,
 # PG2024 §1.4(e)); everything else in the 2006 family was repealed by PG2024 §1.4(d)(ii).
+GUIDANCE = ("Non-binding guidance: Ministry of Finance guide of February 2017, written mainly for FIDIC and ICTAD works contracts and before the "
+            "2024 Guidelines. The contract's own conditions and PG2024/PM2024 prevail.")
 UNOFFICIAL = ("Unofficial English translation made for this index from the Sinhala circular (no official English version is published); the Sinhala text is authoritative.")
 
 DOCS = [
@@ -63,6 +65,10 @@ DOCS += [
     dict(id="PFMA", kind="act", status="current", issued="2024-08-08", effective="2024-08-08", parser="act",
          title="Public Financial Management Act, No. 44 of 2024 (certified 08.08.2024)",
          file=LOCAL / "treasury" / "PFM Act No. 44 of 2024.pdf"),
+    dict(id="GPMCM", kind="guidance", status="current", issued="2017-02-01", effective="2017-02-01", parser="curated", note=GUIDANCE,
+         title="Guide to Project Management and Contract Management for Infrastructure Development Projects (Works), Ministry of "
+               "Finance, February 2017: payment certification, withholding payments, the Engineer's functions",
+         file=TEXTS / "GPMCM.md"),
     dict(id="LCC2026", kind="guidance", status="current", issued="2026-06-30", effective="2026-06-30", parser="numbered",
          title="Detailed Guidance Note on Assessment of Life Cycle Cost / Total Cost of Ownership, NPC (2026)",
          file=NPC / "procurement-notices" / "DGNOAOLC_com.pdf"),

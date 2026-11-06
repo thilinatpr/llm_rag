@@ -149,11 +149,33 @@ citation warning (paragraph numbers of a one-passage circular), fixed: a whole-d
     documents matter.
   - A citation that names the wrong one of two shown passages is not caught (see above).
   - If NPC reissues the Manual, the page numbers move: rerun `check-tables`. A mismatch means the transcriptions need redoing.
-- No eval set yet: turn the 12 questions into gold (doc, ref) items and measure retrieval, as `evals/retrieval_eval.jsonl` does.
 - Not in the index: the Consultancy guidelines, Contract Management Guidelines (PG2024 §1.4(c)), Standard Procurement
   Documents, NPC circulars after 2025, and the Sinhala/Tamil texts.
 - The amendment gazette is encoded by hand (8 rows). Recheck it if NPC publishes more amendments.
 - Supreme Court FR petition (TISL, SCFR/22/2025): status unknown.
+
+## Eval (`python -m procurement.evaluate`, `evals/procurement_eval.jsonl`, 2026-11-07)
+39 items: 35 officer-style questions recovered from an earlier session (the old "38 questions" were never committed, nor was any gold), the
+live payment questions of 2026-11-06 and one follow-up. Gold is written from the source; `--check-gold` fails if a required fact is not in
+its gold passage. No model judge: `strict` = required facts + cites gold; `clean` = strict + no unsupported citation. Regexes are coarse: a
+pass does not prove the whole answer is right (below), so read the answers. n is small: treat gaps under ~0.1 as noise.
+
+Final code, all 39 items, reranker on, 2026-11-07:
+| model, setting | answers | evidence | cited | facts | strict | clean | warned |
+|---|---|---|---|---|---|---|---|
+| `deepseek-flash` (production), chain + pointers off | 78 | 1.00 | 1.00 | 1.00 | 1.00 | 0.95 | 0.08 |
+| `deepseek-flash` (production), chain + pointers on | 78 | 1.00 | 1.00 | 1.00 | 1.00 | 0.99 | 0.03 |
+| `gpt-oss-120b`, chain + pointers on | 117 | 0.99 | 0.97 | 0.88 | 0.86 | 0.83 | 0.10 |
+So chain and pointers do no harm; the clean gap (3 fewer unsupported citations) is within noise. 156 DeepSeek answers cost about $0.08. **The perfect strict score overstates quality:** the
+regexes are coarse and were written after reading a draft run of these questions on this model, and most questions also trained earlier fixes. It is a regression check, not an accuracy figure. A
+new set of unseen questions, reviewed by an officer, is what would measure accuracy. gpt-oss overstated what the sources say about a "project accountant" (no document names the role); deepseek-flash's
+answers on q36-q39 said so plainly in the run read, with n too small to say that always holds.
+
+**Coverage, payment certification:** PM2024 §9.1 already covers certification (C) and joint inspection (F); the live question missed it because no document
+says "IPC" (`index.QUERY_TERMS`). Added GPMCM (Ministry of Finance guide, Feb 2017, chapters 4-10 word for word, `scripts/gpmcm_extract.py`): §8.3.3 lists "unsupported
+or undocumented costs" as a ground for withholding. It is non-binding and predates the 2024 rules: at most 2 passages per question, always with PM2024/PG2024 §9.1 (without
+this it filled every slot and the model invented rules), and a fixed note in code. Not found: NPC's own Contract Management Guidelines (PG2024 §1.4(c), not in the NPC manifest), the works SBD.
+**Follow-ups:** the page sends its last 2 turns (`history`); one extra model call rewrites the question; the server stores nothing; the page shows "Read as: ...".
 
 ## Gazette retrieval (scripts/)
 - documents.gov.lk generic server action (same id as `scripts/scrape_bills.py`) with `apiEndpoint=.../extra-gazette/get-all` and a

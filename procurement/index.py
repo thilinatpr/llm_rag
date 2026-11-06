@@ -28,6 +28,9 @@ ACRONYMS = {"PC": "Procurement Committee", "BEC": "Bid Evaluation Committee", "A
             "SBD": "Standard Bidding Document", "CAPC": "Cabinet Appointed Procurement Committee"}
 
 
+# Words users type that the documents never use, any case: no passage says "IPC", they say "interim payment".
+_IPC = "interim payment certificate certified certification"
+QUERY_TERMS = {"ipc": _IPC, "ipcs": _IPC, "block": "withhold withholding", "blocks": "withhold withholding", "stop": "withhold withholding"}
 HIERARCHICAL = {"PG2024", "PM2024", "PG2006", "PM2006"}  # documents whose refs nest by dots
 
 
@@ -118,7 +121,10 @@ class Index:
         self.docs = {r["id"]: dict(r) for r in self.db.execute("SELECT * FROM docs")}
 
     def bm25(self, query, limit=40, docs=None):
-        q = fts_query(" ".join(f"{w} {ACRONYMS.get(w.strip('?.,;:!()'), '')}" for w in query.split()))
+        def expand(w):
+            bare = w.strip("?.,;:!()")
+            return f"{w} {ACRONYMS.get(bare, '')} {QUERY_TERMS.get(bare.lower(), '')}"
+        q = fts_query(" ".join(expand(w) for w in query.split()))
         if not q:
             return []
         sql = ("SELECT c.id, bm25(chunks_fts) AS s FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid "

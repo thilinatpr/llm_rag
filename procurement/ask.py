@@ -9,14 +9,17 @@ import time
 from dataclasses import dataclass, field
 
 from .index import HIERARCHICAL
-from .sources import ALL, CURRENT, DOCS
+from .sources import ALL, CURRENT, DOCS, GUIDANCE, UNOFFICIAL
 
 # "supplement N" is NOT an old-regime marker any more: NPC's Supplements 01-07 (2025-26) are current.
 OLD = re.compile(r"\b2006\b|before\s+(?:1st\s+)?jan\w*\s+2025|before\s+2025|pre-?2025|\bold\s+(?:guidelines|manual|rules)"
                  r"|\bNPA\b|national\s+procurement\s+agency|transition|\bTEC\b|\bCAPC\b", re.I)
 _IDS = "|".join(sorted((d["id"] for d in DOCS), key=len, reverse=True))
 _CANON = {d["id"].lower(): d["id"] for d in DOCS}
-TRANSLATED = {d["id"] for d in DOCS if d.get("note")}  # our own translations of Sinhala-only circulars (FRA, PFC0120)
+TRANSLATED = {d["id"] for d in DOCS if d.get("note") == UNOFFICIAL}  # our own translations of Sinhala-only circulars (FRA, PFC0120)
+NON_BINDING = {d["id"] for d in DOCS if d.get("note") == GUIDANCE}
+NON_BINDING_NOTE = ("Note: {docs} is non-binding guidance from 2017, written before the 2024 Guidelines; "
+                    "the contract's own conditions and PG2024/PM2024 prevail.")
 TRANSLATION_NOTE = ("Note: {docs} {verb} an unofficial English translation of Sinhala Treasury circulars made for this tool; "
                     "the Sinhala text is authoritative.")  # citations are matched case-insensitively ("PFC0326i")
 CITE = re.compile(rf"\b({_IDS})\b(?:\s*(?:§|Art(?:icle)?\.?)\s*(Definitions|156[A-Z]|\d{{1,2}}(?:\.\d{{1,2}}){{0,3}})"
@@ -58,6 +61,10 @@ Sources:
   FRA passage and the 1992 FR text differ, FRA is the current rule; give its date. Cite amended text as [FRA 108], never as
   [FR 108], and give the current amount, not one marked "before". If an FR passage you use says it was amended
   and the amendment is not shown, say the amount may be out of date.
+- GPMCM = Ministry of Finance Guide to Project Management and Contract Management (Works), February 2017, cited [GPMCM §8.3]. NON-BINDING
+  guidance on contract administration, written mainly for FIDIC/ICTAD contracts and before the 2024 Guidelines: when you rely on it, say
+  it is guidance; it never overrides PG2024, PM2024 or the contract. NPC's own Contract Management Guidelines (PG2024 §1.4(c), §9.1) are
+  not among these sources: if a question turns on them or on the contract's conditions, say so.
 - LCC2026 = NPC Guidance Note on Life Cycle Cost / Total Cost of Ownership. ESM2026 = NPC Sector Specific Procurement Manual
   2026 for investor selection in electricity generation, storage, transmission and ancillary services (from 22.10.2026).
 
@@ -90,6 +97,7 @@ class Answer:
     warnings: list = field(default_factory=list)
     docs: tuple = CURRENT
     seconds: float = 0.0
+    standalone: str = ""  # what a follow-up was rewritten to; empty when the question was used as asked
 
     def sources(self):
         return [f"{e['label']} {e['heading']} (p. {e['page']})" for e in self.evidence]
@@ -131,6 +139,8 @@ def window(parts, hit, max_chars):
 XREF = re.compile(r"\b(guidelines?|(?:sub-?)?clauses?|paragraphs?|paras?\.?|sections?)\s+"
                   r"(\d{1,2}(?:\.\d{1,2}){1,3}(?:\s*(?:,|and|or|&)\s*\d{1,2}(?:\.\d{1,2}){1,3})*)", re.I)
 MAX_XREF = 3  # extra clauses added through pointers, in all
+MAX_GUIDE = 2  # non-binding passages per question: a live test filled every slot with them and the answer invented the rules
+GUIDE_BINDING = (("PM2024", "9.1"), ("PG2024", "9.1"))  # contract management in the rules themselves
 
 
 def xrefs(doc, text):
@@ -160,9 +170,16 @@ def gather(index, question, k=8, docs=CURRENT, max_units=10, max_chars=3500, fir
                           page=parts[0]["page"], label=label(doc, ref), text=window(parts, hit, max_chars), note=note,
                           chain=index.chain(doc, ref)))
 
+    guide_shown = 0
     for doc, ref in first:  # always shown, e.g. PG2024 §1.4 (the transition rule) for questions about the old regime
         add(doc, ref)
     for c in index.search(question, k=k, docs=docs):
+        if c["doc"] in NON_BINDING:  # guidance never crowds out the rules, and always comes with the binding clause on the subject
+            if guide_shown >= MAX_GUIDE:
+                continue
+            guide_shown += 1
+            for doc, ref in GUIDE_BINDING:
+                add(doc, ref)
         add(c["doc"], c["ref"], c["heading"], hit=c["part"])
         for sup in index.supplements_for(c["doc"], c["ref"]):  # the supplement that changes this section comes right after it
             add(sup["doc"], sup["ref"], sup["heading"], cap=max_units + 3)
@@ -249,17 +266,68 @@ def broken(text):
     return None
 
 
-def ask(index, llm, question, k=8, effort="low", docs=None):
+CONDENSE = """Rewrite the follow-up as one standalone question that can be understood without the conversation. Keep the roles,
+amounts, document names and clause numbers the user is talking about. Do not answer it and add no facts. If it is already
+standalone, return it unchanged. If it only reacts to the last answer ("that is not clear"), ask again what the last question asked,
+and say what the user found unsettled. Return ONLY the question.
+
+CONVERSATION:
+{history}
+
+FOLLOW-UP: {question}"""
+MAX_HISTORY = 2  # turns
+MAX_HISTORY_QUESTION, MAX_HISTORY_ANSWER = 1000, 1500
+
+
+def clean_history(history):
+    """The last turns of the conversation as sent by the page, or [] for anything malformed. The browser owns this data, so it is
+    only used to rewrite that user's own question; it is never shown to the model as evidence and never cited."""
+    if not isinstance(history, list):
+        return []
+    out = []
+    for t in history[-MAX_HISTORY:]:
+        if isinstance(t, dict) and isinstance(t.get("question"), str) and isinstance(t.get("answer"), str) and t["question"].strip():
+            out.append({"question": t["question"].strip()[:MAX_HISTORY_QUESTION], "answer": t["answer"].strip()[:MAX_HISTORY_ANSWER]})
+    return out
+
+
+def condense(llm, question, history, effort="low"):
+    """A follow-up as a standalone question, one model call. Returns (question, warning). On failure it searches on the last question
+    plus the follow-up: "It's not conclusive" alone retrieved appeal clauses and got an off-topic answer."""
+    fallback = f"{history[-1]['question']} {question}"
+    from billrag.pipeline import strip_reasoning
+    hist = "\n".join(f"Q: {t['question']}\nA: {t['answer']}" for t in history)
+    try:
+        reply = llm.chat("You rewrite questions.", [{"role": "user", "content": CONDENSE.format(history=hist, question=question)}],
+                         max_tokens=600, effort=effort)
+    except Exception as e:
+        return fallback, f"follow-up not rewritten: {type(e).__name__}"
+    text, leaked = strip_reasoning(reply.text)
+    text = " ".join(text.split()).strip('"')
+    if leaked or reply.truncated or broken(text) or not text or len(text) > MAX_HISTORY_QUESTION:
+        return fallback, "follow-up not rewritten: unusable model output"
+    return text, None
+
+
+def ask(index, llm, question, k=8, effort="low", docs=None, history=None):
     from billrag.pipeline import strip_reasoning
     t = time.time()
-    old = bool(OLD.search(question))
-    docs = docs or (ALL if old else CURRENT)
-    res = Answer(question, docs=docs)
-    res.evidence = gather(index, question, k=k, docs=docs, first=[("PG2024", "1.4")] if old else ())
+    res = Answer(question)
+    history = clean_history(history)
+    query = question
+    if history:
+        query, warn = condense(llm, question, history, effort)
+        if warn:
+            res.warnings.append(warn)
+        elif query != question:
+            res.standalone = query
+    old = bool(OLD.search(query))
+    res.docs = docs = docs or (ALL if old else CURRENT)
+    res.evidence = gather(index, query, k=k, docs=docs, first=[("PG2024", "1.4")] if old else ())
     if not res.evidence:
         res.answer = "I could not find anything about this in the Procurement Guidelines or Manual."
         return res
-    user = f"Question: {question}\n\nPassages:\n\n{render(res.evidence)}"
+    user = f"Question: {query}\n\nPassages:\n\n{render(res.evidence)}"
     for attempt in range(2):
         reply = llm.chat(SYSTEM, [{"role": "user", "content": user}], max_tokens=2500, effort=effort)
         answer, leaked = strip_reasoning(reply.text)
@@ -279,6 +347,9 @@ def ask(index, llm, question, k=8, effort="low", docs=None):
     used = sorted({_CANON.get(d.lower(), d) for d, _, _ in CITE.findall(res.answer)} & TRANSLATED)
     if used and "unofficial" not in res.answer.lower():  # the model forgets to say so; this must never depend on it
         res.answer += "\n\n" + TRANSLATION_NOTE.format(docs=" and ".join(used), verb="are" if len(used) > 1 else "is")
+    guide = sorted({_CANON.get(d.lower(), d) for d, _, _ in CITE.findall(res.answer)} & NON_BINDING)
+    if guide:  # as with translations, this must never depend on the model remembering
+        res.answer += "\n\n" + NON_BINDING_NOTE.format(docs=" and ".join(guide))
     bad = verify(res.answer, res.evidence)
     if bad:
         res.warnings.append("unsupported citations: " + ", ".join(bad))

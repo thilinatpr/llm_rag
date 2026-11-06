@@ -32,7 +32,7 @@ export async function logAsk(env, ctx, { question, response, ms, status }) {
     let body = null;
     try { body = await response.json(); } catch { /* not JSON: log the status only */ }
     const now = new Date();
-    const rec = { ts: now.toISOString(), question, status, ms, answer: body?.answer ?? null, sources: body?.sources ?? [],
+    const rec = { ts: now.toISOString(), type: "ask", question, standalone: body?.standalone || null, status, ms, answer: body?.answer ?? null, sources: body?.sources ?? [],
                   warnings: body?.warnings ?? [], error: body?.error ?? null };
     const key = `procurement-logs/${now.toISOString().slice(0, 10)}/${now.toISOString().slice(11, 23).replace(/[:.]/g, "")}-${crypto.randomUUID().slice(0, 8)}.json`;
     await env.LOGS.put(key, JSON.stringify(rec), { httpMetadata: { contentType: "application/json" } });
