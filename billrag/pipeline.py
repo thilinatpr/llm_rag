@@ -195,6 +195,7 @@ class Pipeline:
         self._last_cut = False  # did the last _llm reply hit max_tokens
         self._glossary = None  # loaded on first non-English question
         self.history = []
+        self.last = None  # the previous Result of this conversation (for "answer that in Tamil")
         self.emit = None  # optional emit(kind, data): "status" (step name), "token" (answer text), "reset" (drop the draft)
 
     # ------------------------------------------------------------ steps
@@ -509,6 +510,54 @@ class Pipeline:
 
     # ------------------------------------------------------------ driver
     def ask(self, question: str) -> Result:
+        """One turn. A bare "in Tamil" / "answer in English" re-renders the previous answer (no search); anything else goes
+        through the translation layer."""
+        target = translate.language_switch(question) if self.last is not None and self.translate_mode != "off" else None
+        res = self.switch_language(question, target) if target else self.ask_translated(question)
+        self.last = res
+        return res
+
+    def last_english(self, last):
+        """The previous answer in English: kept for English/translated answers; a direct local-language answer is translated back."""
+        if last.path in ("translated", "language_switch") and last.answer_en:
+            return last.answer_en
+        if last.path == "direct":
+            return self.translator.to_english(last.answer, last.lang)
+        return last.answer
+
+    def switch_language(self, question, target):
+        """The user only asked for the previous answer in another language: translate it again, with the same official terms."""
+        last, tr = self.last, self.translator
+        tr.calls = 0
+        res = Result(question=question, answer="", lang=target, evidence=list(last.evidence), enough=True, path="language_switch")
+        self._step("translate_out")
+        t = time.time()
+        english = self.last_english(last)
+        if not english:
+            res.answer = last.answer
+            res.warnings.append("could not translate the previous answer; showing it unchanged")
+        elif target == "en":
+            res.answer = res.answer_en = english
+        else:
+            res.answer_en = english
+            refs = self.official_texts(res.evidence, target)
+            terms = self.glossary_terms(res.evidence, target, res)
+            out, reasons = tr.from_english(english, target, [(f"{k} \u00a7{n}", x) for k, n, x in refs],
+                                           gloss.terms_block(terms, translate.language_name(target)))
+            res.official = [(k, n) for k, n, _ in refs]
+            if out:
+                res.answer, fixes = translate.fix_quotes(out, [x for _, _, x in refs], code=target if refs else None)
+                res.quote_fixes += fixes
+            else:
+                res.answer = english
+                res.warnings.append(f"could not translate the answer into {translate.language_name(target)} reliably "
+                                    f"({'; '.join(reasons) or 'no output'}); showing English")
+        res.seconds["translate_out"] = time.time() - t
+        res.llm_calls = tr.calls
+        self.history.append((question, english or last.answer))
+        return res
+
+    def ask_translated(self, question: str) -> Result:
         """Translation layer around `_ask`: any language -> English -> pipeline -> answer in the question's language."""
         tr = self.translator
         mode, lang, q_en, t = self.translate_mode, "en", question, time.time()

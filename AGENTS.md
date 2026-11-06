@@ -703,8 +703,18 @@ that match exactly and sections within the 0.4-2.5x length ratio, store in `loca
 mine a Tamil glossary (short titles, interpretation sections), then generalise the `lang == "si"` gates in `pipeline.py`/`translate.py` (direct
 path, glossary hints, `fix_quotes`, `check_script` already knows Tamil) and re-upload the index to R2. Risk to manage: a quotation would carry any
 OCR misreading as "official wording", so keep the confidence filter and drop unlinked sections; with no Tamil eval set and no Tamil reviewer the
-quality stays unmeasured until a native speaker reads ~20 answers. Cheap interim steps: say on the page that Tamil answers are machine-translated
-from English, and fix the "answer that in <language>" follow-up.
+quality stays unmeasured until a native speaker reads ~20 answers. Interim steps (written 2026-11-06, see below; deployed only when the "Deployed vs main" paragraph says so):
+- **Machine-translation note:** `translate.machine_note` / `MACHINE_NOTE` (ta, si): `web.py` appends an italic line under a Tamil or Sinhala
+  answer that was translated from the English answer (`path` translated or language_switch, and the answer really is in that language);
+  never for English, never for a direct Sinhala answer written from official text. The two texts were written by the assistant and are NOT
+  reviewed by a speaker.
+- **"Answer that in Tamil/Sinhala/English" follow-ups:** `translate.language_switch` recognises a short message that only names a language
+  (plus filler like "can you say this in", "pls", "kiyanna", Sinhala/Tamil script variants; any other word, a second language, or more than 8
+  words means it is a real question). With a previous answer in the chat, `Pipeline.switch_language` re-renders it (`path = "language_switch"`,
+  one translate-out call, no search, same evidence/sources, official Sinhala terms when the target is Sinhala); "english" needs no call unless
+  the previous answer was a direct Sinhala one (then it is translated back). A failed translation shows the English with a warning.
+- **Languages are not advertised** (owner's decision 2026-11-06, see DESIGN.md principle 6): the chat page's placeholder and start text no longer
+  say "Sinhala, Tamil or English". The capability stays quiet.
 
 ## Bill metadata (`billrag/meta.py`, tables `bill_meta`, `section_refs`)
 

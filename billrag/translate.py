@@ -48,6 +48,63 @@ def detect(text):
     return "en"
 
 
+# ---- "answer that in Tamil" follow-ups ---------------------------------------------------------------------------------
+# A short message that only names a language (optionally with filler like "can you say this in ...") asks for the PREVIOUS answer
+# in that language. Without this it was searched as a new question (live: "In tamil" after a budget answer searched "can you say
+# this in Tamil?" and answered about the "Sinhala text shall prevail" clause). Anything else in the message (a bill, a topic) means
+# it is a real question: "tamil bill", "is english an official language" are not switches.
+LANG_WORDS = {
+    "en": {"english", "inglish", "ingrisi", "ingreesi", "\u0d89\u0d82\u0d9c\u0dca\u200d\u0dbb\u0dd3\u0dc3\u0dd2",
+           "\u0d89\u0d82\u0d9c\u0dca\u200d\u0dbb\u0dd3\u0dc3\u0dd2\u0dba\u0dd9\u0db1\u0dca",
+           "\u0b86\u0b99\u0bcd\u0b95\u0bbf\u0bb2\u0bae\u0bcd", "\u0b86\u0b99\u0bcd\u0b95\u0bbf\u0bb2\u0ba4\u0bcd\u0ba4\u0bbf\u0bb2\u0bcd"},
+    "si": {"sinhala", "sinhalese", "sinhalen", "sinhalenma", "singhala", "\u0dc3\u0dd2\u0d82\u0dc4\u0dbd", "\u0dc3\u0dd2\u0d82\u0dc4\u0dbd\u0dd9\u0db1\u0dca",
+           "\u0dc3\u0dd2\u0d82\u0dc4\u0dbd\u0dd9\u0db1\u0dca\u0db8", "\u0b9a\u0bbf\u0b99\u0bcd\u0b95\u0bb3\u0bae\u0bcd", "\u0b9a\u0bbf\u0b99\u0bcd\u0b95\u0bb3\u0ba4\u0bcd\u0ba4\u0bbf\u0bb2\u0bcd"},
+    "ta": {"tamil", "tamilil", "thamil", "demala", "demalen", "\u0daf\u0dd9\u0db8\u0dc5", "\u0daf\u0dd9\u0db8\u0dc5\u0dd9\u0db1\u0dca",
+           "\u0daf\u0dd9\u0db8\u0dc5\u0dd9\u0db1\u0dca\u0db8", "\u0ba4\u0bae\u0bbf\u0bb4\u0bcd", "\u0ba4\u0bae\u0bbf\u0bb4\u0bbf\u0bb2\u0bcd", "\u0ba4\u0bae\u0bbf\u0bb4\u0bbf\u0bb2\u0bc1\u0bae\u0bcd"},
+}
+SWITCH_FILLER = {
+    "in", "into", "to", "say", "tell", "answer", "reply", "give", "write", "me", "it", "this", "that", "please", "pls", "plz",
+    "again", "also", "translate", "can", "could", "you", "the", "same", "version", "mata", "eka", "denna", "kiyanna", "kiyala",
+    "puluwanda", "puluwan", "once", "more",
+    "\u0d9a\u0dd2\u0dba\u0db1\u0dca\u0db1", "\u0daf\u0dd9\u0db1\u0dca\u0db1", "\u0db4\u0dd2\u0dc5\u0dd2\u0dad\u0dd4\u0dbb", "\u0db4\u0dd4\u0dc5\u0dd4\u0dc0\u0db1\u0dca\u0daf",
+    "\u0db8\u0da7", "\u0db8\u0dd9\u0dba", "\u0d91\u0dba", "\u0d9a\u0dbb\u0db1\u0dca\u0db1", "\u0db4\u0dbb\u0dd2\u0dc0\u0dbb\u0dca\u0dad\u0db1\u0dba",
+    "\u0b9a\u0bca\u0bb2\u0bcd\u0bb2\u0bc1\u0b99\u0bcd\u0b95\u0bb3\u0bcd", "\u0b9a\u0bca\u0bb2\u0bcd\u0bb2\u0bc1", "\u0ba4\u0bbe\u0bb0\u0bc1\u0b99\u0bcd\u0b95\u0bb3\u0bcd",
+    "\u0ba4\u0bb0\u0bb5\u0bc1\u0bae\u0bcd", "\u0baa\u0ba4\u0bbf\u0bb2\u0bcd", "\u0b87\u0ba4\u0bc8", "\u0ba4\u0baf\u0bb5\u0bc1\u0b9a\u0bc6\u0baf\u0bcd\u0ba4\u0bc1",
+    "\u0bae\u0bc1\u0b9f\u0bbf\u0baf\u0bc1\u0bae\u0bbe", "\u0bae\u0bca\u0bb4\u0bbf\u0baa\u0bc6\u0baf\u0bb0\u0bcd\u0b95\u0bcd\u0b95\u0bb5\u0bc1\u0bae\u0bcd",
+}
+_WORD = re.compile(r"[a-z0-9\u0b80-\u0bff\u0d80-\u0dff\u200d]+")
+
+
+def language_switch(text):
+    """-> 'en' | 'si' | 'ta' when `text` only asks for the previous answer in that language, else None."""
+    words = _WORD.findall((text or "").lower())
+    if not words or len(words) > 8:
+        return None
+    named = {code for code, names in LANG_WORDS.items() for w in words if w in names}
+    if len(named) != 1:
+        return None
+    rest = [w for w in words if not any(w in names for names in LANG_WORDS.values())]
+    return named.pop() if all(w in SWITCH_FILLER for w in rest) else None
+
+
+# Shown under answers that are a machine translation of the English answer (not written from the bill's own text). Written by the
+# assistant, NOT reviewed by a speaker yet. Never shown for English answers or for answers built from official text.
+MACHINE_NOTE = {
+    "ta": "\u0b87\u0ba4\u0bc1 \u0b86\u0b99\u0bcd\u0b95\u0bbf\u0bb2\u0baa\u0bcd \u0baa\u0ba4\u0bbf\u0bb2\u0bbf\u0bb2\u0bbf\u0bb0\u0bc1\u0ba8\u0bcd\u0ba4\u0bc1 \u0b87\u0baf\u0ba8\u0bcd\u0ba4\u0bbf\u0bb0\u0bae\u0bcd \u0bae\u0bc2\u0bb2\u0bae\u0bcd \u0bae\u0bca\u0bb4\u0bbf\u0baa\u0bc6\u0baf\u0bb0\u0bcd\u0b95\u0bcd\u0b95\u0baa\u0bcd\u0baa\u0b9f\u0bcd\u0b9f\u0ba4\u0bc1. "
+          "\u0b9a\u0bb0\u0bbf\u0baf\u0bbe\u0ba9 \u0b9a\u0bca\u0bb1\u0bcd\u0b95\u0bb3\u0bc1\u0b95\u0bcd\u0b95\u0bc1 \u0bae\u0b9a\u0bcb\u0ba4\u0bbe\u0bb5\u0bbf\u0ba9\u0bcd \u0b85\u0ba4\u0bbf\u0b95\u0bbe\u0bb0\u0baa\u0bcd\u0baa\u0bc2\u0bb0\u0bcd\u0bb5 \u0b89\u0bb0\u0bc8\u0baf\u0bc8\u0baa\u0bcd \u0baa\u0bbe\u0bb0\u0bcd\u0b95\u0bcd\u0b95\u0bb5\u0bc1\u0bae\u0bcd.",
+    "si": "\u0db8\u0dd9\u0dba \u0d89\u0d82\u0d9c\u0dca\u200d\u0dbb\u0dd3\u0dc3\u0dd2 \u0db4\u0dd2\u0dc5\u0dd2\u0dad\u0dd4\u0dbb\u0d9a\u0dd2\u0db1\u0dca \u0dba\u0db1\u0dca\u0dad\u0dca\u200d\u0dbb\u0dba\u0dd9\u0db1\u0dca \u0db4\u0dbb\u0dd2\u0dc0\u0dbb\u0dca\u0dad\u0db1\u0dba \u0d9a\u0dbb\u0db1 \u0dbd\u0daf\u0dca\u0daf\u0d9a\u0dd2. "
+          "\u0db1\u0dd2\u0dc0\u0dd0\u0dbb\u0daf\u0dd2 \u0dc0\u0da0\u0db1 \u0dc3\u0db3\u0dc4\u0dcf \u0db4\u0db1\u0dad\u0dca \u0d9a\u0dd9\u0da7\u0dd4\u0db8\u0dca\u0db4\u0dad\u0dda \u0db1\u0dd2\u0dbd \u0db4\u0dcf\u0da8\u0dba \u0db6\u0dbd\u0db1\u0dca\u0db1.",
+}
+
+
+def machine_note(lang, path, answer):
+    """Text to show under a machine-translated answer, else None. `answer` must really be in `lang` (a failed translation shows
+    English and needs no note)."""
+    if path in ("translated", "language_switch") and lang in MACHINE_NOTE and detect(answer or "") == lang:
+        return MACHINE_NOTE[lang]
+    return None
+
+
 MODES = ("off", "script", "ai")
 
 DETECT_AND_TRANSLATE = ("You prepare questions about Sri Lankan bills for an English-only search engine. Identify the language of "
