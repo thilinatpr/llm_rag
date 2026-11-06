@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 
 import pytest
 
@@ -1564,7 +1565,7 @@ def test_calltrace_records_only_inside_a_trace_and_restores_the_outer_one():
         calltrace.record("ai_run", 0.2, n=3)
     assert [c["kind"] for c in outer.calls] == ["chat", "ai_run"] and [c["kind"] for c in inner.calls] == ["bm25"]
     assert outer.calls[0]["step"] == "a" and "retries" not in outer.calls[0] and outer.calls[0]["out"] == 10
-    assert calltrace._active is None
+    assert calltrace._active.get() is None
     assert calltrace.usage_fields({"prompt_tokens": 5, "completion_tokens": 7,
                                    "completion_tokens_details": {"reasoning_tokens": 3}}) == {"in": 5, "out": 7, "reasoning": 3}
     assert calltrace.usage_fields(type("U", (), {"input_tokens": 4, "output_tokens": 2})()) == {"in": 4, "out": 2}
@@ -1971,3 +1972,179 @@ def test_translate_in_prompts_ask_for_literal_translation():
     for prompt in (translate.TO_EN, translate.DETECT_AND_TRANSLATE):
         assert "when you know it" not in prompt                    # that wording made the model invent real-world Act titles
         assert "Translate literally" in prompt and "NEVER add a bill number" in prompt
+
+
+# ---------------------------------------------------------------- concurrency: gate, queue, per-conversation lock
+def test_gate_limits_queues_in_order_and_rejects():
+    from billrag.gate import Busy, Gate
+    g = Gate(slots=2, max_queue=2, max_wait=5)
+    assert g.acquire()[0] == 0.0 and g.acquire()[1] == 2
+    order, positions, errors = [], [], []
+
+    def waiter(n):
+        try:
+            g.acquire(on_wait=lambda p: positions.append((n, p)))
+            order.append(n)
+        except Busy as e:
+            errors.append(str(e))
+
+    ts = []
+    for n in (1, 2):
+        t = threading.Thread(target=waiter, args=(n,))
+        t.start()
+        ts.append(t)
+        for _ in range(100):  # let it join the line before the next one, so arrival order is defined
+            if g.counts()["queued"] == n:
+                break
+            __import__("time").sleep(0.01)
+    with pytest.raises(Busy):  # third waiter: the queue (2) is full
+        g.acquire()
+    assert g.counts() == {"running": 2, "queued": 2, "max_concurrent": 2, "max_queue": 2, "rejected": 1}
+    g.release()
+    g.release()
+    for t in ts:
+        t.join(5)
+    assert order == [1, 2] and not errors
+    assert (1, 1) in positions and (2, 2) in positions
+
+
+def test_gate_gives_up_after_max_wait():
+    from billrag.gate import Busy, Gate
+    g = Gate(slots=1, max_queue=3, max_wait=0.2)
+    g.acquire()
+    with pytest.raises(Busy):
+        g.acquire()
+    assert g.counts()["queued"] == 0 and g.counts()["rejected"] == 1
+
+
+def _concurrent_app(responder, **env):
+    from billrag import web
+    app = web.App.__new__(web.App)
+    app.lock, app.sessions, app.turns = threading.Lock(), web.OrderedDict(), {}
+    app.mode, app._retr = "pipeline", None
+    app._new_responder = lambda: responder
+    return app
+
+
+def test_web_questions_overlap_but_stay_capped(monkeypatch):
+    from billrag import web
+    monkeypatch.setenv("BILLRAG_CHATLOG", "0")
+    monkeypatch.setenv("BILLRAG_MAX_CONCURRENT", "3")
+    state = {"now": 0, "peak": 0}
+    mu = threading.Lock()
+
+    def slow(q, **kw):
+        with mu:
+            state["now"] += 1
+            state["peak"] = max(state["peak"], state["now"])
+        __import__("time").sleep(0.15)
+        with mu:
+            state["now"] -= 1
+        return "ok:" + q, {}
+
+    app = _concurrent_app(slow)
+    results = []
+    ts = [threading.Thread(target=lambda i=i: results.append(app.ask(f"s{i}", f"q{i}"))) for i in range(7)]
+    t0 = __import__("time").time()
+    [t.start() for t in ts]
+    [t.join(10) for t in ts]
+    took = __import__("time").time() - t0
+    assert sorted(results) == sorted(f"ok:q{i}" for i in range(7))
+    assert state["peak"] == 3          # overlapped, but never above the cap
+    assert took < 7 * 0.15             # faster than one at a time
+    st = app.stats()
+    assert st["running"] == 0 and st["queued"] == 0 and st["max_concurrent"] == 3 and st["busy"] is False
+
+
+def test_web_one_question_per_conversation_at_a_time(monkeypatch):
+    monkeypatch.setenv("BILLRAG_CHATLOG", "0")
+    state = {"now": 0, "peak": 0}
+    mu = threading.Lock()
+
+    def slow(q, **kw):
+        with mu:
+            state["now"] += 1
+            state["peak"] = max(state["peak"], state["now"])
+        __import__("time").sleep(0.1)
+        with mu:
+            state["now"] -= 1
+        return q, {}
+
+    app = _concurrent_app(slow)
+    ts = [threading.Thread(target=app.ask, args=("same", f"q{i}")) for i in range(3)]
+    [t.start() for t in ts]
+    [t.join(10) for t in ts]
+    assert state["peak"] == 1 and app.turns["same"] == 3
+
+
+def test_web_busy_is_503_and_streams_queue_positions(monkeypatch):
+    from http.server import ThreadingHTTPServer
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError
+    from billrag import web
+    monkeypatch.setenv("BILLRAG_CHATLOG", "0")
+    monkeypatch.setenv("BILLRAG_MAX_CONCURRENT", "1")
+    monkeypatch.setenv("BILLRAG_MAX_QUEUE", "1")
+    release = threading.Event()
+
+    def blocked(q, **kw):
+        release.wait(10)
+        return "done:" + q, {}
+
+    app = _concurrent_app(blocked)
+    app._ensure()
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), web.make_handler(app))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+
+    def post(path, sid):
+        return urlopen(Request(url + path, json.dumps({"session": sid, "question": "x"}).encode(),
+                               {"Content-Type": "application/json"}), timeout=15)
+
+    try:
+        out = {}
+        t1 = threading.Thread(target=lambda: out.setdefault("a", post("/api/ask", "a").read()))
+        t1.start()
+        for _ in range(200):
+            if app._gate.counts()["running"] == 1:
+                break
+            __import__("time").sleep(0.01)
+        t2 = threading.Thread(target=lambda: out.setdefault("b", post("/api/ask/stream", "b").read().decode()))
+        t2.start()
+        for _ in range(200):
+            if app._gate.counts()["queued"] == 1:
+                break
+            __import__("time").sleep(0.01)
+        with pytest.raises(HTTPError) as e:  # slot taken, queue full
+            post("/api/ask", "c")
+        assert e.value.code == 503 and e.value.headers["Retry-After"] and json.loads(e.value.read())["busy"] is True
+        release.set()
+        t1.join(10)
+        t2.join(10)
+        assert json.loads(out["a"])["answer"] == "done:x"
+        assert "event: queue" in out["b"] and '"position": 1' in out["b"] and "event: done" in out["b"]
+    finally:
+        release.set()
+        srv.shutdown()
+
+
+def test_calltrace_is_per_thread_and_follows_copied_context():
+    import contextvars
+    from billrag import calltrace
+    seen = {}
+
+    def turn(name, delay):
+        with calltrace.tracing() as tr:
+            calltrace.step(name)
+            __import__("time").sleep(delay)
+            calltrace.record("chat", 0.1, model=name)
+            ctx = contextvars.copy_context()
+            t = threading.Thread(target=lambda: ctx.run(calltrace.record, "ai_run", 0.1, model=name + "-sub"))
+            t.start()
+            t.join()
+        seen[name] = [(c["step"], c["model"]) for c in tr.calls]
+
+    ts = [threading.Thread(target=turn, args=(n, d)) for n, d in (("a", 0.05), ("b", 0.0))]
+    [t.start() for t in ts]
+    [t.join(5) for t in ts]
+    assert seen["a"] == [("a", "a"), ("a", "a-sub")] and seen["b"] == [("b", "b"), ("b", "b-sub")]

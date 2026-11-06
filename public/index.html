@@ -249,6 +249,7 @@ async function askStream(body, el) {
       }
       let d = {}; try { d = JSON.parse(data || '{}'); } catch (e) {}
       if (kind === 'status') step(STEPS[d.step] || 'Working');
+      else if (kind === 'queue') step(d.position === 1 ? "You're next in line" : `Waiting in line: number ${d.position}`);
       else if (kind === 'reset') { if (draft) { draft = ''; el.classList.remove('draft', 'md'); step('Checking the answer and writing it again'); } }
       else if (kind === 'token') { draft += d.text || ''; if (!queued) { queued = true; requestAnimationFrame(paint); } }
       else if (kind === 'done') final = d.answer || '';

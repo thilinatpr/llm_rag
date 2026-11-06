@@ -34,6 +34,7 @@ billrag/resolve.py        question grounding before retrieval: greetings, abbrev
 billrag/chatlog.py        one JSON record per chat turn -> R2 `chatlogs/` + local JSONL; `build_id()` = hash of the running code
 billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/ask/stream, /api/search, /api/stats, /healthz); secret-gated
 billrag/resources.py      CPU/memory: `snapshot()` for /api/stats, `Usage` per request -> log field `usage` (stdlib, /proc + cgroup)
+billrag/gate.py           admission control for `serve`: N questions at once + bounded FIFO queue (503 when full)
 billrag/calltrace.py      one record per model / Workers AI call (step, model, seconds, tokens, cache hits, USD, retries) -> log fields `calls`, `cost`
 public/index.html         the chat page (static asset, served by the Worker behind the login; also used by local `serve`)
 src/worker.js             Worker entrypoint: login gate (auth.js) + forwards /api/* and /healthz to the container
@@ -360,6 +361,15 @@ Workers Paid plan. `lite` would be ~$0.002/h but was too slow in use (1/16 vCPU:
 
 No non-reasoning model beat `gpt-oss-120b` on quality, and none was more than ~3 s faster, so we stayed. Latency is dominated by the
 hosted model, not the answer length.
+
+### Concurrency (`billrag/gate.py`, `web.App.ask`)
+Questions overlap on one instance: `BILLRAG_MAX_CONCURRENT` (default 4) run at once, `BILLRAG_MAX_QUEUE` (10) wait in arrival order,
+each at most `BILLRAG_QUEUE_WAIT` s (90); beyond that HTTP 503 + `Retry-After` (stream: `error` event with `busy`). Streamed replies get
+`queue` {position} events while waiting (the page shows "Waiting in line"). One conversation runs one question at a time (per-session
+lock). `calltrace` is a ContextVar, so each turn logs only its own calls; threads started inside a turn must use
+`contextvars.copy_context()`. Log fields `queue_wait_s`, `concurrent`; `usage.cpu_s` is process-wide, so it includes other running
+turns when `concurrent` > 1. `/api/stats` has `running`, `queued`, `max_concurrent`, `max_queue`, `rejected`. Written 2026-11-06 and
+covered by offline tests only: NOT load-tested against the real container, NOT deployed. `procurement/serve.py` still has its one-question lock.
 
 ### Small-memory hosting facts
 Index: 42,696 chunks x 768 dims; `index.sqlite` 201 MB, `vectors.npz` 61 MB as float16 (114 MB float32). Server RSS ~124 MB after a
