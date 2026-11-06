@@ -4,7 +4,8 @@ Guidance for AI agents (and humans) working in this repo. See `TODO.md` for open
 
 ## What this repo is
 
-Visual design for citizenlk.com pages is in `DESIGN.md`; the homepage is `site/index.html` (static, not deployed yet).
+Visual design for citizenlk.com pages is in `DESIGN.md`; the homepage is `site/index.html` (static, not deployed yet); the chat page
+(`public/index.html`) and sign-in page (`LOGIN_PAGE` in `src/auth.js`) follow it.
 
 `billrag`: an agentic, hybrid-retrieval chat engine over Sri Lankan parliamentary bills from
 documents.gov.lk. The three `*.ipynb` notebooks are older LangChain/OpenAI RAG experiments (Colab); the live code is

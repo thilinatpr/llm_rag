@@ -1,64 +1,130 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sri Lanka Bills Chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bill Assistant - citizenlk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Abhaya+Libre:wght@700;800&family=Yaldevi:wght@400;500&family=Catamaran:wght@500&display=swap">
 <style>
-  :root { color-scheme: light dark; --bg:#fff; --fg:#1a1a1a; --mut:#6b6b6b; --line:#ddd; --me:#e8f0fe; --bot:#f5f5f5; --acc:#1a56db; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#121212; --fg:#eee; --mut:#999; --line:#333; --me:#1e2a44; --bot:#1e1e1e; --acc:#6ea0ff; } }
+  /* citizenlk look: see DESIGN.md (tokens, type, petal border) */
+  :root { color-scheme: light dark;
+    --lime:#F4F2EE; --ink:#1C1511; --muted:#6E6157; --line:#DAD3CA; --box:#FFFFFF; --sindoor:#A3241B; --ochre:#E0A93A; --err:#B3261E;
+    --f-display:"Abhaya Libre","Noto Serif Sinhala",Georgia,serif;
+    --f-body:"Yaldevi","Noto Sans Sinhala","Noto Sans Tamil","Segoe UI",system-ui,sans-serif;
+    --gl:max(16px,env(safe-area-inset-left,0px)); --gr:max(16px,env(safe-area-inset-right,0px));
+    --padl:max(var(--gl),calc((100% - 700px) / 2)); --padr:max(var(--gr),calc((100% - 700px) / 2)); }
+  @media (prefers-color-scheme: dark) { :root {
+    --lime:#15100D; --ink:#F1E6D6; --muted:#B3A391; --line:#3A2D24; --box:#211913; --sindoor:#E0675A; --ochre:#E8B550; --err:#FF8A80; } }
   * { box-sizing: border-box; }
-  body { margin:0; font:16px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg); display:flex; flex-direction:column; height:100dvh; }
-  header { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:12px; }
-  header h1 { font-size:1rem; margin:0; }
-  label { font-size:.85rem; color:var(--mut); white-space:nowrap; }
-  select { font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:1px 4px; }
-  #log { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; }
-  .msg { max-width:46rem; padding:10px 14px; border-radius:10px; white-space:pre-wrap; overflow-wrap:anywhere; }
-  .me { background:var(--me); align-self:flex-end; }
-  .bot { background:var(--bot); align-self:flex-start; }
-  .err { color:#d33; }
-  form { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--line); }
-  input[type=text] { flex:1; padding:10px 12px; font:inherit; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); }
-  button { padding:10px 16px; font:inherit; border:0; border-radius:8px; background:var(--acc); color:#fff; cursor:pointer; }
-  button:disabled { opacity:.5; cursor:default; }
-  .hint { color:var(--mut); font-size:.9rem; }
+  html, body { height:100%; }
+  body { margin:0; font:400 1rem/1.65 var(--f-body); background:var(--lime); color:var(--ink); display:flex; flex-direction:column; }
+  a { color:inherit; }
+  :focus-visible { outline:2px solid var(--ochre); outline-offset:3px; border-radius:4px; }
+  button, select, input { font:inherit; color:inherit; }
+  .petals { height:14px; flex:none; background:radial-gradient(circle at 50% 0,var(--sindoor) 0 7px,transparent 7.5px) 0 0/20px 14px repeat-x; }
+  header { flex:none; display:flex; align-items:center; justify-content:space-between; gap:8px 16px; flex-wrap:wrap;
+    padding:12px var(--gr) 12px var(--gl); border-bottom:1px solid var(--line); }
+  .left { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  .mark { font:800 1.35rem/1 var(--f-display); text-decoration:none; letter-spacing:-.01em; }
+  .mark b { color:var(--sindoor); font-weight:800; }
+  .name { color:var(--muted); font-size:.95rem; }
+  .hint { color:var(--muted); font-size:.85rem; }
+  .right { display:flex; align-items:center; gap:8px 14px; flex-wrap:wrap; font-size:.88rem; color:var(--muted); }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:999px; padding:2px; background:var(--box); }
+  .seg button { border:0; background:transparent; padding:4px 12px; border-radius:999px; cursor:pointer; color:var(--muted); }
+  .seg button[aria-pressed="true"] { background:var(--ink); color:var(--lime); }
+  .link { background:none; border:0; padding:0; cursor:pointer; color:var(--muted); text-decoration:underline; text-underline-offset:3px; }
+  .link:hover { color:var(--ink); }
+  .opt { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+  #log { flex:1; min-height:0; overflow-y:auto; padding:28px var(--padr) 12px var(--padl); display:flex; flex-direction:column; gap:24px; }
+  .msg { overflow-wrap:anywhere; white-space:pre-wrap; }
+  .me { align-self:flex-end; max-width:85%; background:color-mix(in srgb,var(--ink) 6%,var(--lime)); padding:10px 16px; border-radius:14px 14px 4px 14px; }
+  .bot { align-self:stretch; min-width:0; }
+  .err { color:var(--err); }
+  .cite { font-size:.84em; color:var(--sindoor); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .start { text-align:center; display:flex; flex-direction:column; align-items:center; gap:18px; padding:8vh 0 0; white-space:normal; }
+  .start h2 { font:800 clamp(2rem,6vw,2.8rem)/1.05 var(--f-display); margin:0; }
+  .start p { margin:0; color:var(--muted); max-width:34em; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+  .chip { padding:8px 16px; border:0; border-radius:6px; background:color-mix(in srgb,var(--ink) 6%,var(--lime)); cursor:pointer; font-size:.92rem; text-align:left; }
+  .chip:hover { outline:1px solid var(--line); }
+  form { flex:none; padding:12px var(--padr) 6px var(--padl); }
+  .pill { display:flex; align-items:center; gap:10px; padding:6px 6px 6px 20px; border:1px solid var(--line); border-radius:999px; background:var(--box); transition:border-color .2s, box-shadow .2s; }
+  .pill:hover, .pill:focus-within { border-color:var(--ochre); box-shadow:0 2px 10px -2px color-mix(in srgb,var(--ink) 18%,transparent); }
+  .pill svg { flex:none; color:var(--sindoor); }
+  input[type=text] { flex:1; min-width:0; border:0; background:transparent; padding:9px 0; outline:none; }
+  input[type=text]::placeholder { color:var(--muted); }
+  #send { flex:none; border:0; border-radius:999px; padding:9px 20px; background:var(--ink); color:var(--lime); cursor:pointer; font-weight:500; }
+  #send:hover { background:var(--sindoor); color:#fff; }
+  #send:disabled { opacity:.5; cursor:default; }
+  .note { flex:none; text-align:center; font-size:.78rem; color:var(--muted); margin:0; padding:0 var(--gr) calc(14px + env(safe-area-inset-bottom,0px)) var(--gl); }
   .md { white-space:normal; }
   .md p { margin:0 0 .6em; } .md > :last-child { margin-bottom:0; }
   .md ul, .md ol { margin:0 0 .6em; padding-left:1.4em; } .md li { margin:.15em 0; }
-  .md h3, .md h4 { font-size:1rem; margin:.4em 0 .3em; }
+  .md h3, .md h4 { font:700 1.15rem/1.25 var(--f-display); margin:.4em 0 .3em; }
   .md code { font:.9em ui-monospace,monospace; background:var(--line); padding:0 .25em; border-radius:4px; }
-  .md table { border-collapse:collapse; margin:0 0 .6em; font-size:.92rem; } .md td, .md th { border:1px solid var(--line); padding:3px 6px; text-align:left; }
+  .md table { border-collapse:collapse; margin:0 0 .6em; font-size:.92rem; display:block; overflow-x:auto; } .md td, .md th { border:1px solid var(--line); padding:3px 6px; text-align:left; }
   .md hr { border:0; border-top:1px solid var(--line); margin:.6em 0; }
-  .step { color:var(--mut); font-style:italic; }
-  .draft::after { content:" \25cf"; color:var(--mut); animation:blink 1s steps(2) infinite; }
+  .step { color:var(--muted); }
+  .draft::after { content:" \25cf"; color:var(--sindoor); animation:blink 1s steps(2) infinite; }
   @keyframes blink { 50% { opacity:0; } }
+  @media (prefers-reduced-motion: reduce) { .draft::after { animation:none; } }
 </style></head>
 <body>
+<div class="petals" aria-hidden="true"></div>
 <header>
-  <h1>Sri Lanka Bills Chat <small id="status" class="hint" title="Server status"></small></h1>
-  <span><label title="Fast: the model thinks less before writing (answers start in seconds). Thorough: more careful, slower.">Answer
-    <select id="speed"><option value="thorough">Thorough</option><option value="fast">Fast</option></select></label>
-  <label style="margin-left:10px"><input type="checkbox" id="searchOnly"> Search only (no LLM)</label>
-  <button id="out" type="button" title="Sign out" style="margin-left:12px;padding:4px 10px">Sign out</button></span>
+  <div class="left"><a class="mark" href="/">citizen<b>lk</b></a><span class="name">Bill Assistant</span><small id="status" class="hint" title="Server status"></small></div>
+  <div class="right">
+    <span class="seg" role="group" aria-label="Answer speed" title="Fast: starts answering in seconds. Thorough: more careful, slower.">
+      <button type="button" id="speed-thorough" data-v="thorough" aria-pressed="true">Thorough</button>
+      <button type="button" id="speed-fast" data-v="fast" aria-pressed="false">Fast</button>
+    </span>
+    <label class="opt"><input type="checkbox" id="searchOnly"> Find clauses only</label>
+    <button class="link" id="new" type="button">New chat</button>
+    <button class="link" id="out" type="button" title="Sign out">Sign out</button>
+  </div>
 </header>
-<div id="log"><div class="hint">Ask about bills from documents.gov.lk, e.g. "How does the 2026 terrorism bill limit detention?".
-Answers explain the text and are not legal advice.</div></div>
-<form id="f"><input type="text" id="q" placeholder="Ask a question..." autocomplete="off" autofocus>
-<button id="send">Send</button></form>
+<div id="log"></div>
+<form id="f"><div class="pill">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+  <input type="text" id="q" placeholder="Ask in Sinhala, Tamil or English" aria-label="Your question" autocomplete="off" autofocus>
+  <button id="send">Ask</button></div></form>
+<p class="note">Answers cite the official text · Not legal advice · Not a government service</p>
 <script>
 const log = document.getElementById('log'), q = document.getElementById('q'),
-      btn = document.getElementById('send'), so = document.getElementById('searchOnly'), speed = document.getElementById('speed');
-try { const v = localStorage.getItem('billrag-speed'); if (v === 'fast' || v === 'thorough') speed.value = v; } catch (e) {}
-speed.onchange = () => { try { localStorage.setItem('billrag-speed', speed.value); } catch (e) {} };
+      btn = document.getElementById('send'), so = document.getElementById('searchOnly');
+const speed = {value: 'thorough'};
+const speedButtons = document.querySelectorAll('.seg button');
+function setSpeed(v) {
+  speed.value = v;
+  speedButtons.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === v)));
+}
+try { const v = localStorage.getItem('billrag-speed'); if (v === 'fast' || v === 'thorough') setSpeed(v); } catch (e) {}
+speedButtons.forEach((b) => b.addEventListener('click', () => { setSpeed(b.dataset.v); try { localStorage.setItem('billrag-speed', b.dataset.v); } catch (e) {} }));
 document.getElementById('out').onclick = async () => {
   try { await fetch('/logout', {method: 'POST'}); } catch (e) {}
   location.href = '/login';
 };
 let session = null;
 try { session = localStorage.getItem('billrag-session'); } catch (e) {}
-if (!session) {
+function newSession() {
   session = Math.random().toString(36).slice(2);
   try { localStorage.setItem('billrag-session', session); } catch (e) {}
 }
+if (!session) newSession();
+const EXAMPLES = ['What is the penalty for taking hostages under the terrorism bill?',
+  'Who can cancel a visa under the new immigration bill?', 'Summarise the latest Appropriation bill'];
+function showStart() {
+  log.textContent = '';
+  const d = document.createElement('div'); d.className = 'start';
+  d.innerHTML = '<h2>Ask about a bill</h2><p>Bills from documents.gov.lk, in Sinhala, Tamil or English. Every answer names the bill and section it comes from.</p>';
+  const chips = document.createElement('div'); chips.className = 'chips';
+  EXAMPLES.forEach((t) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'chip'; b.textContent = t;
+    b.onclick = () => { q.value = t; document.getElementById('f').requestSubmit(); }; chips.appendChild(b); });
+  d.appendChild(chips); log.appendChild(d);
+}
+showStart();
+document.getElementById('new').onclick = () => { newSession(); showStart(); q.focus(); };
 function add(text, cls) {
   const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
   log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
@@ -70,7 +136,8 @@ function renderMarkdown(src) {
   const inline = (t) => {
     const codes = [];
     t = esc(t).replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
-    t = t.replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>')
+    t = t.replace(/(\[\d{3}\/\d{4}[^\]\n]*\]|\u3010[^\u3011\n]*\u3011)/g, '<span class="cite">$1</span>')
+         .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>')
          .replace(/__(?=\S)([\s\S]*?\S)__/g, '<strong>$1</strong>')
          .replace(/(^|[^\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])/g, '$1<em>$2</em>')
          .replace(/\*+/g, '');
@@ -194,7 +261,9 @@ async function askStream(body, el) {
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = q.value.trim(); if (!text) return;
-  q.value = ''; btn.disabled = true; add(text, 'me');
+  q.value = ''; btn.disabled = true;
+  const st = log.querySelector('.start'); if (st) log.textContent = '';
+  add(text, 'me');
   const label = so.checked ? 'Searching...' : 'Thinking...';
   const wait = add(label, 'bot');
   const slow = setTimeout(() => { if (wait.textContent === label) wait.textContent = label + ' still working; answers take 15-30s, longer if the server was asleep.'; }, 8000);

@@ -3,6 +3,8 @@
 Design rules for every page under citizenlk.com (homepage, Bill Assistant, Procurement Rules, later services).
 The owner approved the minimal homepage on 2026-11-06 (`site/index.html`, a standalone static page, not deployed yet);
 this file records what it uses so other pages match it. Start new pages from that file.
+Applied to the live app on 2026-11-06: the chat page `public/index.html` ("Bill Assistant") and the sign-in page
+(`LOGIN_PAGE` in `src/auth.js`) use these tokens; keep them in step with this file.
 
 ## Principles
 
@@ -49,6 +51,11 @@ Abhaya Libre and Yaldevi cover both Sinhala and Latin, so mixed-language lines m
 `lang="ta"`. Wordmark size `clamp(3.4rem, 11vw, 6.2rem)`; body 1rem / 1.6.
 
 ## Components
+
+- **Chat page:** top bar (wordmark, "Bill Assistant", Thorough | Fast switch, New chat, Sign out); one 700px column; the user's
+  message is a tinted bubble on the right, the answer is plain text on the page with citations like `[070/2026 §4(b)]` in
+  `--sindoor`; the ask box is fixed at the bottom. First screen: heading, one sentence, three example questions.
+- **Sign-in:** the home layout: wordmark, tagline, one pill form for the email, then one for the 6-digit code.
 
 - **Wordmark:** `citizen<b>lk</b>` in the display face, "lk" in `--sindoor`. Below it, muted:
   `පුරවැසි · குடிமக்கள் · Citizen`.

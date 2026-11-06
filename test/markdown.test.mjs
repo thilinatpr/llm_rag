@@ -9,8 +9,8 @@ const renderMarkdown = new Function(code + "\nreturn renderMarkdown;")();
 
 test("bold, bullets and citations render without * marks", () => {
   const out = renderMarkdown("The bill **allows** detention [070/2026 §3].\n\n* **Time limit:** 72 hours [070/2026 §5]\n* *Penalty*: a fine");
-  assert.equal(out, "<p>The bill <strong>allows</strong> detention [070/2026 §3].</p>" +
-    "<ul><li><strong>Time limit:</strong> 72 hours [070/2026 §5]</li><li><em>Penalty</em>: a fine</li></ul>");
+  assert.equal(out, '<p>The bill <strong>allows</strong> detention <span class="cite">[070/2026 §3]</span>.</p>' +
+    '<ul><li><strong>Time limit:</strong> 72 hours <span class="cite">[070/2026 §5]</span></li><li><em>Penalty</em>: a fine</li></ul>');
   assert.ok(!out.includes("*"));
 });
 
@@ -31,5 +31,10 @@ test("numbered lists, headings, tables, stray stars, code", () => {
 });
 
 test("Sinhala text and a list continuation line", () => {
-  assert.equal(renderMarkdown("- **භීෂණය** [070/2026 §3]\n  more"), "<ul><li><strong>භීෂණය</strong> [070/2026 §3] more</li></ul>");
+  assert.equal(renderMarkdown("- **භීෂණය** [070/2026 §3]\n  more"), '<ul><li><strong>භීෂණය</strong> <span class="cite">[070/2026 §3]</span> more</li></ul>');
+});
+
+test("citations are wrapped for styling, full-width brackets too, and other brackets are left alone", () => {
+  assert.equal(renderMarkdown("see 【078/2026 §13(1)】"), '<p>see <span class="cite">【078/2026 §13(1)】</span></p>');
+  assert.equal(renderMarkdown("a [note] and [1]"), "<p>a [note] and [1]</p>");
 });
