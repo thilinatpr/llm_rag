@@ -11,10 +11,14 @@ Add --pdfs SINHALA --since-year 2025 to fetch those PDFs too (needed by `python 
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from upload_r2 import INDEX_FILES, client  # noqa: E402
+from upload_r2 import INDEX_FILES, PublishError, check_pair, client  # noqa: E402
+
+PAIR_ATTEMPTS = 3
+PAIR_WAIT = 20  # seconds; a publish swaps the two files within seconds
 
 
 def main():
@@ -34,20 +38,47 @@ def main():
     root.mkdir(parents=True, exist_ok=True)
     if a.pdfs:
         fetch_pdfs(s3, a.bucket, a.prefix, root, a.pdfs.upper(), a.since_year, a.force)
-    names = (list(INDEX_FILES) if a.index else []) + (["bills.json", "bills.csv"] if a.metadata else [])
+    if a.metadata:
+        fetch_files(s3, a.bucket, a.prefix, root, ["bills.json", "bills.csv"], a.force)
+    if a.index:
+        fetch_pair(s3, a.bucket, a.prefix, root, a.force)
+    return 0
+
+
+def fetch_files(s3, bucket, prefix, root, names, force) -> int:
+    fetched = 0
     for name in names:
         dest = root / name
-        if dest.exists() and not a.force:
+        if dest.exists() and not force:
             print(f"skip {dest} (exists; use --force)", file=sys.stderr)
             continue
-        key = f"{a.prefix}/{name}"
-        size = s3.head_object(Bucket=a.bucket, Key=key)["ContentLength"]
+        key = f"{prefix}/{name}"
+        size = s3.head_object(Bucket=bucket, Key=key)["ContentLength"]
         tmp = dest.with_suffix(dest.suffix + ".part")
-        s3.download_file(a.bucket, key, str(tmp))
+        s3.download_file(bucket, key, str(tmp))
         if tmp.stat().st_size != size:
             sys.exit(f"size mismatch for {key}: got {tmp.stat().st_size}, expected {size}")
         tmp.replace(dest)
         print(f"fetched {key} -> {dest} ({size / 1e6:.0f} MB)", file=sys.stderr)
+        fetched += 1
+    return fetched
+
+
+def fetch_pair(s3, bucket, prefix, root, force, attempts=PAIR_ATTEMPTS, wait=PAIR_WAIT):
+    """Download index + vectors and check they belong together. A restore that overlaps a publish can get the old index and the new
+    vectors, and the container restores only once, so a mismatch would last until its next restart: fetch again instead."""
+    if not fetch_files(s3, bucket, prefix, root, list(INDEX_FILES), force):
+        return
+    for n in range(1, attempts + 1):
+        try:
+            check_pair(root)
+            return
+        except PublishError as e:
+            print(f"  ! index and vectors do not match (attempt {n}/{attempts}): {e}", file=sys.stderr)
+        if n < attempts:
+            time.sleep(wait)
+            fetch_files(s3, bucket, prefix, root, list(INDEX_FILES), True)
+    sys.exit(f"{prefix}/index.sqlite and vectors.npz in {bucket} do not match: re-publish them with scripts/upload_r2.py --include-index")
 
 
 def fetch_pdfs(s3, bucket, prefix, root, lang, since_year, force):
