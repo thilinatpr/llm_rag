@@ -5,6 +5,7 @@ a non-loopback host without it is refused.
 
 GET  /            public/index.html when present (local use); in production the Worker serves it
 GET  /healthz     {"ok": true} (the page polls it while a sleeping container starts)
+GET  /api/stats   CPU/memory snapshot (billrag/resources.py) + sessions, turns, build; behind the login like all /api/*
 POST /api/ask     {"session": str, "question": str} -> {"answer": str}   (needs a chat model/API key)
 POST /api/search  {"query": str, "k": int}          -> {"results": [str]} (retrieval only, no key needed)
 """
@@ -18,7 +19,8 @@ from collections import OrderedDict
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .chatlog import Timer, log_turn
+from .chatlog import Timer, build_id, log_turn
+from .resources import Usage, snapshot
 
 MAX_SESSIONS = 50
 
@@ -61,9 +63,16 @@ class App:
 
     def search(self, query, k=6):
         from .agent import fmt_passage
-        with self.lock, Timer() as tm:
+        with self.lock, Timer() as tm, Usage() as use:
             out = [fmt_passage(c, 700) for c in self._retriever().search(query, k)]
-        log_turn(type="search", question=query, k=k, results=len(out), seconds=tm.seconds)
+        log_turn(type="search", question=query, k=k, results=len(out), seconds=tm.seconds, usage=use.fields())
+        return out
+
+    def stats(self):
+        """GET /api/stats: resource snapshot plus what this server holds. Does not take the lock (answers mid-question)."""
+        out = snapshot()
+        out.update(build=build_id(), mode=self.mode, sessions=len(self.sessions), max_sessions=MAX_SESSIONS,
+                   turns=sum(self.turns.values()), busy=self.lock.locked(), retriever_loaded=self._retr is not None)
         return out
 
     def _new_responder(self):
@@ -119,7 +128,7 @@ class App:
             self.turns[session] = self.turns.get(session, 0) + 1
             turn = self.turns[session]
             err, text, meta = None, None, {}
-            with Timer() as tm:
+            with Timer() as tm, Usage() as use:
                 try:
                     text, meta = responder(question)
                     return text
@@ -128,7 +137,7 @@ class App:
                     raise
                 finally:
                     log_turn(type="ask", session=session, turn=turn, question=question, answer=text, error=err,
-                             seconds=round(time.time() - tm.t, 2), **meta)
+                             seconds=round(time.time() - tm.t, 2), usage=use.fields(), **meta)
 
 
 def make_handler(app):
@@ -162,6 +171,8 @@ def make_handler(app):
                 self._send(200, page, "text/html")
             elif self.path == "/healthz":
                 self._send(200, json.dumps({"ok": True}))
+            elif self.path == "/api/stats":
+                self._send(200, json.dumps(app.stats()))
             else:
                 self._send(404, json.dumps({"error": "not found"}))
 

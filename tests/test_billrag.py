@@ -1477,3 +1477,69 @@ def test_glossary_build_on_a_tiny_index(tmp_path):
     assert stats["title"] == 1 and [(r["kind"], r["en"], r["local"]) for r in st.glossary()] == [
         ("title", "Trusts (Amendment) Act", "භාර (සංශෝධන) පනත")]
     assert st.fingerprint() == fp  # the glossary lives outside chunks: vectors.npz stays valid
+
+
+def test_resources_snapshot_and_usage(tmp_path):
+    from billrag import resources
+    snap = resources.snapshot()
+    assert snap["cpu_s"] >= 0 and snap["peak_rss_mb"] > 0 and snap["uptime_s"] >= 0
+    with resources.Usage() as u:
+        sum(i * i for i in range(200_000))
+        inside = u.fields()  # logging from a finally block happens before __exit__
+    f = u.fields()
+    assert f["cpu_s"] >= 0 and f["peak_rss_mb"] > 0 and set(inside) == set(f)
+    # cgroup v2 files, v1 fallback, "max" = no limit, missing directory = nothing
+    (tmp_path / "memory.current").write_text("104857600\n")
+    (tmp_path / "memory.max").write_text("max\n")
+    (tmp_path / "cpu.stat").write_text("usage_usec 2500000\nnr_throttled 3\nthrottled_usec 400000\n")
+    (tmp_path / "cpu.max").write_text("25000 100000\n")
+    assert resources.cgroup(str(tmp_path)) == {"mem_mb": 100.0, "usage_s": 2.5, "nr_throttled": 3, "throttled_s": 0.4,
+                                               "cpu_limit": 0.25}
+    (tmp_path / "memory").mkdir()
+    (tmp_path / "memory" / "memory.limit_in_bytes").write_text(str(1 << 30))
+    assert resources.cgroup(str(tmp_path))["mem_limit_mb"] == 1024.0
+    assert resources.cgroup(str(tmp_path / "nope")) == {}
+
+
+def test_web_stats_endpoint_and_usage_in_log(tmp_path, monkeypatch):
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from billrag import web
+    monkeypatch.setenv("BILLRAG_LOG_DIR", str(tmp_path))
+    app = web.App.__new__(web.App)
+    app.lock, app.mode, app._retr, app.secret = threading.Lock(), "pipeline", None, "s3cret-s3cret-s3cret"
+    app.sessions, app.turns = web.OrderedDict(), {}
+    app._new_responder = lambda: (lambda q: ("ok", {}))
+    assert app.ask("s1", "hi") == "ok"
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), web.make_handler(app))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/api/stats"
+    try:
+        try:
+            urllib.request.urlopen(url)
+            raise AssertionError("stats must need the proxy secret")
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"X-Proxy-Secret": app.secret})) as r:
+            st = json.loads(r.read())
+    finally:
+        srv.shutdown()
+    assert st["sessions"] == 1 and st["turns"] == 1 and st["busy"] is False and st["rss_mb"] is not None
+    assert st["build"] and st["max_sessions"] == web.MAX_SESSIONS
+    for _ in range(50):  # the log write is on a background thread
+        files = list(tmp_path.glob("*.jsonl"))
+        if files and files[0].read_text().strip():
+            break
+        __import__("time").sleep(0.05)
+    rec = json.loads(files[0].read_text().splitlines()[0])
+    assert rec["usage"]["cpu_s"] >= 0 and rec["usage"]["rss_mb"] > 0
+
+
+def test_usage_summary_for_read_chatlogs():
+    from billrag.resources import usage_summary
+    recs = [{"usage": {"cpu_s": 1.0, "cpu_pct": 10, "rss_mb": 120.0, "peak_rss_mb": 150.0}},
+            {"usage": {"cpu_s": 3.0, "cpu_pct": 30, "rss_mb": 130.0, "peak_rss_mb": 160.0}}, {"question": "old record"}]
+    lines = usage_summary(recs)
+    assert "2 records" in lines[0] and "cpu_s" in lines[0] and "max 3 s" in lines[0] and "peak_rss_mb" in lines[1]
+    assert "no CPU/memory" in usage_summary([{"question": "q"}])[0]

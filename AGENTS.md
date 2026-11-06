@@ -27,7 +27,8 @@ billrag/enrich.py         optional: dense vectors (`embed`) and LLM bill summari
 billrag/config.py         all settings come from BILLRAG_* env vars (documented at the top of the file)
 billrag/resolve.py        question grounding before retrieval: greetings, abbreviation (PTSA) -> bill title matching, "closest bills"
 billrag/chatlog.py        one JSON record per chat turn -> R2 `chatlogs/` + local JSONL; `build_id()` = hash of the running code
-billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/search, /healthz); secret-gated in production
+billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/search, /api/stats, /healthz); secret-gated in production
+billrag/resources.py      CPU/memory: `snapshot()` for /api/stats, `Usage` per request -> log field `usage` (stdlib, /proc + cgroup)
 public/index.html         the chat page (static asset, served by the Worker behind the login; also used by local `serve`)
 src/worker.js             Worker entrypoint: login gate (auth.js) + forwards /api/* and /healthz to the container
 src/auth.js               email one-time-code login (KV codes/sessions, Cloudflare Email Service REST sender), routing
@@ -208,8 +209,9 @@ Every question the live app answers is logged (best-effort, off the request path
 (`BILLRAG_LOG_PREFIX`, `BILLRAG_LOG_DIR`; `BILLRAG_CHATLOG=0` turns it off). A record has: `ts`, `build`, `session`, `turn`, `type`
 (`ask`/`search`), `question`, `answer`, `error`, `seconds`, `mode`, `model`, `queries` (what retrieval actually searched),
 `enough` (did the grader think the evidence sufficed), `evidence` (bill, section, grade 0-3), `candidates_graded`, `warnings`
-(unsupported citations, unusable model output), `llm_calls`, `step_seconds` and `events` (resolve/retrieve/evaluate with the grader's
-"missing" text).
+(unsupported citations, unusable model output), `llm_calls`, `step_seconds`, `events` (resolve/retrieve/evaluate with the grader's
+"missing" text) and `usage` (`cpu_s` process CPU seconds during the turn, `cpu_pct` = cpu_s / wall seconds, `rss_mb`,
+`rss_delta_mb`, `peak_rss_mb`; also on `search` records).
 ```bash
 env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY python scripts/read_chatlogs.py [--since 2026-11-05] [--out logs.jsonl] [--show 20]
 ```
@@ -218,6 +220,18 @@ It prints totals, median/p90 seconds and lists: errors, "found nothing", "eviden
 a `queries` list that contains guessed bill names (grounding failure), `evidence` from the wrong bill, `enough: false` with
 long answers, `build` not matching the commit you think is live, and anything with `error`. Logs contain users' questions: handle
 them as private. Records before the first logging deploy do not exist.
+### Monitoring CPU and memory
+- **Per turn:** the `usage` field above; `read_chatlogs.py` prints median/p90/max of `cpu_s`, `cpu_pct`, `rss_mb`, `peak_rss_mb`.
+  `cpu_pct` near 25% on `basic` means the turn was CPU-bound (1/4 vCPU); low means it was waiting on Workers AI. CPU is
+  process-wide: a `search` running during an `ask` adds to it.
+- **Live snapshot:** sign in, then open `/api/stats` (forwarded like all `/api/*`; proxy secret required). It returns process
+  `rss_mb`, `peak_rss_mb`, `cpu_s`, `cpu_avg_pct` (since start, after 10 s), `threads`, `loadavg`, `machine` (/proc/meminfo
+  total/available), `cgroup` (memory usage/limit/peak, CPU usage/throttling/limit, whichever files exist), `sessions` /
+  `max_sessions`, `turns`, `busy` (a question is running), `retriever_loaded`, `build`, `uptime_s`. Opening it wakes a sleeping
+  container and resets the 15-minute idle timer, so don't poll it.
+- **Over time:** Cloudflare dashboard -> Workers & Pages -> Containers -> `gov-rag-llm-billragcontainer` has CPU/memory/disk graphs
+  per instance (not reachable from the sandbox).
+
 Worker-side errors (`upstream_failed`, with path, ms, error) go to Workers Logs (dashboard: Workers & Pages -> gov-rag-llm -> Logs;
 `[observability] enabled = true`), and container logs are enabled too.
 
