@@ -6,7 +6,7 @@ a non-loopback host without it is refused.
 GET  /            public/index.html when present (local use); in production the Worker serves it
 GET  /healthz     {"ok": true} (the page polls it while a sleeping container starts)
 GET  /api/stats   CPU/memory snapshot (billrag/resources.py) + sessions, turns, build; behind the login like all /api/*
-POST /api/ask     {"session": str, "question": str} -> {"answer": str}   (needs a chat model/API key)
+POST /api/ask     {"session": str, "question": str, "answer"?: "fast"|"thorough"} -> {"answer": str}   (needs a chat model)
 POST /api/ask/stream  same body -> text/event-stream: `status` {step}, `token` {text}, `reset` {}, then `done` {answer}
                   (the checked final answer, which replaces the streamed draft) or `error` {error}
 POST /api/search  {"query": str, "k": int}          -> {"results": [str]} (retrieval only, no key needed)
@@ -26,6 +26,10 @@ from .chatlog import Timer, build_id, log_turn
 from .resources import Usage, snapshot
 
 MAX_SESSIONS = 50
+# The page's "Answer" choice. Only these names are accepted from the browser; they map to the answer step's reasoning effort:
+# fast = "low" (first word ~1-7 s instead of ~3-27 s, measured 2026-11-06), thorough = the server default (BILLRAG_ANSWER_EFFORT,
+# unset = the model's own default). Grading and translation are not affected.
+ANSWER_MODES = ("fast", "thorough")
 
 def load_page():
     """The UI is a static file (public/index.html). In production the Worker serves it; this is for local runs."""
@@ -88,7 +92,7 @@ class App:
         if self.mode == "agent":
             from .agent import Agent
             agent = Agent(self.store, r, self._llm)
-            return lambda q, emit=None: (agent.ask(q), {"mode": "agent"})  # no streaming in agent mode
+            return lambda q, emit=None, mode=None: (agent.ask(q), {"mode": "agent"})  # no streaming or answer modes
         from .pipeline import Pipeline
         from .translate import make_translator
         events = []
@@ -97,9 +101,11 @@ class App:
                         translator=make_translator(self.s, self._llm),
                         on_event=lambda name, data: events.append({"event": name, **(data if isinstance(data, dict) else {"data": data})}))
 
-        def answer(q, emit=None):
+        def answer(q, emit=None, mode=None):
             events.clear()
-            pipe.emit = emit
+            # "fast" only when the server sends reasoning effort at all (BILLRAG_GRADE_EFFORT empty = model without it)
+            effort = "low" if mode == "fast" and self.s.grade_effort else self.s.answer_effort
+            pipe.answer_effort, pipe.emit = effort, emit
             try:
                 res = pipe.ask(q)
             finally:
@@ -121,12 +127,14 @@ class App:
                 "glossary_hints": res.glossary_hints or None, "glossary_terms": res.glossary_terms or None,
                 "added_sections": [f"{e.key} \u00a7{e.section}" for e in res.added_sections] or None,
                 "direct_rejected": res.direct_rejected or None,
+                "answer_mode": mode or "default", "answer_effort": effort,
             }
             return out, meta
         return answer
 
-    def ask(self, session, question, emit=None):
-        """emit(kind, data), optional: progress events for a streamed reply (see /api/ask/stream)."""
+    def ask(self, session, question, emit=None, mode=None):
+        """emit(kind, data), optional: progress events for a streamed reply (see /api/ask/stream).
+        mode: one of ANSWER_MODES (the page's Answer choice) or None for the server default."""
         with self.lock:
             if session not in self.sessions:
                 self.sessions[session] = self._new_responder()
@@ -139,7 +147,8 @@ class App:
             err, text, meta = None, None, {}
             with Timer() as tm, Usage() as use, calltrace.tracing() as trace:
                 try:
-                    text, meta = responder(question, emit) if emit else responder(question)
+                    kw = {k: v for k, v in (("emit", emit), ("mode", mode)) if v}
+                    text, meta = responder(question, **kw)
                     return text
                 except Exception as e:
                     err = f"{type(e).__name__}: {e}"
@@ -147,6 +156,12 @@ class App:
                 finally:
                     log_turn(type="ask", session=session, turn=turn, question=question, answer=text, error=err,
                              seconds=round(time.time() - tm.t, 2), usage=use.fields(), calls=trace.calls or None, **meta)
+
+
+def answer_mode(body):
+    """The request's `answer` field if it is a known mode, else None (server default). Never passed through raw."""
+    m = body.get("answer")
+    return m if m in ANSWER_MODES else None
 
 
 def make_handler(app):
@@ -201,18 +216,19 @@ def make_handler(app):
                     q = str(body.get("question", "")).strip()
                     if not q:
                         return self._send(400, json.dumps({"error": "empty question"}))
-                    return self._stream(str(body.get("session") or "default")[:64], q)
+                    return self._stream(str(body.get("session") or "default")[:64], q, answer_mode(body))
                 if self.path == "/api/ask":
                     q = str(body.get("question", "")).strip()
                     if not q:
                         return self._send(400, json.dumps({"error": "empty question"}))
                     sid = str(body.get("session") or "default")[:64]
-                    return self._send(200, json.dumps({"answer": app.ask(sid, q)}))
+                    mode = answer_mode(body)
+                    return self._send(200, json.dumps({"answer": app.ask(sid, q, mode=mode) if mode else app.ask(sid, q)}))
                 self._send(404, json.dumps({"error": "not found"}))
             except Exception as e:  # surface config problems (missing API key, stale vectors) in the UI
                 self._send(500, json.dumps({"error": f"{type(e).__name__}: {e}"}))
 
-        def _stream(self, sid, question):
+        def _stream(self, sid, question, mode=None):
             """Server-sent events over this response; the connection closes at the end (HTTP/1.0 handler)."""
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -231,8 +247,8 @@ def make_handler(app):
                     alive[0] = False
 
             try:
-                send("done", {"answer": app.ask(sid, question, emit=lambda k, d: send(k, {"step": d} if k == "status"
-                                                                                       else {"text": d} if k == "token" else {}))})
+                emit = (lambda k, d: send(k, {"step": d} if k == "status" else {"text": d} if k == "token" else {}))
+                send("done", {"answer": app.ask(sid, question, emit=emit, mode=mode) if mode else app.ask(sid, question, emit=emit)})
             except Exception as e:  # headers are sent already: report the error as an event
                 send("error", {"error": f"{type(e).__name__}: {e}"})
 

@@ -1777,3 +1777,35 @@ def test_web_stream_endpoint_sends_events_then_the_final_answer():
         assert events("boom") == [("error", {"error": "RuntimeError: model down"})]
     finally:
         srv.shutdown()
+
+
+def test_answer_mode_from_the_page_sets_only_the_answer_effort(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    from billrag import web
+    assert web.answer_mode({"answer": "fast"}) == "fast" and web.answer_mode({"answer": "high"}) is None
+    assert web.answer_mode({}) is None and web.answer_mode({"answer": ["fast"]}) is None
+    monkeypatch.setenv("BILLRAG_CHATLOG", "0")
+    st = make_store(tmp_path)
+
+    def app_with(grade_effort, answer_effort):
+        llm = ScriptLLM()
+        app = web.App.__new__(web.App)
+        app.s = SimpleNamespace(chat_model="m", answer_model=None, translate_model=None, grade_effort=grade_effort,
+                                answer_effort=answer_effort, translate="script")
+        app.mode, app.store, app._llm, app._retr = "pipeline", st, llm, Retriever(st)
+        app.lock, app.sessions, app.turns = threading.Lock(), web.OrderedDict(), {}
+        return app, llm
+
+    app, llm = app_with("low", None)
+    app.ask("s", "How many days does the amendment allow?", mode="fast")
+    assert llm.efforts[-1] == "low" and llm.efforts[0] == "low"  # answer call low; grading keeps its own (low) effort
+    app.ask("s", "How many days does the amendment allow?", mode="thorough")
+    assert llm.efforts[-1] is None  # server default (model default)
+    app.ask("s", "How many days does the amendment allow?")
+    assert llm.efforts[-1] is None
+    app, llm = app_with(None, None)  # server says: this model takes no reasoning effort -> fast must not send one
+    app.ask("s", "How many days does the amendment allow?", mode="fast")
+    assert llm.efforts[-1] is None
+    _text, meta = app_with("low", "medium")[0]._new_responder()("How many days does the amendment allow?", mode="fast")
+    assert meta["answer_mode"] == "fast" and meta["answer_effort"] == "low"

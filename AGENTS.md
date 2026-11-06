@@ -264,6 +264,13 @@ them as private. Records before the first logging deploy do not exist.
   its draft would be English), then `done` {answer} = the checked answer (citations verified, quotes fixed, warnings, sources),
   which replaces the draft, or `error`. Replies that start like leaked reasoning ("analysis:") are not streamed. The page falls
   back to `/api/ask` on a 404 (an older container during a rollout). The Worker passes the stream through unchanged.
+- **Answer speed choice on the page** ("Answer: Thorough | Fast", remembered per browser): requests carry `answer`, and only
+  `web.ANSWER_MODES` names are accepted. `fast` = reasoning effort `low` for the answer call only (grading, translation unchanged),
+  and only when the server sends effort at all (`BILLRAG_GRADE_EFFORT` non-empty); `thorough` / missing = the server default
+  (`BILLRAG_ANSWER_EFFORT`, unset = model default). Logged as `answer_mode` and `answer_effort`. First live check (Sinhala
+  cricket question, fast): answer call 5.1 s, first word 0.8 s, 35 reasoning chars, direct path, no warnings; 20.6 s in total.
+  Sinhala answer quality with `fast` is not measured beyond a handful of runs: compare `direct_fallback` / `warnings` by
+  `answer_mode` in the logs.
 - **Over time:** Cloudflare dashboard -> Workers & Pages -> Containers -> `gov-rag-llm-billragcontainer` has CPU/memory/disk graphs
   per instance (not reachable from the sandbox).
 
