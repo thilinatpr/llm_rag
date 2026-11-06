@@ -1,6 +1,13 @@
 import json
+import os
 
 import pytest
+
+# Chat logs are written on background threads and uploaded to R2 whenever R2_* variables are set, and the cloud sandbox has
+# real ones: on 2026-11-06 test runs put ~25 fake records ("hi", session s1) into the production chatlogs/. Remove them for the
+# whole test process (a per-test monkeypatch is undone before those threads run). Tests that need R2 stub chatlog._r2.
+for _k in ("R2_BUCKET", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY"):
+    os.environ.pop(_k, None)
 
 from billrag.agent import Agent, TOOLS
 from billrag.ingest import build_chunks, classify
@@ -1809,3 +1816,8 @@ def test_answer_mode_from_the_page_sets_only_the_answer_effort(tmp_path, monkeyp
     assert llm.efforts[-1] is None
     _text, meta = app_with("low", "medium")[0]._new_responder()("How many days does the amendment allow?", mode="fast")
     assert meta["answer_mode"] == "fast" and meta["answer_effort"] == "low"
+
+
+def test_tests_never_upload_chat_logs_to_r2():
+    from billrag import chatlog
+    assert chatlog._r2() is None and not os.environ.get("R2_BUCKET")
