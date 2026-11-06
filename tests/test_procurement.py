@@ -388,3 +388,18 @@ def test_worker_reranker_reports_failure_so_search_keeps_bm25_order():
         raise AssertionError("should have raised")
     except OSError:
         pass
+
+
+def test_worker_reranker_names_itself_and_aligns_scores():
+    import io
+    import json as _json
+    from unittest import mock
+    from procurement import serve
+    seen = {}
+
+    def fake(req, timeout=0):
+        seen.update(ua=req.get_header("User-agent"), secret=req.get_header("X-proxy-secret"))
+        return io.BytesIO(_json.dumps({"response": [{"id": 1, "score": 0.9}, {"id": 0, "score": 0.1}]}).encode())
+    with mock.patch("urllib.request.urlopen", fake):
+        assert serve.WorkerReranker("https://x.test/r", "s").scores("q", ["a", "b"]) == [0.1, 0.9]
+    assert seen["ua"] == serve.USER_AGENT and "urllib" not in seen["ua"].lower() and seen["secret"] == "s"

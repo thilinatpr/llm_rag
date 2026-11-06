@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAX_QUESTION = 1000
 MAX_BODY = 16_000
+USER_AGENT = "citizenlk-procurement/1.0"  # Cloudflare blocks Python's default User-Agent (error 1010) before the Worker sees it
 
 
 class WorkerReranker:
@@ -29,7 +30,8 @@ class WorkerReranker:
     def scores(self, query, texts):
         body = json.dumps({"query": query, "contexts": [{"text": (t or " ")[: self.max_chars]} for t in texts]}).encode()
         req = urllib.request.Request(self.url, data=body, method="POST",
-                                     headers={"Content-Type": "application/json", "X-Proxy-Secret": self.secret})
+                                     headers={"Content-Type": "application/json", "X-Proxy-Secret": self.secret,
+                                              "User-Agent": USER_AGENT})
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 items = json.load(r)["response"]
