@@ -11,6 +11,8 @@ python -m procurement ask "How long is the standstill period?" [--json]   # BILL
 python -m pytest tests/test_procurement.py -q     # offline, synthetic text
 ```
 
+Hosted at https://procurement.citizenlk.com behind the login (`procurement/serve.py`, `workers/procurement/`; see AGENTS.md "citizenlk.com layout").
+
 ## Documents and their status
 | id | document | file | status |
 |---|---|---|---|

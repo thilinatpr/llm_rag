@@ -1,0 +1,50 @@
+# Procurement Rules. Deploy from the main checkout (needs data/procurement/index.sqlite):
+#   npx wrangler deploy -c workers/procurement/wrangler.toml
+# Secrets (npx wrangler secret put NAME -c workers/procurement/wrangler.toml):
+#   OTP_PEPPER, PROXY_SECRET (both its own random value), CF_EMAIL_TOKEN, DEEPSEEK_API_KEY
+name = "citizenlk-procurement"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "procurement.citizenlk.com", custom_domain = true }]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+
+# Its own namespace: a Bill Assistant session is not a Procurement Rules session.
+[[kv_namespaces]]
+binding = "AUTH"
+id = "66d74e46b9844e81877f70856514fba7"
+
+[ai]
+binding = "AI"
+
+[[containers]]
+class_name = "ProcurementContainer"
+image = "./Dockerfile"
+image_build_context = "../.."
+instance_type = "lite"  # 1/16 vCPU, 256 MiB: measured locally at those limits, 48 MiB in use, answers 4-6 s, start 34 s
+max_instances = 1
+
+# auth.js forwards to the container when a binding of this name exists.
+[[durable_objects.bindings]]
+name = "BILLRAG"
+class_name = "ProcurementContainer"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ProcurementContainer"]
+
+[observability]
+enabled = true
+
+[vars]
+ALLOWED_EMAILS = "thilinatpr@gmail.com"
+FROM_ADDRESS = "login@tripletrackr.com"
+CF_ACCOUNT_ID = "e81ea992523c4e14d3d1a89f10732576"
+CHAT_MODEL = "deepseek-flash"
+CHAT_BASE_URL = "https://api.deepseek.com"
+RERANK_URL = "https://procurement.citizenlk.com/internal/rerank"

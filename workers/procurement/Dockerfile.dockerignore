@@ -1,0 +1,5 @@
+*
+!billrag
+!procurement
+!data/procurement/index.sqlite
+**/__pycache__

@@ -348,3 +348,43 @@ def test_replaced_1992_text_is_cut_and_the_rest_kept():
     assert [c["ref"] for c in out] == ["103", "104", "108"] and out[0]["text"] == "Keep."
     assert "500,000" not in out[1]["text"] and "(3) Preliminary Report" in out[1]["text"] and "see FRA 104" in out[1]["text"]
     assert "Old limits" not in out[2]["text"] and "see FRA 108" in out[2]["text"]
+
+
+def test_server_requires_the_secret_and_answers(tmp_path, monkeypatch):
+    import json as _json
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from procurement import serve
+    idx = _index(tmp_path, monkeypatch)
+    secret = "s" * 32
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), serve.make_handler(serve.App(idx, FakeLLM("Yes [PG2024 §1.2]."), secret)))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_port}"
+
+    def call(path, body=None, key=secret):
+        req = urllib.request.Request(url + path, data=None if body is None else _json.dumps(body).encode(),
+                                     headers={"X-Proxy-Secret": key} if key else {})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, _json.load(r)
+        except urllib.error.HTTPError as e:
+            return e.code, _json.load(e)
+    try:
+        assert call("/healthz", key=None)[0] == 403 and call("/healthz", key="wrong")[0] == 403
+        assert call("/healthz") == (200, {"ok": True})
+        assert call("/api/ask", {"question": " "})[0] == 400 and call("/api/ask", {"question": "x" * 1001})[0] == 413
+        code, out = call("/api/ask", {"question": "emergency procurement"})
+        assert code == 200 and out["answer"] == "Yes [PG2024 §1.2]." and out["warnings"] == []
+    finally:
+        srv.shutdown()
+
+
+def test_worker_reranker_reports_failure_so_search_keeps_bm25_order():
+    from procurement.serve import WorkerReranker
+    try:
+        WorkerReranker("http://127.0.0.1:9/none", "s", timeout=1).scores("q", ["a"])
+        raise AssertionError("should have raised")
+    except OSError:
+        pass
