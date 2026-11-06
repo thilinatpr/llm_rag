@@ -160,15 +160,16 @@ live payment questions of 2026-11-06 and one follow-up. Gold is written from the
 its gold passage. No model judge: `strict` = required facts + cites gold; `clean` = strict + no unsupported citation. Regexes are coarse: a
 pass does not prove the whole answer is right (below), so read the answers. n is small: treat gaps under ~0.1 as noise.
 
-Measured with `gpt-oss-120b`, NOT production's `deepseek-flash` (that account ran out of credit during the runs), reranker on:
-| 38 items at the time (3 gap items excluded = 105 answers each), 3 runs | evidence | cited | facts | strict |
-|---|---|---|---|---|
-| heading chain + pointers off | 0.99 | 0.96 | 0.92 | 0.90 |
-| heading chain + pointers on | 1.00 | 0.96 | 0.92 | 0.90 |
-So they neither help nor hurt on this set, at about one more passage per question. All 39 items, final code, 3 runs (117 answers): evidence 0.99, cited
-0.97, facts 0.88, strict 0.86, clean 0.83, warned 0.10. Persistent misses: q29 (the model says a Head of Department has no write-off power, which may be fair), q35
-(omits the 31.03.2025 expiry), q27 (citation), q36 (answers without saying the role is not named). **Known quality problem, payment questions:** answers state
-limits on a "project accountant" more firmly than the sources do (no document names the role), and a citation check cannot catch that.
+Final code, all 39 items, reranker on, 2026-11-07:
+| model, setting | answers | evidence | cited | facts | strict | clean | warned |
+|---|---|---|---|---|---|---|---|
+| `deepseek-flash` (production), chain + pointers off | 78 | 1.00 | 1.00 | 1.00 | 1.00 | 0.95 | 0.08 |
+| `deepseek-flash` (production), chain + pointers on | 78 | 1.00 | 1.00 | 1.00 | 1.00 | 0.99 | 0.03 |
+| `gpt-oss-120b`, chain + pointers on | 117 | 0.99 | 0.97 | 0.88 | 0.86 | 0.83 | 0.10 |
+So chain and pointers do no harm; the clean gap (3 fewer unsupported citations) is within noise. 156 DeepSeek answers cost about $0.08. **The perfect strict score overstates quality:** the
+regexes are coarse and were written after reading a draft run of these questions on this model, and most questions also trained earlier fixes. It is a regression check, not an accuracy figure. A
+new set of unseen questions, reviewed by an officer, is what would measure accuracy. gpt-oss overstated what the sources say about a "project accountant" (no document names the role); deepseek-flash's
+answers on q36-q39 said so plainly in the run read, with n too small to say that always holds.
 
 **Coverage, payment certification:** PM2024 §9.1 already covers certification (C) and joint inspection (F); the live question missed it because no document
 says "IPC" (`index.QUERY_TERMS`). Added GPMCM (Ministry of Finance guide, Feb 2017, chapters 4-10 word for word, `scripts/gpmcm_extract.py`): §8.3.3 lists "unsupported

@@ -84,11 +84,11 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
 - [ ] Conversation memory limits (the agent keeps full history; trim or summarise for long chats).
 
 ## Procurement Rules (procurement.citizenlk.com)
-- [x] Eval set + harness (`python -m procurement.evaluate`); heading chain and pointers measured: no change (strict 0.90 both, gpt-oss). See `procurement/README.md`.
+- [x] Eval set + harness (`python -m procurement.evaluate`); heading chain and pointers measured: no harm (deepseek-flash strict 1.00 both, clean 0.95 off / 0.99 on, coarse regexes). See `procurement/README.md`.
 - [x] Coverage: "IPC" search term, GPMCM guide added as non-binding; follow-ups (`history`, one rewrite call); `type: "ask"` in the log. Written 2026-11-07, NOT deployed.
-- [ ] **Re-run the eval on `deepseek-flash` once the account has credit** (`--runs 3 --features on`), and read q36-q39, before deploying the above.
+- [ ] Write 20+ unseen questions with an officer's review: the current set is a regression check, not an accuracy figure.
 - [ ] Rebuild and deploy the container from `main` (`python -m procurement build`, `npx wrangler deploy -c workers/procurement/wrangler.toml`). Needs the owner's go-ahead.
-- [ ] Payment answers overstate what the sources say about a "project accountant": add a check or prompt rule, then read the answers again.
+- [ ] Watch payment answers in the logs: gpt-oss overstated what the sources say about a "project accountant"; deepseek-flash did not in the run read.
 - [ ] Find NPC's Contract Management Guidelines (PG2024 §1.4(c)) and the works SBD; not on the NPC site as of 2026-11-06. They would replace most of the 2017 guide.
 - [ ] Authority/scope tags per clause (who it applies to: PPC, MPC, provincial council, project; value band) so retrieval can filter.
       Largest piece, least certain, and the measurement gave no sign that retrieval is the limit (evidence 0.99): probably not worth doing yet.
