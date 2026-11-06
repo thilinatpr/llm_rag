@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { createProcurementHandler, RERANK_MODEL } from "../workers/procurement/handler.js";
+import { createProcurementHandler, logAsk, RERANK_MODEL } from "../workers/procurement/handler.js";
 
 const SECRET = "s".repeat(32);
 function setup() {
@@ -43,4 +43,22 @@ test("only the owner is allowed at launch, on the procurement domain", () => {
   assert.ok(toml.includes('ALLOWED_EMAILS = "thilinatpr@gmail.com"'));
   assert.ok(toml.includes('pattern = "procurement.citizenlk.com"'));
   assert.ok(toml.includes("workers_dev = false"));
+});
+
+test("logAsk writes one R2 object per answered question, after the reply", async () => {
+  const puts = [], waits = [];
+  const env = { LOGS: { put: async (key, body) => puts.push({ key, rec: JSON.parse(body) }) } };
+  const ctx = { waitUntil: (p) => waits.push(p) };
+  const response = new Response(JSON.stringify({ answer: "A [x]", sources: ["s1"], warnings: [] }));
+  await logAsk(env, ctx, { question: "q?", response, ms: 12, status: 200 });
+  await Promise.all(waits);
+  assert.equal(puts.length, 1);
+  assert.match(puts[0].key, /^procurement-logs\/\d{4}-\d\d-\d\d\/\d{9}-[0-9a-f]{8}\.json$/);
+  assert.deepEqual([puts[0].rec.question, puts[0].rec.answer, puts[0].rec.sources, puts[0].rec.status], ["q?", "A [x]", ["s1"], 200]);
+});
+
+test("logAsk never throws: no binding, a failing put, a non-JSON reply", async () => {
+  await logAsk({}, null, { question: "q", response: new Response("x"), ms: 1, status: 200 });
+  const env = { LOGS: { put: async () => { throw new Error("r2 down"); } } };
+  await logAsk(env, null, { question: "q", response: new Response("not json", { status: 502 }), ms: 1, status: 502 });
 });
