@@ -100,7 +100,8 @@ For sections marked OFFICIAL {LANG} TEXT you are given the bill's own {lang} tex
 authoritative): take legal terms, names and any quotation from it word for word; do not re-translate the English for those
 parts. For offences, penalties, time limits, powers and definitions, quote the official {lang} phrase exactly, in quotation
 marks, copying its spelling character by character. Use the English text only to understand the clause. Bill titles may stay
-in English. Write correct, natural {lang}."""
+in English. Write correct, natural {lang}, using only {lang} letters, digits, punctuation and plain English (ASCII) for names:
+never characters of any other script. Use quotation marks ONLY for words copied from the official {lang} text."""
 
 CONDENSE_PROMPT = """Rewrite the follow-up question as a standalone question that can be understood without the conversation.
 Keep bill names, numbers and years. If it is already standalone, return it unchanged. Return ONLY the question.
@@ -139,6 +140,7 @@ class Result:
     lang: str = "en"  # language of the user's question; the answer is in the same language when translation worked
     answer_en: str = ""  # the verified English answer (set only for translated results)
     official: list = field(default_factory=list)  # [(bill, section)] whose official local-language text informed the answer
+    added_sections: list = field(default_factory=list)  # sections added to bill-level-only evidence (bill_sections)
     focus: dict = None  # {"title", "bills", "score"}: the bill an unnamed "this new bill" was taken to mean
     quote_fixes: list = field(default_factory=list)  # [(quoted, official)] misspelt quotations replaced by the official text
     direct_rejected: str = ""  # the rejected one-step answer (diagnostics)
@@ -312,19 +314,47 @@ class Pipeline:
             return None, "no official text"
         official = {(k, n): t for k, n, t in refs}
         q = f"{user_question}\n(English rendering used for search: {question})"
-        out = self.summarise(q, evidence, enough, missing, res, local=(code, official), focus=focus)
-        out, fixes = translate.fix_quotes(out, list(official.values()))
-        res.quote_fixes += fixes
-        why = ("unusable output" if out == LEAK_FALLBACK else "cut off at the output limit" if self._last_cut
-               else translate.check_script(out, code))
-        if not why and not CITE.search(out):
-            why = "no citations"
-        if not why and self.verify(out, evidence):
-            why = "citations not in the evidence: " + ", ".join(self.verify(out, evidence))
-        if why:
+        reasons = []
+        for _attempt in range(2):  # one retry: a direct answer is ~15 s, the translate-out fallback 30-100 s and worse
+            out = self.summarise(q, evidence, enough, missing, res, local=(code, official), focus=focus)
+            out = out.replace("\u200b", "")  # stray zero-width spaces (seen live); ZWJ U+200D is part of Sinhala conjuncts
+            why = ("unusable output" if out == LEAK_FALLBACK else "cut off at the output limit" if self._last_cut
+                   else translate.check_script(out, code))
+            if not why and not CITE.search(out):
+                why = "no citations"
+            if not why and self.verify(out, evidence):
+                why = "citations not in the evidence: " + ", ".join(self.verify(out, evidence))
+            if not why:
+                out, fixes = translate.fix_quotes(out, list(official.values()), code=code)
+                res.quote_fixes += fixes
+                if reasons:
+                    res.direct_fallback = "retried after: " + reasons[0]
+                return out, refs
+            reasons.append(why)
             res.direct_rejected = out[:3000]  # logged, so a rejection can be diagnosed
-            return None, why
-        return out, refs
+        return None, "; ".join(reasons)
+
+    def bill_sections(self, question, evidence, k=4):
+        """Kept evidence is only bill-level descriptions (typical for "summarise / tell me about the X bill"): add the bill's
+        own best-matching sections (retrieval inside that bill and its GS/Bill versions, no extra LLM call), so the answer
+        rests on clause text - and, for a Sinhala question, on the official Sinhala text - not only on the auto summary."""
+        top = max(evidence, key=lambda e: (e.score, e.chunk["date"]))
+        b = self.store.bill(top.key) if hasattr(self.store, "bill") else None
+        keys = [top.key]
+        if b and hasattr(self.store, "versions"):
+            keys = [v["key"] for v in self.store.versions(b["title_norm"], b["date"])] or keys
+        out, seen = [], set()
+        for c in self.retriever.search(question, k=k * 2, keys=keys, kinds=("section",)):
+            if c.get("section_no") is None or c["section_no"] in seen:
+                continue
+            seen.add(c["section_no"])
+            out.append(self.expand(Evidence(c, 2)))
+            if len(out) == k:
+                break
+        out.sort(key=lambda e: e.section)
+        if out:
+            self.on_event("bill_sections", {"bill": top.key, "sections": [f"{e.key} \u00a7{e.section}" for e in out]})
+        return out
 
     def focus_bill(self, question, evidence, keys=None):
         """For a question that says "this new bill" without naming one: the bill (all its GS/Bill versions together) whose
@@ -405,7 +435,7 @@ class Pipeline:
         res.seconds["translate_out"] = time.time() - t
         res.llm_calls += tr.calls
         if out:
-            res.answer, fixes = translate.fix_quotes(out, [t for _, _, t in refs])
+            res.answer, fixes = translate.fix_quotes(out, [t for _, _, t in refs], code=lang if refs else None)
             res.quote_fixes += fixes
         else:
             res.warnings.append(f"could not translate the answer into {name} reliably ({'; '.join(reasons) or 'no output'}); "
@@ -467,6 +497,11 @@ class Pipeline:
             res.queries += more
         res.enough, res.queries, res.graded = enough, [q] + res.queries, graded
         res.evidence = self.build_evidence(graded)
+        if local and self.direct_local and res.evidence and all(e.section is None for e in res.evidence):
+            t = time.time()
+            res.added_sections = self.bill_sections(q, res.evidence)
+            res.evidence += res.added_sections
+            res.seconds["bill_sections"] = time.time() - t
         focus = res.focus = self.focus_bill(q, res.evidence, keys)
         if focus:  # its clauses first (stable sort keeps the grader's order within each group)
             res.evidence.sort(key=lambda e: e.key not in focus["bills"])

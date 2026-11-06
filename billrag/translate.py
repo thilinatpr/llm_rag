@@ -120,7 +120,10 @@ def _chat(llm, system, text, max_tokens, effort, want_cut=False):
 REPEAT_UNIT = re.compile(r"(\S{2,12}?)\1{2,}")
 REPEAT_CHAR = re.compile(r"(\S)\1{4,}")
 MAX_TOKEN = 45
-FOREIGN = re.compile(r"[\u0900-\u0d7f\u0e00-\u0fff\u1100-\u11ff\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0600-\u06ff\u0400-\u04ff]")
+# Letters of other scripts in a Sinhala/Tamil answer, incl. accented Latin (a live answer had "උදාහරණként", Hungarian -ként).
+# Plain ASCII stays allowed: bill titles and Act names are kept in English.
+FOREIGN = re.compile(r"[\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f\u1e00-\u1eff\u0900-\u0d7f\u0e00-\u0fff\u1100-\u11ff"
+                     r"\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0600-\u06ff\u0400-\u04ff]")
 
 
 def garbled(text):
@@ -168,22 +171,28 @@ def check_out(out, answer, code):
 QUOTE = re.compile(r"[“\"]([^”\"\n]{15,600})[”\"]")
 
 
-def fix_quotes(text, refs, min_ratio=0.93):
+def fix_quotes(text, refs, min_ratio=0.93, code=None):
     """-> (text, fixes). A quotation that is ALMOST a passage of the official text (gpt-oss spells ථ්‍රස්තවාදී for
     ත්‍රස්තවාදී even when copying) is replaced by that passage: what is quoted should be the official wording, so swapping
-    in the official words cannot add content. Quotes that match exactly, or not closely enough, are left alone."""
+    in the official words cannot add content. Exact quotes are left alone.
+    With `code` (the answer's language): a quote in that language that matches NO official passage loses its quotation marks
+    (fixes entry (quote, None)) - quotation marks claim the bill's own wording, and live answers put paraphrases of the
+    auto-generated summary in quotes. Quotes in other scripts (English titles) are never touched."""
     import difflib
     words = [w for r in refs for w in ([None] + r.split())]  # None separates documents: no window spans two
     joined = [" ".join(r.split()) for r in refs]
     fixes = []
 
     def fix(m):
-        inner = m.group(1)
+        inner, unmatched = m.group(1), []
         parts = re.split(r"(\s*(?:…|\.\.\.)\s*)", inner)  # "a … b": each piece is a quotation of its own
-        out = "".join(piece if i % 2 or len(piece.strip()) < 15 else one(piece) for i, piece in enumerate(parts))
+        out = "".join(piece if i % 2 or len(piece.strip()) < 15 else one(piece, unmatched) for i, piece in enumerate(parts))
+        if code and unmatched and detect(inner) == code:
+            fixes.append((" ".join(inner.split())[:60], None))
+            return out.strip(" ….")
         return m.group(0)[0] + out + m.group(0)[-1]
 
-    def one(piece):
+    def one(piece, unmatched):
         q = " ".join(piece.split())
         if any(q in j for j in joined):
             return piece
@@ -201,6 +210,7 @@ def fix_quotes(text, refs, min_ratio=0.93):
         if best[0] >= min_ratio:
             fixes.append((q[:60], best[1][:60]))
             return best[1].strip(".,;:")
+        unmatched.append(q)
         return piece
 
     return QUOTE.sub(fix, text), fixes

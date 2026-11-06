@@ -1192,6 +1192,8 @@ def test_garble_check_rejects_the_live_repetition_and_other_degenerate_output():
     assert translate.garbled("ලලලලලල") and translate.garbled("ත" * 3 + "ා" * 6)
     assert "overlong" in translate.garbled("අ" + "කුසල" * 0 + "ම්බරස්තවාදීප්‍රාණඇපකරුවන්භීෂණකාරීත්‍රස්තවාදයපිළිබඳවරදසහඅපරාධ" * 2)
     assert "another script" in translate.check_script(SI_ANS + " 意图", "si")
+    assert "another script" in translate.check_script(SI_ANS + " (උදාහරණként දඬුවම්)", "si")  # seen live 2026-11-06
+    assert translate.check_script(SI_ANS + " Sri Lanka Cricket Act [072/2026] §3", "si") is None  # ASCII titles are fine
     assert "U+0DCD" in translate.garbled("මාතෘකා අනුව සමානම පෙත\u0dcdසම්")  # seen live: an unassigned Sinhala code point
     # real text passes: dotted leaders, citations, markdown, numbers, a normal answer
     for ok in (SI_ANS + " [086/2026 §2(1)(a)]", "වේලාව:......................................", "| --- | --- |", "1.1.1. 2026/2026",
@@ -1347,5 +1349,53 @@ def test_cut_off_replies_are_rejected_in_both_sinhala_paths(tmp_path):
         return R(r.text, [], "length") if ("LANGUAGE:" in system or system.startswith("Translate the answer")) else r
     llm.chat = chat
     r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
-    assert r.direct_fallback == "cut off at the output limit" and r.direct_rejected.startswith(SI_ANS)
+    assert r.direct_fallback == "cut off at the output limit; cut off at the output limit"  # tried twice
+    assert r.direct_rejected.startswith(SI_ANS)
     assert r.answer == r.answer_en and any("cut off" in w for w in r.warnings)  # translation cut off too -> English
+
+
+class OverviewOnlyLLM(DirectLLM):
+    """Grades only bill-level candidates as useful, like a 'tell me about the X bill' question."""
+
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+        user = messages[-1]["content"]
+        if "CANDIDATES:" in user:
+            cands = re.findall(r"^\[(\d+)\] (.*?)(?=\n\n\[\d+\] |\Z)", user.split("CANDIDATES:")[1].strip(), re.S | re.M)
+            return Reply(json.dumps({"scores": [{"i": int(i), "s": 3 if b.startswith("[BILL-LEVEL]") else 0} for i, b in cands],
+                                     "enough": True, "missing": "", "queries": []}))
+        return super().chat(system, messages, tools, max_tokens, effort)
+
+
+def test_bill_level_only_evidence_gets_the_bills_sections_for_a_sinhala_question(tmp_path):
+    st, llm = make_store(tmp_path), OverviewOnlyLLM()
+    _with_official(st)
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert r.added_sections and all(e.key in ("086/2026", "081/2026") for e in r.added_sections)
+    assert 2 in [e.section for e in r.added_sections] and r.path == "direct" and ("086/2026", 2) in r.official
+    assert "OFFICIAL SINHALA TEXT" in llm.direct_prompt and "bill_sections" in r.seconds
+    # English questions are unchanged: bill-level evidence stays bill-level
+    r2 = Pipeline(st, Retriever(st), OverviewOnlyLLM()).ask("How many days does the amendment allow?")
+    assert r2.added_sections == [] and all(e.section is None for e in r2.evidence)
+
+
+def test_direct_answer_is_retried_once_before_falling_back(tmp_path):
+    st, llm = make_store(tmp_path), DirectLLM()
+    _with_official(st)
+    replies = iter([SI_ANS + " 枠 [086/2026 §2].", SI_ANS + "\u200b\u200b [086/2026 §2]."])  # seen live: a Japanese character
+    orig = llm.chat
+    llm.chat = lambda system, messages, **kw: (Reply(next(replies)) if "LANGUAGE:" in system else orig(system, messages, **kw))
+    r = Pipeline(st, Retriever(st), llm).ask(SI_Q)
+    assert r.path == "direct" and r.answer.startswith(SI_ANS) and "枠" not in r.answer and "\u200b" not in r.answer
+    assert r.direct_fallback.startswith("retried after: characters from another script") and r.llm_calls == 4
+
+
+def test_unverified_sinhala_quotes_lose_their_quotation_marks():
+    ref = "පාලක ජනරාල්වරයා විසින්, ස්වකීය පූර්ණ අභිමතය මත වීසා පත්‍රය අවලංගු කරනු ලැබිය හැකි ය."
+    ans = ("“පාලක ජනරාල්වරයා විසින්, ස්වකීය පූර්ණ අභිමතය මත” [071/2026 §26]; “පනත නව නීතිමය රාජ්‍ය පද්ධතියක් සෑදේ” [071/2026]; "
+           "“Immigration Act” සහ “ක්‍රිකට් පනත … වෙනත් පාඨයක් නොවේ කිසිසේත්”")
+    out, fixes = translate.fix_quotes(ans, [ref], code="si")
+    assert "“පාලක ජනරාල්වරයා විසින්, ස්වකීය පූර්ණ අභිමතය මත”" in out          # verbatim: kept
+    assert "; පනත නව නීතිමය රාජ්‍ය පද්ධතියක් සෑදේ [071/2026]" in out           # paraphrase: marks removed
+    assert "“Immigration Act”" in out and "“ක්‍රිකට්" not in out                # English quote untouched
+    assert sum(1 for _, o in fixes if o is None) == 2 and translate.cites(out) == translate.cites(ans)
+    assert translate.fix_quotes(ans, [ref])[0] == ans                            # without code: nothing is unquoted

@@ -277,8 +277,8 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 "Merged" is not "live". Live since 2026-11-06 01:43 UTC: build `e66dc009` = `main` at `1feaf92` (merge of PR #17: one-step
 Sinhala answer from the official text, garble check, `fix_quotes`, "this new bill" focus, cut-off detection, new log fields; plus
 docs PR #16), Worker version `835fa3df`, container app version 11 (image `sha256:dcd97cfc...`). Same R2 index as v10 (with
-`local_sections`; `bills/index.pre-si.sqlite` is still kept). Not yet confirmed from a chat log (no question asked since the
-rollout): look for `build: e66dc009` and the new `path` field. Previous: build `055766b0` (`5b2cc47`), Worker `0c092e80`, container
+`local_sections`; `bills/index.pre-si.sqlite` is still kept). Confirmed from the chat log: the 01:50 UTC question was answered by
+`e66dc009` with the new fields. Previous: build `055766b0` (`5b2cc47`), Worker `0c092e80`, container
 v10 (`sha256:598eec80...`); before that `af86776e` (`fca8f3a`, v9). Rollback: redeploy `5b2cc47` (no index change needed). Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
 `git log origin/main` against the `build` seen in the latest chat log before telling the owner a change is live.
 
@@ -488,7 +488,30 @@ grouped by `title_norm`) with the highest grade wins (ties: total grade, then ne
 (English and direct Sinhala) gets `FOCUS_NOTE`: answer about that bill, name it first, mention other bills only as clearly
 different bills. Fires on 2 of 134 eval questions (both name their bill, so the focus is the named one). An earlier pattern that
 also accepted plain "the Act"/"the law" fired on 9, mostly wrong ("the law governing ..."). Live (2 runs of the logged question)
-it did not fire because the grader kept only one bill each time: it fixes the answer step, not grading.
+it did not fire because the grader kept only one bill each time: it fixes the answer step, not grading. 2026-11-06 it fired
+(grader kept 070/2026 §3 = 3, 085/2026 §14 = 2): the direct answer named Protection of the State from Terrorism (070/2026) and
+used the official terms භීෂණකාරී, ප්‍රාණ ඇපකරුවන්.
+
+### Summary questions, retries, unverified quotes (2026-11-06)
+- **`Pipeline.bill_sections`:** for a Sinhala question whose kept evidence is ONLY bill-level (overview) chunks - typical for
+  "tell me about / summarise the X bill" - the top bill's own best-matching sections (retrieval restricted to it and its GS/Bill
+  versions, k=4, no extra LLM call, grade 2) are added, so the answer rests on clause text and the official Sinhala text and can
+  take the direct path. Log field `added_sections`, step `bill_sections` (~1 s). English questions are unchanged (bill-level
+  questions are what the eval's bill-level items test; not re-measured with sections added).
+- **Direct answer retried once** before falling back: a rejection is usually one stray character (live: 枠, ।, Chinese), the retry
+  costs ~15 s, while the translate-out fallback costs 30-100 s and reads worse. `direct_fallback = "retried after: ..."` when the
+  retry succeeded; both reasons when both failed. The prompt now also says: only Sinhala + ASCII, and quotation marks only for
+  official wording.
+- **Accented Latin counts as a foreign script** in si/ta answers (a live translate-out answer had "උදාහරණként", Hungarian -ként).
+  Plain ASCII stays allowed (bill titles). No official section is flagged.
+- **`fix_quotes(..., code=...)` de-quotes unverified quotes:** a quotation in the answer's language that matches no official
+  passage (not even >= 93%) loses its quotation marks (logged in `quote_fixes` as `(quote, None)`); live answers put paraphrases
+  of the auto-generated summary in quotes. English quotes (titles) are untouched. U+200B is stripped from direct answers.
+- **Measured live** (gpt-oss, same index): cricket "Mata kiyalanna 2026 cricket bill Eka gana" 67 s live (translated, "municipal
+  body" for corporate body, Hungarian suffix) -> 28-30 s direct (one run after a retry); "...summary eka" 61 s -> 25-28 s direct;
+  "2026 ආගමන පනත් කෙටුම්පත ගැන කෙටියෙන් කියන්න" 94 s (direct rejected for 枠, translated) -> 17.9 s direct after the retry
+  change. Remaining quality issues: odd coinages (අධික්ෂේපණය, කොපරේට් ශරීරය), labels like "[072/2026 summary]", and one
+  run of the terrorist-act question where the grader kept nothing in both rounds ("found nothing"; grader variance, not new).
 
 ## Product priority: recent bills
 
