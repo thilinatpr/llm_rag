@@ -274,12 +274,12 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". Live since 2026-11-06 01:43 UTC: build `e66dc009` = `main` at `1feaf92` (merge of PR #17: one-step
-Sinhala answer from the official text, garble check, `fix_quotes`, "this new bill" focus, cut-off detection, new log fields; plus
-docs PR #16), Worker version `835fa3df`, container app version 11 (image `sha256:dcd97cfc...`). Same R2 index as v10 (with
-`local_sections`; `bills/index.pre-si.sqlite` is still kept). Confirmed from the chat log: the 01:50 UTC question was answered by
-`e66dc009` with the new fields. Previous: build `055766b0` (`5b2cc47`), Worker `0c092e80`, container
-v10 (`sha256:598eec80...`); before that `af86776e` (`fca8f3a`, v9). Rollback: redeploy `5b2cc47` (no index change needed). Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
+"Merged" is not "live". Live since 2026-11-06 02:21 UTC: build `d6b7f072` = `main` at `c1ef915` (merge of PR #19: Sinhala
+summary questions get the bill's sections (`bill_sections`), direct answer retried once, accented Latin rejected, unverified
+quotes de-quoted; plus the deploy record of #18), Worker version `75d647ee`, container app version 12 (image
+`sha256:f63a9b19...`). Same R2 index as v10/v11. Not yet confirmed from a chat log: look for `build: d6b7f072` and
+`added_sections`. Previous: build `e66dc009` (`1feaf92`), Worker `835fa3df`, container v11 (`sha256:dcd97cfc...`); before that
+`055766b0` (`5b2cc47`, v10). Rollback: redeploy `1feaf92` (no index change needed). Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
 `git log origin/main` against the `build` seen in the latest chat log before telling the owner a change is live.
 
 ## Rules
