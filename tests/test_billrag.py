@@ -654,7 +654,7 @@ def test_web_ui_endpoints(tmp_path):
 
     try:
         with urllib.request.urlopen(base + "/") as r:
-            assert b"Sri Lanka Bills Chat" in r.read()
+            assert b"Bill Assistant" in r.read()
         assert post("/api/ask", {"session": "s", "question": "hi"}) == (200, {"answer": "s:hi"})
         assert post("/api/search", {"query": "x", "k": 99}) == (200, {"results": ["hit:x:15"]})
         assert post("/api/ask", {"question": " "})[0] == 400

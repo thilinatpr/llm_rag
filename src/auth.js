@@ -146,25 +146,61 @@ async function currentUser(env, request) {
 }
 
 export const LOGIN_PAGE = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sign in - citizenlk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Abhaya+Libre:wght@800&family=Yaldevi:wght@400;500&family=Catamaran:wght@500&display=swap">
 <style>
-  :root { color-scheme: light dark; }
-  body { font: 16px/1.5 system-ui, sans-serif; display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 16px; }
-  main { width: 100%; max-width: 22rem; }
-  h1 { font-size: 1.25rem; }
-  input, button { width: 100%; padding: 10px 12px; font: inherit; margin-top: 8px; box-sizing: border-box; }
-  button { cursor: pointer; }
-  #msg { min-height: 1.5em; margin-top: 12px; }
-  .err { color: #d33; }
+  /* citizenlk look: see DESIGN.md */
+  :root { color-scheme: light dark;
+    --lime: #F4F2EE; --ink: #1C1511; --muted: #6E6157; --line: #DAD3CA; --box: #FFFFFF; --sindoor: #A3241B; --ochre: #E0A93A; --err: #B3261E;
+    --f-display: "Abhaya Libre", "Noto Serif Sinhala", Georgia, serif;
+    --f-body: "Yaldevi", "Noto Sans Sinhala", "Segoe UI", system-ui, sans-serif;
+    --f-ta: "Catamaran", "Noto Sans Tamil", sans-serif; }
+  @media (prefers-color-scheme: dark) { :root {
+    --lime: #15100D; --ink: #F1E6D6; --muted: #B3A391; --line: #3A2D24; --box: #211913; --sindoor: #E0675A; --ochre: #E8B550; --err: #FF8A80; } }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--lime); color: var(--ink); font: 400 1rem/1.6 var(--f-body); display: flex; flex-direction: column; }
+  :focus-visible { outline: 2px solid var(--ochre); outline-offset: 3px; border-radius: 4px; }
+  .petals { height: 14px; flex: none; background: radial-gradient(circle at 50% 0, var(--sindoor) 0 7px, transparent 7.5px) 0 0 / 20px 14px repeat-x; }
+  main { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 22px;
+    padding: 48px max(16px, env(safe-area-inset-right, 0px)) 48px max(16px, env(safe-area-inset-left, 0px)); }
+  h1 { margin: 0; font: 800 clamp(3rem, 10vw, 5rem)/1 var(--f-display); letter-spacing: -.01em; }
+  h1 b { color: var(--sindoor); font-weight: 800; }
+  .sub { margin: -8px 0 0; color: var(--muted); }
+  .tri { margin: -12px 0 0; color: var(--muted); font-size: .95rem; }
+  .tri .ta { font-family: var(--f-ta); }
+  form { width: min(100%, 560px); display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 20px; border: 1px solid var(--line);
+    border-radius: 999px; background: var(--box); transition: border-color .2s, box-shadow .2s; }
+  form:hover, form:focus-within { border-color: var(--ochre); box-shadow: 0 2px 10px -2px color-mix(in srgb, var(--ink) 18%, transparent); }
+  form[hidden] { display: none; }
+  input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 9px 0; font: inherit; color: inherit; outline: none; }
+  input:focus-visible { outline: none; }
+  input::placeholder { color: var(--muted); }
+  #code { letter-spacing: .3em; }
+  #code::placeholder { letter-spacing: normal; }
+  button { flex: none; border: 0; border-radius: 999px; padding: 9px 18px; background: var(--ink); color: var(--lime); font: inherit; font-weight: 500; cursor: pointer; }
+  button:hover { background: var(--sindoor); color: #fff; }
+  #msg { min-height: 1.6em; margin: 0; font-size: .92rem; color: var(--muted); max-width: 34em; }
+  #msg.err { color: var(--err); }
+  footer { flex: none; border-top: 1px solid var(--line); font-size: .84rem; color: var(--muted); display: flex; justify-content: space-between; gap: 8px 24px; flex-wrap: wrap;
+    padding: 16px max(16px, env(safe-area-inset-right, 0px)) 16px max(16px, env(safe-area-inset-left, 0px)); }
 </style></head>
-<body><main>
-  <h1>Sign in</h1>
-  <form id="f1"><input id="email" type="email" placeholder="you@example.com" autocomplete="email" required autofocus>
+<body>
+<div class="petals" aria-hidden="true"></div>
+<main>
+  <h1>citizen<b>lk</b></h1>
+  <p class="tri"><span lang="si">පුරවැසි</span> · <span class="ta" lang="ta">குடிமக்கள்</span> · Citizen</p>
+  <p class="sub">Sign in to the Bill Assistant</p>
+  <form id="f1"><input id="email" type="email" placeholder="you@example.com" aria-label="Email address" autocomplete="email" required autofocus>
     <button>Email me a code</button></form>
-  <form id="f2" hidden><input id="code" inputmode="numeric" pattern="\\d{6}" maxlength="6" placeholder="6-digit code" autocomplete="one-time-code" required>
-    <button>Verify</button></form>
-  <div id="msg"></div>
+  <form id="f2" hidden><input id="code" inputmode="numeric" pattern="\\d{6}" maxlength="6" placeholder="6-digit code" aria-label="Sign-in code" autocomplete="one-time-code" required>
+    <button>Sign in</button></form>
+  <p id="msg" aria-live="polite">Access is by invitation for now.</p>
+</main>
+<footer><span>Sri Lanka</span><span>Not legal advice · Not a government service</span></footer>
 <script>
 const $ = (id) => document.getElementById(id), msg = (t, e) => { $('msg').textContent = t; $('msg').className = e ? 'err' : ''; };
 async function post(path, body) {
@@ -177,7 +213,7 @@ $('f1').onsubmit = async (e) => { e.preventDefault();
 $('f2').onsubmit = async (e) => { e.preventDefault();
   try { await post('/login/verify', { email: $('email').value, code: $('code').value }); location.href = '/'; }
   catch (x) { msg(x.message, true); } };
-</script></main></body></html>`;
+</script></body></html>`;
 
 // upstream(request, env): optional, forwards signed-in requests (e.g. to a container). Used when env.BILLRAG is bound.
 export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null } = {}) {
