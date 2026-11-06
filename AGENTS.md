@@ -105,6 +105,22 @@ Zone: Read. Separate tokens for sending email (Email Sending) and for Workers AI
 is missing the Worker answers 500 for `/api/*` instead of forwarding (fails closed). The Python server also refuses to listen
 on a non-loopback host without `BILLRAG_PROXY_SECRET`. To add a user: add the address to `ALLOWED_EMAILS` and redeploy.
 
+### Parallel work on the owner's machine: git worktrees (`scripts/worktree.sh`)
+One checkout per branch, so several sessions can work at once. The main checkout (`~/projects/llm_rag`, on `main`) holds the
+shared, git-ignored parts; worktrees symlink to them: `.venv` (Python 3.12 like the image), `data/` (index from R2),
+`.local.env` (credentials). `node_modules` is per worktree (`npm ci`).
+```bash
+scripts/worktree.sh setup                          # once (done 2026-11-06): .venv, npm ci, index.sqlite + vectors.npz from R2
+scripts/worktree.sh new claude/my-change           # ../llm_rag.worktrees/claude-my-change, new branch from origin/main
+scripts/worktree.sh new claude/parser --own-data   # private copy of the index: use for ingest / embed / ingest-si / glossary
+scripts/worktree.sh list | rm claude/my-change     # rm deletes the branch only if it is merged into origin/main
+cd ../llm_rag.worktrees/claude-my-change && .venv/bin/python -m pytest tests -q && npm test
+```
+`data/` is shared: rebuilding the index in a worktree without `--own-data` changes it for every worktree. `claude -w <name>` /
+EnterWorktree make worktrees under `.claude/worktrees/` instead; `.claude/settings.json` (`worktree.symlinkDirectories`) links
+`data` and `.venv` there and `.worktreeinclude` copies `.local.env`; for `node_modules` run `npm ci` in it. Deploy only from a
+commit on `main` (see "Deploying"), not from a feature worktree.
+
 ### Run and test locally
 ```bash
 python -m pytest tests -q                 # Python, offline (59+ tests); must pass before every commit

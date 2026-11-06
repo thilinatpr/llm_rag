@@ -75,11 +75,20 @@ def branch_status(notes):
 
 
 def tools_status(notes):
-    missing = [m for m in ("pytest", "boto3", "numpy") if importlib.util.find_spec(m) is None]
+    venv = ROOT / ".venv" / "bin" / "python"   # scripts/worktree.sh setup; a symlink to the main checkout's in a worktree
+    if venv.exists():
+        code = "import importlib.util as u,sys; print(','.join(m for m in sys.argv[1:] if u.find_spec(m) is None))"
+        out = subprocess.run([str(venv), "-c", code, "pytest", "boto3", "numpy"], capture_output=True, text=True, timeout=10)
+        missing = [m for m in out.stdout.strip().split(",") if m]
+    else:
+        missing = [m for m in ("pytest", "boto3", "numpy") if importlib.util.find_spec(m) is None]
+        if missing:
+            notes.append("Tools: no .venv; run `scripts/worktree.sh setup` (Python 3.12 venv, npm ci, index from R2).")
+            return
     if not (ROOT / "node_modules").is_dir():
         missing.append("node_modules")
     if missing:
-        notes.append(f"Tools: missing {', '.join(missing)}. Install with `pip install -q -r requirements-billrag.txt pytest boto3` "
+        notes.append(f"Tools: missing {', '.join(missing)}. Install with `.venv/bin/pip install -q -r requirements-billrag.txt pytest boto3` "
                      "and `npm ci` before running tests (boto3 is only for R2 scripts).")
 
 
