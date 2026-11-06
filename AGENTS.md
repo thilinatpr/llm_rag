@@ -332,12 +332,13 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". Live since 2026-11-06 03:57 UTC: build `865441fa` = `main` at `b55e113` (merge of PR #27: chat page renders
-answer Markdown (bold, lists, tables) instead of showing `*` marks; page-only change, Python code and build id identical to v14),
-Worker version `a1a3c4d6`, container app version 15 (image `sha256:77232f16...`). The page change is in the Worker assets, live at once.
-Previous: container v14, build `865441fa` = `72f9e2a` (PR #23: CPU/memory monitoring, `/api/stats` + log field `usage`; includes the
-glossary from #21), Worker `1b3787d5`, image `sha256:da97e6ba...`. Rollback: redeploy `72f9e2a` (no index change needed).
-Build id `865441fa` cannot tell v14 from v15 (same Python code); check the page itself. Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
+"Merged" is not "live". Live since 2026-11-06 05:14 UTC: build `479f9cd3` = `main` at `ce7e189` (merge of PR #29: streaming
+answers via `/api/ask/stream`, the page's "Answer: Thorough | Fast" choice, per-call timing in the log field `calls`), Worker
+version `76ad7347`, container app version 16 (image `sha256:586ad1ec...`). Not yet confirmed from a chat log: look for
+`build: 479f9cd3` with `calls` and `answer_mode` on a real session (records with session `s1` and the questions "hi", "q",
+"නිවැරදි දින කීයද?" are offline-test records that reached R2 on 2026-11-06 04:21-05:08, builds `31238801`, `ddad06e3`, `8377b679`,
+`3b907723`, `71da3e10`, `479f9cd3`: not live traffic). Previous: container v15, build `865441fa` = `b55e113` (PR #27 page
+Markdown), Worker `a1a3c4d6`, image `sha256:77232f16...`. Rollback: redeploy `b55e113` (no index change needed). Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
 `git log origin/main` against the `build` seen in the latest chat log before telling the owner a change is live.
 
 ## Rules
