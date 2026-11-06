@@ -334,14 +334,20 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". Live since 2026-11-06 05:14 UTC: build `479f9cd3` = `main` at `ce7e189` (merge of PR #29: streaming
-answers via `/api/ask/stream`, the page's "Answer: Thorough | Fast" choice, per-call timing in the log field `calls`), Worker
-version `76ad7347`, container app version 16 (image `sha256:586ad1ec...`). Not yet confirmed from a chat log: look for
-`build: 479f9cd3` with `calls` and `answer_mode` on a real session (records with session `s1` and the questions "hi", "q",
-"නිවැරදි දින කීයද?" are offline-test records that reached R2 on 2026-11-06 04:21-05:08, builds `31238801`, `ddad06e3`, `8377b679`,
-`3b907723`, `71da3e10`, `479f9cd3`: not live traffic). Previous: container v15, build `865441fa` = `b55e113` (PR #27 page
-Markdown), Worker `a1a3c4d6`, image `sha256:77232f16...`. Rollback: redeploy `b55e113` (no index change needed). Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
-`git log origin/main` against the `build` seen in the latest chat log before telling the owner a change is live.
+"Merged" is not "live". **Live since 2026-11-06 10:11 UTC: build `ec82b284` = commit `e5dd298` on branch `claude/elegant-keller-1x4ri0`, which is
+NOT on `main` (deployed from the branch at the owner's request; open a PR and merge it with a merge commit so the deployed SHA is in
+`main`'s history). Worker version `3861cd0e`, container app version 17 (image `sha256:ab012c93...`).** Contains: bill metadata
+(`meta.py`), newest-instance rule, section-reference following (incl. penalty back-references), "which bill?" clarification, literal
+translate-in, prompt-echo guard, per-response cost log (`cost`, `calls[].usd`), the `CHAT_PROVIDER` switch (`src/chatconfig.js`) and
+the independent-judge eval. The index in R2 was re-uploaded 2026-11-06 10:08 UTC with the metadata tables (`bill_meta`, `section_refs`).
+**The chat model is STILL Workers AI gpt-oss-120b:** `CHAT_PROVIDER = "deepseek"` is set, but the `DEEPSEEK_API_KEY` Worker secret does
+not exist yet (writing it from the sandbox was blocked), so `chatEnv` falls back to Workers AI and logs a warning. To switch: the owner runs
+`printf %s "$DEEPSEEK_API_KEY" | npx wrangler secret put DEEPSEEK_API_KEY`, then the container must restart (let it sleep 15 min or redeploy) and
+the log should show `model: deepseek-flash`. Not yet confirmed from a chat log: no question had been asked on the new build when this was
+written; look for `build: ec82b284` with `cost` and `model`. Previous: container v16, build `479f9cd3` = `main` at `ce7e189`, Worker
+`76ad7347`, image `sha256:586ad1ec...`. Rollback: check out `ce7e189` and redeploy (steps 1-5 above; the new index tables are ignored by old
+code). `main` also has later commits (procurement prototype, worktree script) that touch no deployed code. Check `git log origin/main`
+against the `build` seen in the latest chat log before telling the owner a change is live.
 
 ## Rules
 
