@@ -336,15 +336,11 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 ## Deployed vs main (keep this honest)
 "Merged" is not "live". **Live since 2026-11-06 10:11 UTC: build `ec82b284` = commit `e5dd298` on branch `claude/elegant-keller-1x4ri0`, which is
 NOT on `main` (deployed from the branch at the owner's request; open a PR and merge it with a merge commit so the deployed SHA is in
-`main`'s history). Worker version `3861cd0e`, container app version 17 (image `sha256:ab012c93...`).** Contains: bill metadata
+`main`'s history). Worker version `be713b7d` (redeployed 10:15 UTC after the secret was added; first deploy was `3861cd0e`), container app version 18 (image `sha256:ab012c93...`, same image as v17; the v18 rollout restarted the container so it reads the secret).** Contains: bill metadata
 (`meta.py`), newest-instance rule, section-reference following (incl. penalty back-references), "which bill?" clarification, literal
 translate-in, prompt-echo guard, per-response cost log (`cost`, `calls[].usd`), the `CHAT_PROVIDER` switch (`src/chatconfig.js`) and
 the independent-judge eval. The index in R2 was re-uploaded 2026-11-06 10:08 UTC with the metadata tables (`bill_meta`, `section_refs`).
-**The chat model is STILL Workers AI gpt-oss-120b:** `CHAT_PROVIDER = "deepseek"` is set, but the `DEEPSEEK_API_KEY` Worker secret does
-not exist yet (writing it from the sandbox was blocked), so `chatEnv` falls back to Workers AI and logs a warning. To switch: the owner runs
-`printf %s "$DEEPSEEK_API_KEY" | npx wrangler secret put DEEPSEEK_API_KEY`, then the container must restart (let it sleep 15 min or redeploy) and
-the log should show `model: deepseek-flash`. Not yet confirmed from a chat log: no question had been asked on the new build when this was
-written; look for `build: ec82b284` with `cost` and `model`. Previous: container v16, build `479f9cd3` = `main` at `ce7e189`, Worker
+**Chat model:** `CHAT_PROVIDER = "deepseek"` and the `DEEPSEEK_API_KEY` Worker secret exist (owner added it 2026-11-06) and the container was restarted by the v18 rollout, so it should be answering with `deepseek-flash`. Not yet confirmed from a chat log: no question had been asked on the new instance when this was written; look for `build: ec82b284`, `model: deepseek-flash`, `cost` and empty `warnings`. If a log shows `model: @cf/openai/gpt-oss-120b`, the key was not picked up (Worker log warns "DEEPSEEK_API_KEY secret is missing"). Previous: container v16, build `479f9cd3` = `main` at `ce7e189`, Worker
 `76ad7347`, image `sha256:586ad1ec...`. Rollback: check out `ce7e189` and redeploy (steps 1-5 above; the new index tables are ignored by old
 code). `main` also has later commits (procurement prototype, worktree script) that touch no deployed code. Check `git log origin/main`
 against the `build` seen in the latest chat log before telling the owner a change is live.
