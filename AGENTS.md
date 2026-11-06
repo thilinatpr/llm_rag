@@ -276,12 +276,14 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". Live since 2026-11-06 02:21 UTC: build `d6b7f072` = `main` at `c1ef915` (merge of PR #19: Sinhala
-summary questions get the bill's sections (`bill_sections`), direct answer retried once, accented Latin rejected, unverified
-quotes de-quoted; plus the deploy record of #18), Worker version `75d647ee`, container app version 12 (image
-`sha256:f63a9b19...`). Same R2 index as v10/v11. Not yet confirmed from a chat log: look for `build: d6b7f072` and
-`added_sections`. Previous: build `e66dc009` (`1feaf92`), Worker `835fa3df`, container v11 (`sha256:dcd97cfc...`); before that
-`055766b0` (`5b2cc47`, v10). Rollback: redeploy `1feaf92` (no index change needed). Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
+"Merged" is not "live". Live since 2026-11-06 03:25 UTC: build `97d30698` = `main` at `4e6927a` (merge of PR #21: glossary of
+official titles + defined terms used for Sinhala question grounding and answer terms; plus docs PR #20), Worker version
+`af06dc4d`, container app version 13 (image `sha256:07e85ed0...`). **R2 index changed with this deploy:** `bills/index.sqlite`
+now has the `glossary` table (306 rows; uploaded 03:23 UTC, 202,375,168 bytes, integrity checked after upload); the previous
+index is `bills/index.pre-glossary.sqlite` (and `bills/index.pre-si.sqlite` before that); `vectors.npz` unchanged (fingerprint
+matches). Not yet confirmed from a chat log: look for `build: 97d30698` and `glossary_hints`/`glossary_terms`. Previous: build
+`d6b7f072` (`c1ef915`), Worker `75d647ee`, container v12 (`sha256:f63a9b19...`); before that `e66dc009` (`1feaf92`, v11).
+Rollback: redeploy `c1ef915` (old code ignores the glossary table, so the index need not be restored). Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
 `git log origin/main` against the `build` seen in the latest chat log before telling the owner a change is live.
 
 ## Rules
