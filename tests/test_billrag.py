@@ -1648,3 +1648,132 @@ def test_web_log_carries_calls_with_pipeline_steps(tmp_path, monkeypatch):
     steps = {(c["kind"], c["step"]) for c in calls}
     assert ("bm25", "retrieve0") in steps and ("chat", "evaluate0") in steps
     assert ("chat", "translate_in") in steps and ("chat", "translate_out") in steps
+
+
+# ---------------------------------------------------------------- streaming (/api/ask/stream)
+def _streaming(cls):
+    """A fake model class that also streams its reply in small pieces when asked (on_token)."""
+    class S(cls):
+        def chat(self, system, messages, tools=(), max_tokens=0, effort=None, on_token=None):
+            r = super().chat(system, messages, tools, max_tokens, effort)
+            if on_token:
+                self.streamed = getattr(self, "streamed", 0) + 1
+                for i in range(0, len(r.text), 5):
+                    on_token(r.text[i:i + 5])
+            return r
+    return S
+
+
+def _collect(p, question):
+    ev = []
+    p.emit = lambda k, d: ev.append((k, d))
+    res = p.ask(question)
+    return res, ev
+
+
+def test_english_answer_streams_steps_then_the_answer_text(tmp_path):
+    st = make_store(tmp_path)
+    res, ev = _collect(Pipeline(st, Retriever(st), _streaming(ScriptLLM)()), "How many days does the amendment allow?")
+    steps = [d for k, d in ev if k == "status"]
+    assert steps[:3] == ["condense", "retrieve0", "evaluate0"] and steps[-1] == "summarise"
+    assert ev.index(("reset", None)) > ev.index(("status", "summarise"))  # a fresh draft for the answer call
+    assert "".join(d for k, d in ev if k == "token") == res.answer  # only the answer call is streamed, not grading
+
+
+def test_leaked_reasoning_is_never_streamed(tmp_path):
+    st = make_store(tmp_path)
+
+    class Leaky(ScriptLLM):
+        def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+            r = super().chat(system, messages, tools, max_tokens, effort)
+            if "CANDIDATES:" not in messages[-1]["content"] and "FOLLOW-UP:" not in messages[-1]["content"]:
+                n = getattr(self, "n", 0)
+                self.n = n + 1
+                if n == 0:
+                    return Reply("analysis: the user wants the number of days, I should look at section 2 ...")
+            return r
+
+    res, ev = _collect(Pipeline(st, Retriever(st), _streaming(Leaky)()), "How many days does the amendment allow?")
+    toks = "".join(d for k, d in ev if k == "token")
+    assert "analysis" not in toks and toks == res.answer and "fifteen days" in res.answer  # retry streamed, leak hidden
+    assert sum(1 for k, _ in ev if k == "reset") == 2
+
+
+def test_sinhala_direct_answer_streams_but_translated_answer_does_not(tmp_path):
+    st = make_store(tmp_path)
+    _with_official(st)
+    res, ev = _collect(Pipeline(st, Retriever(st), _streaming(DirectLLM)()), SI_Q)
+    assert res.path == "direct" and "".join(d for k, d in ev if k == "token").startswith(SI_ANS[:10])
+    assert ("status", "answer_direct") in ev
+    st2 = make_store(tmp_path / "b")  # no official text -> English answer + translation: steps only, no English draft
+    res2, ev2 = _collect(Pipeline(st2, Retriever(st2), _streaming(TranslatingLLM)()), SI_Q)
+    assert res2.path == "translated" and not [d for k, d in ev2 if k == "token"]
+    assert ("status", "translate_out") in ev2
+
+
+def test_openai_adapter_streams_visible_text_and_records_first_token():
+    from billrag import calltrace
+    from billrag.llm import OpenAILLM
+    D = lambda **kw: type("D", (), {"content": None, **kw})()
+    chunks = [type("K", (), {"choices": [type("C", (), {"delta": D(reasoning_content="thinking"), "finish_reason": None})()], "usage": None})(),
+              type("K", (), {"choices": [type("C", (), {"delta": D(content="Hello "), "finish_reason": None})()], "usage": None})(),
+              type("K", (), {"choices": [type("C", (), {"delta": D(content="world"), "finish_reason": "stop"})()], "usage": None})(),
+              type("K", (), {"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 4}})()]
+    seen = {}
+
+    class Client:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    seen.update(kw)
+                    return iter(chunks)
+
+    llm = object.__new__(OpenAILLM)
+    llm.client, llm.model = Client, "m"
+    pieces = []
+    with calltrace.tracing() as tr:
+        r = llm.chat("s", [{"role": "user", "content": "q"}], effort="low", on_token=pieces.append)
+    assert r.text == "Hello world" and pieces == ["Hello ", "world"] and r.stop == "stop" and seen["stream"] is True
+    c = tr.calls[0]
+    assert c["stream"] is True and c["out"] == 4 and c["in"] == 9 and isinstance(c["first"], float)
+
+
+def test_web_stream_endpoint_sends_events_then_the_final_answer():
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from billrag.web import make_handler
+
+    class StubApp:
+        secret = None
+
+        def ask(self, sid, q, emit=None):
+            if q == "boom":
+                raise RuntimeError("model down")
+            emit("status", "retrieve0")
+            emit("token", "dra")
+            emit("token", "ft")
+            return "final answer"
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(StubApp()))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def events(q):
+        req = urllib.request.Request(f"http://127.0.0.1:{srv.server_address[1]}/api/ask/stream",
+                                     json.dumps({"question": q}).encode(), {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            assert r.headers["Content-Type"].startswith("text/event-stream")
+            raw = r.read().decode()
+        out = []
+        for block in raw.strip().split("\n\n"):
+            lines = dict(line.split(": ", 1) for line in block.split("\n"))
+            out.append((lines["event"], json.loads(lines["data"])))
+        return out
+
+    try:
+        assert events("q") == [("status", {"step": "retrieve0"}), ("token", {"text": "dra"}), ("token", {"text": "ft"}),
+                               ("done", {"answer": "final answer"})]
+        assert events("boom") == [("error", {"error": "RuntimeError: model down"})]
+    finally:
+        srv.shutdown()

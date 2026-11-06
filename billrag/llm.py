@@ -70,7 +70,19 @@ class AnthropicLLM:
         kw = {k: v for k, v in (("base_url", base_url), ("api_key", api_key)) if v}
         self.client, self.model = anthropic.Anthropic(**kw), model
 
-    def chat(self, system, messages, tools=(), max_tokens=2048, effort=None) -> Reply:  # effort: ignored here
+    def chat(self, system, messages, tools=(), max_tokens=2048, effort=None, on_token=None) -> Reply:  # effort: ignored
+        if on_token is not None and not tools:
+            t, first = time.time(), None
+            with self.client.messages.stream(model=self.model, max_tokens=max_tokens, system=system,
+                                             messages=to_anthropic_messages(messages)) as st:
+                for piece in st.text_stream:
+                    first = first if first is not None else time.time() - t
+                    on_token(piece)
+                r = st.get_final_message()
+            calltrace.record("chat", time.time() - t, model=self.model, stop=getattr(r, "stop_reason", None),
+                             max_tokens=max_tokens, stream=True, first=round(first, 2) if first is not None else None,
+                             **calltrace.usage_fields(getattr(r, "usage", None)))
+            return Reply("".join(b.text for b in r.content if b.type == "text"), [], getattr(r, "stop_reason", "") or "")
         kw = {}
         if tools:
             kw["tools"] = [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
@@ -95,7 +107,10 @@ class OpenAILLM:
         kw = {k: v for k, v in (("base_url", base_url), ("api_key", api_key)) if v}
         self.client, self.model = openai.OpenAI(max_retries=6, **kw), model
 
-    def chat(self, system, messages, tools=(), max_tokens=2048, effort=None) -> Reply:
+    def chat(self, system, messages, tools=(), max_tokens=2048, effort=None, on_token=None) -> Reply:
+        """on_token(text): stream the reply, calling it with each piece of visible text (not with reasoning)."""
+        if on_token is not None and not tools:
+            return self._stream(system, messages, max_tokens, effort, on_token)
         kw = {}
         if effort:  # reasoning models (gpt-oss): low/medium/high; sent as an extra body field
             kw["extra_body"] = {"reasoning_effort": effort}
@@ -124,6 +139,32 @@ class OpenAILLM:
                 args = {}
             calls.append(ToolCall(tc.id, tc.function.name, args))
         return Reply(msg.content or "", calls, getattr(r.choices[0], "finish_reason", "") or "")
+
+    def _stream(self, system, messages, max_tokens, effort, on_token):
+        kw = {"extra_body": {"reasoning_effort": effort}} if effort else {}
+        kw.update(model=self.model, max_tokens=max_tokens, messages=to_openai_messages(system, messages), stream=True,
+                  stream_options={"include_usage": True})
+        t, first, parts, stop, usage, think = time.time(), None, [], "", None, 0
+        try:
+            for chunk in self.client.chat.completions.create(**kw):
+                usage = getattr(chunk, "usage", None) or usage
+                for ch in getattr(chunk, "choices", None) or []:
+                    # hidden reasoning arrives in its own field (Workers AI: reasoning_content / reasoning): count, never show
+                    think += len(getattr(ch.delta, "reasoning_content", None) or getattr(ch.delta, "reasoning", None) or "")
+                    piece = getattr(ch.delta, "content", None)
+                    if piece:
+                        first = first if first is not None else time.time() - t
+                        parts.append(piece)
+                        on_token(piece)
+                    stop = getattr(ch, "finish_reason", None) or stop
+        except Exception as e:
+            calltrace.record("chat", time.time() - t, model=self.model, error=type(e).__name__, max_tokens=max_tokens,
+                             effort=effort, stream=True, first=round(first, 2) if first is not None else None)
+            raise
+        calltrace.record("chat", time.time() - t, model=self.model, stop=stop or None, max_tokens=max_tokens, effort=effort,
+                         stream=True, first=round(first, 2) if first is not None else None,
+                         think_chars=think or None, text_chars=sum(map(len, parts)), **calltrace.usage_fields(usage))
+        return Reply("".join(parts), [], stop)
 
 
 def make_llm(settings):

@@ -27,6 +27,9 @@
   .md code { font:.9em ui-monospace,monospace; background:var(--line); padding:0 .25em; border-radius:4px; }
   .md table { border-collapse:collapse; margin:0 0 .6em; font-size:.92rem; } .md td, .md th { border:1px solid var(--line); padding:3px 6px; text-align:left; }
   .md hr { border:0; border-top:1px solid var(--line); margin:.6em 0; }
+  .step { color:var(--mut); font-style:italic; }
+  .draft::after { content:" \25cf"; color:var(--mut); animation:blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
 </style></head>
 <body>
 <header>
@@ -134,6 +137,55 @@ async function post(path, body, note) {
   if (!r.ok) throw new Error(`${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
   return j;
 }
+// Streamed answer (/api/ask/stream, server-sent events): step names while it searches and checks, the answer as it is
+// written, then the final checked answer (citations verified, quotes matched to the official text) replaces the draft.
+// Returns null when this server has no streaming endpoint (e.g. an older container during a rollout): use /api/ask then.
+const STEPS = {translate_in: 'Reading your question', condense: 'Reading the conversation', retrieve0: 'Searching the bills',
+  evaluate0: 'Checking which clauses answer it', retrieve1: 'Searching again', evaluate1: 'Checking the new results',
+  bill_sections: "Reading the bill's sections", answer_direct: 'Writing the answer', summarise: 'Writing the answer',
+  translate_out: 'Translating the answer'};
+async function askStream(body, el) {
+  const send = () => fetch('/api/ask/stream', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  let r;
+  try { r = await send(); }
+  catch (e) {
+    if (!(await waitUntilUp(el))) throw new Error('The server did not come back after 3 minutes. Try again shortly.');
+    el.textContent = 'Server is up. Asking again...';
+    r = await send();
+  }
+  if (r.status === 404) return null;
+  if (!r.ok || !(r.headers.get('Content-Type') || '').includes('text/event-stream')) {
+    let j = {}; try { j = await r.json(); } catch (e) {}
+    throw new Error(`${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
+  }
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = '', draft = '', final = null, queued = false, closed = false;
+  // `closed`: a draft repaint queued before the end must not overwrite the final answer the caller puts in afterwards
+  const paint = () => { queued = false; if (closed) return; el.innerHTML = renderMarkdown(draft); el.classList.add('md', 'draft'); el.classList.remove('step'); log.scrollTop = log.scrollHeight; };
+  const step = (t) => { if (!draft) { el.textContent = t + '...'; el.classList.add('step'); } };
+  try { for (;;) {
+    const {value, done} = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, {stream: true});
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const raw = buf.slice(0, i); buf = buf.slice(i + 2);
+      let kind = 'message', data = '';
+      for (const line of raw.split('\n')) {
+        if (line.startsWith('event:')) kind = line.slice(6).trim();
+        else if (line.startsWith('data:')) data += line.slice(5).trim();
+      }
+      let d = {}; try { d = JSON.parse(data || '{}'); } catch (e) {}
+      if (kind === 'status') step(STEPS[d.step] || 'Working');
+      else if (kind === 'reset') { if (draft) { draft = ''; el.classList.remove('draft', 'md'); step('Checking the answer and writing it again'); } }
+      else if (kind === 'token') { draft += d.text || ''; if (!queued) { queued = true; requestAnimationFrame(paint); } }
+      else if (kind === 'done') final = d.answer || '';
+      else if (kind === 'error') throw new Error(d.error || 'The server reported an error');
+    }
+  } } finally { closed = true; }
+  if (final === null) throw new Error('The connection closed before the answer was complete. Try again.');
+  return final;
+}
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = q.value.trim(); if (!text) return;
@@ -142,11 +194,16 @@ document.getElementById('f').addEventListener('submit', async (e) => {
   const wait = add(label, 'bot');
   const slow = setTimeout(() => { if (wait.textContent === label) wait.textContent = label + ' still working; answers take 15-30s, longer if the server was asleep.'; }, 8000);
   try {
-    const j = await post(so.checked ? '/api/search' : '/api/ask',
-                         so.checked ? {query: text, k: 6} : {session, question: text}, wait);
-    if (so.checked) wait.textContent = j.results.join('\n\n---\n\n');
-    else { wait.innerHTML = renderMarkdown(j.answer); wait.classList.add('md'); }
-  } catch (err) { wait.textContent = 'Error: ' + err.message; wait.classList.add('err'); }
+    if (so.checked) {
+      const j = await post('/api/search', {query: text, k: 6}, wait);
+      wait.textContent = j.results.join('\n\n---\n\n');
+    } else {
+      let answer = await askStream({session, question: text}, wait);
+      if (answer === null) answer = (await post('/api/ask', {session, question: text}, wait)).answer;
+      wait.classList.remove('draft', 'step');
+      wait.innerHTML = renderMarkdown(answer); wait.classList.add('md');
+    }
+  } catch (err) { wait.classList.remove('draft', 'step', 'md'); wait.textContent = 'Error: ' + err.message; wait.classList.add('err'); }
   clearTimeout(slow);
   btn.disabled = false; q.focus(); log.scrollTop = log.scrollHeight;
 });
