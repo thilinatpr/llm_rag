@@ -350,9 +350,7 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". **Live since 2026-11-06 10:11 UTC: build `ec82b284` = commit `e5dd298` on branch `claude/elegant-keller-1x4ri0`, which is
-NOT on `main` (deployed from the branch at the owner's request; open a PR and merge it with a merge commit so the deployed SHA is in
-`main`'s history). Worker version `be713b7d` (redeployed 10:15 UTC after the secret was added; first deploy was `3861cd0e`), container app version 18 (image `sha256:ab012c93...`, same image as v17; the v18 rollout restarted the container so it reads the secret).** Contains: bill metadata
+"Merged" is not "live". **Live since 2026-11-06 10:11 UTC: build `ec82b284` = commit `e5dd298` (deployed from branch `claude/elegant-keller-1x4ri0`; merged into `main` afterwards with merge commit `2a4c1a3`, PR #35, so the deployed SHA is in `main`'s history and `main` contains everything live plus later docs/eval commits). Worker version `be713b7d` (redeployed 10:15 UTC after the secret was added; first deploy was `3861cd0e`), container app version 18 (image `sha256:ab012c93...`, same image as v17; the v18 rollout restarted the container so it reads the secret).** Contains: bill metadata
 (`meta.py`), newest-instance rule, section-reference following (incl. penalty back-references), "which bill?" clarification, literal
 translate-in, prompt-echo guard, per-response cost log (`cost`, `calls[].usd`), the `CHAT_PROVIDER` switch (`src/chatconfig.js`) and
 the independent-judge eval. The index in R2 was re-uploaded 2026-11-06 10:08 UTC with the metadata tables (`bill_meta`, `section_refs`).
