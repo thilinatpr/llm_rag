@@ -422,7 +422,7 @@ against the `build` seen in the latest chat log before telling the owner a chang
 - **Search is English only.** Retrieval, embeddings and evals run on the English text. The official Sinhala text of
   2025+ bills is stored alongside (`local_sections`, see "Official Sinhala text") and used only to word Sinhala answers;
   never put it into `chunks` (that changes `fingerprint()` and invalidates `vectors.npz`). Sinhala PDFs up to 2024 (FM
-  Abhaya legacy font) and all Tamil PDFs are not handled yet.
+  Abhaya legacy font) and all Tamil PDFs are not handled yet (see "Tamil: official text" for why and the plan).
 - **Never fabricate legal content.** The agent prompt (`agent.SYSTEM`) requires citations like `[077/2026 §12(2)]`
   and "say so if not found". Do not weaken it. Answers explain text; they are not legal advice.
 - Bill keys are `NNN/YYYY` using the listing's number (`billNoText`), not the number printed on the PDF cover
@@ -665,6 +665,46 @@ Mined deterministically (no model) from the linked section pairs; lives outside 
   018/2026 §16: grader variance).
 - **Production:** the container restores `index.sqlite` from R2, so the glossary only goes live after `upload_r2.py --include-index`
   (old code ignores the table; the code without the table just has no hints).
+
+## Tamil: official text - feasibility check (2026-11-06, nothing built yet)
+
+Today a Tamil question takes the **translated path only**: translate-in, English answer, translate-out by the chat model. There is no official
+Tamil text, no Tamil glossary, no direct path (`pipeline.py` gates all of that on `lang == "si"`), and Tamil quality has never been measured.
+A live public-lane Tamil follow-up ("In tamil", after a budget-bill answer) was treated as a NEW question, searched "can you say this in Tamil?"
+and answered about the "Sinhala text shall prevail" clause: the condense step does not turn "answer that in Tamil/Sinhala/English" into a re-render
+of the previous answer (open bug, also for Sinhala).
+
+**Question: can we get the official Tamil text out of the PDFs like we did for Sinhala? Answer: not from the text layer; yes by OCR.**
+Fetched all 180 Tamil PDFs of 2025-26 (`fetch_index.py --pdfs TAMIL --since-year 2025`, 65 MB, 5,940 pages; 95 from 2025, 85 from 2026) and
+looked at the extracted text (page samples + automatic symptom counts, not a line-by-line audit):
+- All 180 have real Tamil Unicode (fraction of Tamil characters 0.85-0.95), none are scanned. But **no file has usable text**, in three ways:
+  - **~146 files (most 2026 bills): broken font mapping** (embedded Arial Unicode MS subsets): doubled vowel signs (`செெயல்` for `செயல்`,
+    `இலங்்க`), doubled consonants (`ததவறு`), U+FFFD where `ோ`/`ொ` should be, a stray Syriac letter (`இணܡந்த`), and each line printed twice.
+    Information is lost, not just reordered. PyMuPDF, pdfminer, pypdf and `pdftotext` all fail on it (differently), so the library is not the cause.
+  - **~31 files (mostly 2025, 12 from 2026): legacy-style encoding in Unicode code points**: pre-base vowel signs in visual order (`ேசர்ெபᾠமதி`)
+    and Greek letters standing for `ு`/`ூ` combinations (`ᾠ` = று, `ᾌ` = டு, `ᾞ` = ரு, `ᾙ` = மு, `ᾫ` = ளு). A deterministic repair table
+    looks possible but was not tried; OCR covers these too, so it is not needed.
+  - **~3 files: unassigned code points** in the Tamil block (`஌ ஺ ஻ ௄`).
+- **A first-glance "no symptom" check is misleading**: the 31 legacy-encoded files pass a doubled-sign/U+FFFD check and are still unreadable.
+  Count unassigned code points (`unicodedata.category == "Cn"`) and Greek/Syriac letters too.
+- **OCR works.** `apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-tam` works in the sandbox (apt lists are empty until `update`);
+  `raw.githubusercontent.com` (tessdata) and PyPI are reachable, `github.com/.../releases` is 403 (so EasyOCR's model download is blocked).
+  Pages rendered with PyMuPDF at 300 dpi, `tesseract page.png out -l tam --psm 4`: on 070/2026 (a garbled 2026 file) a contents page and a
+  clause page came out as clean, readable Tamil with the right legal terms (`பயங்கரவாதத்திலிருந்து அரசைப் பாதுகாப்பதற்கான`). About 0.8 s wall per page
+  on one page tried; 5,940 pages on 4 cores is therefore an estimate of about an hour, not a measurement. Flaws seen (2 pages only): list labels
+  (i)/(ii) read as `()` / `(॥)`, the margin line numbers (5, 10, 15) merge into the text, one doubled `்`, a noise character at the end of a page.
+  ZWNJ (U+200C) after the virama is normal in the output.
+- Not checked: OCR accuracy over whole bills or on the other 179 files, tables/schedules, the 2025 files' layout, how Tamil section numbering and
+  the enacting clause look, whether `local_sections.lang = 'ta'` linking (1..max, length ratio) succeeds for most bills.
+
+**Plan if we build it (same design as Sinhala, fail-safe):** render + OCR every page with word boxes/confidence (TSV), drop the line-number and
+margin-note columns by geometry, drop low-confidence lines, split into sections (sequence-checked against the English 1..max), link only bills
+that match exactly and sections within the 0.4-2.5x length ratio, store in `local_sections` (`lang='ta'`; the table already has the column),
+mine a Tamil glossary (short titles, interpretation sections), then generalise the `lang == "si"` gates in `pipeline.py`/`translate.py` (direct
+path, glossary hints, `fix_quotes`, `check_script` already knows Tamil) and re-upload the index to R2. Risk to manage: a quotation would carry any
+OCR misreading as "official wording", so keep the confidence filter and drop unlinked sections; with no Tamil eval set and no Tamil reviewer the
+quality stays unmeasured until a native speaker reads ~20 answers. Cheap interim steps: say on the page that Tamil answers are machine-translated
+from English, and fix the "answer that in <language>" follow-up.
 
 ## Bill metadata (`billrag/meta.py`, tables `bill_meta`, `section_refs`)
 
