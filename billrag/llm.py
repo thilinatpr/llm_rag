@@ -7,7 +7,10 @@ Internal message format (provider-neutral):
 Tool spec: {"name","description","parameters": <JSON schema>}
 """
 import json
+import time
 from dataclasses import dataclass, field
+
+from . import calltrace
 
 
 @dataclass
@@ -72,8 +75,15 @@ class AnthropicLLM:
         if tools:
             kw["tools"] = [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
                            for t in tools]
-        r = self.client.messages.create(model=self.model, max_tokens=max_tokens, system=system,
-                                        messages=to_anthropic_messages(messages), **kw)
+        t = time.time()
+        try:
+            r = self.client.messages.create(model=self.model, max_tokens=max_tokens, system=system,
+                                            messages=to_anthropic_messages(messages), **kw)
+        except Exception as e:
+            calltrace.record("chat", time.time() - t, model=self.model, error=type(e).__name__, max_tokens=max_tokens)
+            raise
+        calltrace.record("chat", time.time() - t, model=self.model, stop=getattr(r, "stop_reason", None),
+                         max_tokens=max_tokens, **calltrace.usage_fields(getattr(r, "usage", None)))
         return Reply("".join(b.text for b in r.content if b.type == "text"),
                      [ToolCall(b.id, b.name, dict(b.input)) for b in r.content if b.type == "tool_use"],
                      getattr(r, "stop_reason", "") or "")
@@ -92,8 +102,19 @@ class OpenAILLM:
         if tools:
             kw["tools"] = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
                                                              "parameters": t["parameters"]}} for t in tools]
-        r = self.client.chat.completions.create(model=self.model, max_tokens=max_tokens,
-                                                messages=to_openai_messages(system, messages), **kw)
+        t, comp = time.time(), self.client.chat.completions
+        kw.update(model=self.model, max_tokens=max_tokens, messages=to_openai_messages(system, messages))
+        try:
+            raw = getattr(comp, "with_raw_response", None)  # raw response: also says how many retries the SDK made
+            raw = raw.create(**kw) if raw is not None else None
+            r = raw.parse() if raw is not None else comp.create(**kw)
+        except Exception as e:
+            calltrace.record("chat", time.time() - t, model=self.model, error=type(e).__name__, max_tokens=max_tokens,
+                             effort=effort)
+            raise
+        calltrace.record("chat", time.time() - t, model=self.model, stop=getattr(r.choices[0], "finish_reason", None),
+                         retries=getattr(raw, "retries_taken", None), max_tokens=max_tokens, effort=effort,
+                         **calltrace.usage_fields(getattr(r, "usage", None)))
         msg = r.choices[0].message
         calls = []
         for tc in msg.tool_calls or []:
@@ -157,21 +178,26 @@ class _Cloudflare:
         self.account, self.token = account, token
 
     def _post(self, model, body, retries=4):
-        import time
         import urllib.error
         import urllib.request
         url = f"https://api.cloudflare.com/client/v4/accounts/{self.account}/ai/run/{model}"
+        n = len(body.get("text") or body.get("contexts") or []) or None
+        t0 = time.time()
         for attempt in range(retries):
             req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
                 "Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
             try:
                 with urllib.request.urlopen(req, timeout=60) as r:
-                    return json.load(r)["result"]
+                    out = json.load(r)["result"]
+                calltrace.record("ai_run", time.time() - t0, model=model, n=n, attempts=attempt + 1)
+                return out
             except urllib.error.HTTPError as e:
                 if e.code not in (429, 500, 502, 503, 504) or attempt == retries - 1:
+                    calltrace.record("ai_run", time.time() - t0, model=model, n=n, attempts=attempt + 1, error=f"HTTP {e.code}")
                     raise RuntimeError(f"Workers AI {model}: HTTP {e.code} {e.read().decode()[:200]}") from None
-            except (urllib.error.URLError, TimeoutError):
+            except (urllib.error.URLError, TimeoutError) as e:
                 if attempt == retries - 1:
+                    calltrace.record("ai_run", time.time() - t0, model=model, n=n, attempts=attempt + 1, error=type(e).__name__)
                     raise
             time.sleep(2 ** (attempt + 1))
 

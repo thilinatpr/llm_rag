@@ -19,6 +19,7 @@ from collections import OrderedDict
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import calltrace
 from .chatlog import Timer, build_id, log_turn
 from .resources import Usage, snapshot
 
@@ -63,9 +64,10 @@ class App:
 
     def search(self, query, k=6):
         from .agent import fmt_passage
-        with self.lock, Timer() as tm, Usage() as use:
+        with self.lock, Timer() as tm, Usage() as use, calltrace.tracing() as trace:
             out = [fmt_passage(c, 700) for c in self._retriever().search(query, k)]
-        log_turn(type="search", question=query, k=k, results=len(out), seconds=tm.seconds, usage=use.fields())
+        log_turn(type="search", question=query, k=k, results=len(out), seconds=tm.seconds, usage=use.fields(),
+                 calls=trace.calls or None)
         return out
 
     def stats(self):
@@ -128,7 +130,7 @@ class App:
             self.turns[session] = self.turns.get(session, 0) + 1
             turn = self.turns[session]
             err, text, meta = None, None, {}
-            with Timer() as tm, Usage() as use:
+            with Timer() as tm, Usage() as use, calltrace.tracing() as trace:
                 try:
                     text, meta = responder(question)
                     return text
@@ -137,7 +139,7 @@ class App:
                     raise
                 finally:
                     log_turn(type="ask", session=session, turn=turn, question=question, answer=text, error=err,
-                             seconds=round(time.time() - tm.t, 2), usage=use.fields(), **meta)
+                             seconds=round(time.time() - tm.t, 2), usage=use.fields(), calls=trace.calls or None, **meta)
 
 
 def make_handler(app):

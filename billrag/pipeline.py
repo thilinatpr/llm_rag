@@ -14,7 +14,7 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 
-from . import glossary as gloss, parse_si, resolve, translate
+from . import calltrace, glossary as gloss, parse_si, resolve, translate
 from .store import normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
@@ -401,6 +401,7 @@ class Pipeline:
         """Translation layer around `_ask`: any language -> English -> pipeline -> answer in the question's language."""
         tr = self.translator
         mode, lang, q_en, t = self.translate_mode, "en", question, time.time()
+        calltrace.step("translate_in")  # also the language-detection call of `ai` mode for an English question
         glossary_hints = []
         tr.calls = 0
         if mode != "off":
@@ -438,6 +439,7 @@ class Pipeline:
             return res
         res.answer_en, res.path = res.answer, "translated"
         t = time.time()
+        calltrace.step("translate_out")
         refs = self.official_texts(res.evidence, lang)
         terms = self.glossary_terms(res.evidence, lang, res)
         out, reasons = tr.from_english(res.answer_en, lang, [(f"{k} \u00a7{n}", t) for k, n, t in refs],
@@ -506,6 +508,7 @@ class Pipeline:
         if notes:
             self.on_event("resolve", {"notes": notes})
         t = time.time()
+        calltrace.step("condense")
         q = self.condense(plan["question"], res)
         res.seconds["condense"] = time.time() - t
         keys = [k for k in {normalize_ref(m) for m in re.findall(r"\d{1,3}\s*/\s*\d{4}", q)} if k and self.store.bill(k)] or None
@@ -513,6 +516,7 @@ class Pipeline:
         enough, missing = True, ""
         for rnd in range(1 + self.extra_rounds):
             t = time.time()
+            calltrace.step(f"retrieve{rnd}")
             cands = []
             for qq in queries:
                 cands += self.retrieve(qq, seen_ids, keys)
@@ -521,6 +525,7 @@ class Pipeline:
             if not cands:
                 break
             t = time.time()
+            calltrace.step(f"evaluate{rnd}")
             scores, enough, missing, more = self.evaluate(q, cands, res)
             res.seconds[f"evaluate{rnd}"] = time.time() - t
             graded += [Evidence(c, scores.get(i, 0)) for i, c in enumerate(cands)]
@@ -533,6 +538,7 @@ class Pipeline:
         res.evidence = self.build_evidence(graded)
         if local and self.direct_local and res.evidence and all(e.section is None for e in res.evidence):
             t = time.time()
+            calltrace.step("bill_sections")
             res.added_sections = self.bill_sections(q, res.evidence)
             res.evidence += res.added_sections
             res.seconds["bill_sections"] = time.time() - t
@@ -542,6 +548,7 @@ class Pipeline:
             self.on_event("focus", focus)
         if local and self.direct_local and res.evidence:
             t = time.time()
+            calltrace.step("answer_direct")
             user_q = local[1] + ("\n(State this first: " + " ".join(notes) + ")" if notes else "")
             out, info = self.answer_direct(q, user_q, res.evidence, enough, missing, res, local[0], focus)
             res.seconds["answer_direct"] = time.time() - t
@@ -554,6 +561,7 @@ class Pipeline:
                 self.on_event("answer_direct", {"fallback": info})
         if res.path != "direct":
             t = time.time()
+            calltrace.step("summarise")
             res.answer = self.summarise(q, res.evidence, enough, missing, res, focus=focus)
             res.seconds["summarise"] = time.time() - t
             if notes:

@@ -29,6 +29,7 @@ billrag/resolve.py        question grounding before retrieval: greetings, abbrev
 billrag/chatlog.py        one JSON record per chat turn -> R2 `chatlogs/` + local JSONL; `build_id()` = hash of the running code
 billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/search, /api/stats, /healthz); secret-gated in production
 billrag/resources.py      CPU/memory: `snapshot()` for /api/stats, `Usage` per request -> log field `usage` (stdlib, /proc + cgroup)
+billrag/calltrace.py      one record per model / Workers AI call (step, model, seconds, tokens, retries) -> log field `calls`
 public/index.html         the chat page (static asset, served by the Worker behind the login; also used by local `serve`)
 src/worker.js             Worker entrypoint: login gate (auth.js) + forwards /api/* and /healthz to the container
 src/auth.js               email one-time-code login (KV codes/sessions, Cloudflare Email Service REST sender), routing
@@ -218,7 +219,10 @@ Every question the live app answers is logged (best-effort, off the request path
 `enough` (did the grader think the evidence sufficed), `evidence` (bill, section, grade 0-3), `candidates_graded`, `warnings`
 (unsupported citations, unusable model output), `llm_calls`, `step_seconds`, `events` (resolve/retrieve/evaluate with the grader's
 "missing" text) and `usage` (`cpu_s` process CPU seconds during the turn, `cpu_pct` = cpu_s / wall seconds, `rss_mb`,
-`rss_delta_mb`, `peak_rss_mb`; also on `search` records).
+`rss_delta_mb`, `peak_rss_mb`; also on `search` records) and `calls` (one entry per model / Workers AI call and local search step:
+`kind` chat|ai_run|bm25|dense_scan, `step`, `model`, `s` seconds incl. retries, `at` offset in the turn, `in`/`out` tokens,
+`reasoning` tokens if the provider reports them, `stop`, `retries` (silent OpenAI-SDK retries), `attempts` (Workers AI `/ai/run`),
+`max_tokens`, `effort`, `error`). `read_chatlogs.py` prints a per-step table: median/max seconds, median output tokens, tokens/s.
 ```bash
 env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY python scripts/read_chatlogs.py [--since 2026-11-05] [--out logs.jsonl] [--show 20]
 ```
@@ -236,6 +240,13 @@ them as private. Records before the first logging deploy do not exist.
   total/available), `cgroup` (memory usage/limit/peak, CPU usage/throttling/limit, whichever files exist), `sessions` /
   `max_sessions`, `turns`, `busy` (a question is running), `retriever_loaded`, `build`, `uptime_s`. Opening it wakes a sleeping
   container and resets the 15-minute idle timer, so don't poll it.
+- **Where a question's time goes** (`calls`, measured 2026-11-06 from the sandbox with production settings, 5 runs): the answer
+  call dominates and its cost is **output tokens**. Sinhala costs ~0.85 characters per output token vs ~2.5 for English, so a
+  1,300-1,700-char direct Sinhala answer is 1,000-2,000 tokens = 12-26 s at gpt-oss's 65-80 tok/s; an English answer is ~400
+  tokens = 2.7-7.5 s. Grading: 2.9-8.2 s (350-700 tokens; one run's grader reply was unusable and the firmer retry added 15 s).
+  Retrieval: two searches per round, each an embedding (0.2-0.55 s) + reranker (0.5-1.2 s) call: 2-3.5 s in total; BM25 and the
+  dense scan are < 0.1 s each. Llama translate-in: 0.7-1 s. No SDK retries, no `/ai/run` retries. Same-model throughput varied
+  46-151 tok/s between calls. Workers AI reports no `completion_tokens_details`, so reasoning tokens are inside `out`.
 - **Over time:** Cloudflare dashboard -> Workers & Pages -> Containers -> `gov-rag-llm-billragcontainer` has CPU/memory/disk graphs
   per instance (not reachable from the sandbox).
 

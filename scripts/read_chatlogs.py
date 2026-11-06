@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from upload_r2 import client  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from billrag import calltrace  # noqa: E402
 from billrag.resources import usage_summary  # noqa: E402
 
 
@@ -66,6 +67,13 @@ def main():
     print(f"seconds: median {secs[len(secs) // 2]:.1f}, p90 {secs[int(len(secs) * 0.9)]:.1f}, max {secs[-1]:.1f}")
     for line in usage_summary(recs):
         print(line)
+    rows = calltrace.summary([r.get("calls") for r in asks])
+    if rows:
+        print(f"\nmodel/API calls by step ({sum(1 for r in asks if r.get('calls'))} questions with call records; s = seconds per call)")
+        print(f"  {'step':<15}{'kind':<11}{'model':<42}{'n':>4}{'med s':>8}{'max s':>8}{'med out':>9}{'out/s':>7}{'retry':>6}")
+        for st, kind, model, n, ms, mx, mo, rate, retr in rows:
+            print(f"  {st:<15}{kind:<11}{model[-41:]:<42}{n:>4}{ms:>8.2f}{mx:>8.2f}{mo if mo is not None else '-':>9}"
+                  f"{rate if rate is not None else '-':>7}{retr:>6}")
 
     def show(title, rows):
         print(f"\n{title} ({len(rows)})")

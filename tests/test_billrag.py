@@ -1543,3 +1543,108 @@ def test_usage_summary_for_read_chatlogs():
     lines = usage_summary(recs)
     assert "2 records" in lines[0] and "cpu_s" in lines[0] and "max 3 s" in lines[0] and "peak_rss_mb" in lines[1]
     assert "no CPU/memory" in usage_summary([{"question": "q"}])[0]
+
+
+# ---------------------------------------------------------------- per-call tracing (calltrace)
+def test_calltrace_records_only_inside_a_trace_and_restores_the_outer_one():
+    from billrag import calltrace
+    calltrace.record("chat", 1.0, model="m")  # no trace: no-op
+    with calltrace.tracing() as outer:
+        calltrace.step("a")
+        calltrace.record("chat", 0.5, model="m", out=10, retries=None)
+        with calltrace.tracing() as inner:
+            calltrace.record("bm25", 0.01)
+        calltrace.record("ai_run", 0.2, n=3)
+    assert [c["kind"] for c in outer.calls] == ["chat", "ai_run"] and [c["kind"] for c in inner.calls] == ["bm25"]
+    assert outer.calls[0]["step"] == "a" and "retries" not in outer.calls[0] and outer.calls[0]["out"] == 10
+    assert calltrace._active is None
+    assert calltrace.usage_fields({"prompt_tokens": 5, "completion_tokens": 7,
+                                   "completion_tokens_details": {"reasoning_tokens": 3}}) == {"in": 5, "out": 7, "reasoning": 3}
+    assert calltrace.usage_fields(type("U", (), {"input_tokens": 4, "output_tokens": 2})()) == {"in": 4, "out": 2}
+    rows = calltrace.summary([[{"step": "answer_direct", "kind": "chat", "model": "m", "s": 10.0, "out": 500, "retries": 1},
+                               {"step": "retrieve0", "kind": "ai_run", "model": "r", "s": 1.0, "attempts": 2}],
+                              [{"step": "answer_direct", "kind": "chat", "model": "m", "s": 30.0, "out": 600}], None])
+    assert rows[0][:4] == ("answer_direct", "chat", "m", 2) and rows[0][5] == 30.0 and rows[0][8] == 1
+    assert rows[1][0] == "retrieve0" and rows[1][8] == 1  # a second attempt counts as a retry
+
+
+def test_openai_adapter_records_tokens_and_sdk_retries():
+    from billrag import calltrace
+    from billrag.llm import OpenAILLM
+
+    class Resp:
+        choices = [type("C", (), {"message": type("M", (), {"content": "ok", "tool_calls": None}), "finish_reason": "stop"})()]
+        usage = {"prompt_tokens": 100, "completion_tokens": 40, "completion_tokens_details": {"reasoning_tokens": 25}}
+
+    class Raw:
+        retries_taken = 2
+
+        def parse(self):
+            return Resp()
+
+    class Client:
+        class chat:
+            class completions:
+                class with_raw_response:
+                    @staticmethod
+                    def create(**kw):
+                        return Raw()
+
+    llm = object.__new__(OpenAILLM)
+    llm.client, llm.model = Client, "gpt-x"
+    with calltrace.tracing() as tr:
+        calltrace.step("evaluate0")
+        assert llm.chat("s", [{"role": "user", "content": "q"}], max_tokens=900, effort="low").text == "ok"
+    c = tr.calls[0]
+    assert (c["kind"], c["step"], c["model"], c["in"], c["out"], c["reasoning"], c["retries"], c["stop"], c["effort"]) == \
+        ("chat", "evaluate0", "gpt-x", 100, 40, 25, 2, "stop", "low")
+
+
+def test_cloudflare_post_records_attempts(monkeypatch):
+    import io
+    import urllib.error
+    from billrag import calltrace, llm as L
+    tries = []
+
+    def fake_urlopen(req, timeout=60):
+        tries.append(1)
+        if len(tries) == 1:
+            raise urllib.error.HTTPError(req.full_url, 503, "busy", {}, io.BytesIO(b""))
+        return io.BytesIO(json.dumps({"result": {"response": []}}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(L.time, "sleep", lambda s: None)
+    rr = L.CloudflareReranker("@cf/rr", "acc", "tok")
+    with calltrace.tracing() as tr:
+        rr.scores("q", ["a", "b"])
+    assert tr.calls[0]["kind"] == "ai_run" and tr.calls[0]["attempts"] == 2 and tr.calls[0]["n"] == 2
+
+
+def test_web_log_carries_calls_with_pipeline_steps(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    from billrag import calltrace, web
+    monkeypatch.setenv("BILLRAG_LOG_DIR", str(tmp_path / "logs"))
+    st = make_store(tmp_path)
+
+    class TracedLLM(TranslatingLLM):
+        def chat(self, system, messages, **kw):
+            r = super().chat(system, messages, **kw)
+            calltrace.record("chat", 0.01, model="fake", out=len(r.text))
+            return r
+
+    app = web.App.__new__(web.App)
+    app.s = SimpleNamespace(chat_model="m", answer_model=None, translate_model=None, grade_effort=None, answer_effort=None,
+                            translate="script")
+    app.mode, app.store, app._llm, app._retr = "pipeline", st, TracedLLM(), Retriever(st)
+    app.lock, app.sessions, app.turns = threading.Lock(), web.OrderedDict(), {}
+    app.ask("s1", SI_Q)
+    for _ in range(50):
+        files = list((tmp_path / "logs").glob("*.jsonl"))
+        if files and files[0].read_text().strip():
+            break
+        __import__("time").sleep(0.05)
+    calls = json.loads(files[0].read_text().splitlines()[0])["calls"]
+    steps = {(c["kind"], c["step"]) for c in calls}
+    assert ("bm25", "retrieve0") in steps and ("chat", "evaluate0") in steps
+    assert ("chat", "translate_in") in steps and ("chat", "translate_out") in steps
