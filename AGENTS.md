@@ -201,6 +201,10 @@ python3 -c "import json,collections; print(collections.Counter(json.loads(l).get
 ```
 Then update **Deployed vs main** below (build id, commit, Worker version, container version, previous version) in the same PR
 or a follow-up, and tell the owner exactly what is live and what is only merged.
+A project hook does the reminding: `.claude/settings.json` runs `.claude/hooks/record_deploy.py` after every Bash call; after a
+successful `wrangler deploy` (not `--dry-run`) it hands Claude the commit, build id, Worker version and image and the steps:
+wait for the rollout, update that paragraph on a branch fresh from `main`, PR, merge with a merge commit. The hook itself never
+pushes or merges. It is silent for every other command.
 **Rollback:** check out the previous deployed commit and repeat steps 1-5; the old image digest stays in
 `registry.cloudflare.com`, and `wrangler deployments list` shows earlier Worker versions.
 

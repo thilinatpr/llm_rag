@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/record_deploy.py\"",
+            "timeout": 20,
+            "statusMessage": "Checking for a deploy to record"
+          }
+        ]
+      }
+    ]
+  }
+}
