@@ -1,7 +1,10 @@
 """Hybrid retrieval: BM25 (+ optional dense) -> reciprocal-rank fusion -> optional LLM rerank -> diversity cap."""
 import json
 import re
+import time
 from collections import defaultdict
+
+from . import calltrace
 
 RRF_K = 60
 SCAN_BLOCK = 4096  # rows per block when scoring float16 vectors (~12 MB of float32 at 768 dims)
@@ -53,9 +56,11 @@ class Retriever:
         import numpy as np
         q = np.asarray(self.embedder.embed([query]), dtype="float32")[0]
         q /= (np.linalg.norm(q) or 1.0)
+        t = time.time()
         sims = self._scores(q)
         order = np.argsort(-sims)[: limit * (4 if (year or keys) else 1) if not kinds else min(len(sims), limit * 25)]
         ids = [int(self.ids[i]) for i in order]
+        calltrace.record("dense_scan", time.time() - t)
         if year or keys or kinds:
             ch = self.store.chunks_by_ids(ids)
             ids = [i for i in ids if i in ch and (not year or int(ch[i]["bill_key"][-4:]) == int(year))
@@ -63,7 +68,9 @@ class Retriever:
         return ids
 
     def search(self, query, k=8, year=None, keys=None, pool=40, kinds=None):
+        t = time.time()
         lists = [self.store.bm25(query, pool, year, keys, kinds)]
+        calltrace.record("bm25", time.time() - t)
         d = self.dense(query, pool, year, keys, kinds)
         if d:
             lists.append(d)

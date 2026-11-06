@@ -7,7 +7,10 @@ Internal message format (provider-neutral):
 Tool spec: {"name","description","parameters": <JSON schema>}
 """
 import json
+import time
 from dataclasses import dataclass, field
+
+from . import calltrace
 
 
 @dataclass
@@ -67,13 +70,32 @@ class AnthropicLLM:
         kw = {k: v for k, v in (("base_url", base_url), ("api_key", api_key)) if v}
         self.client, self.model = anthropic.Anthropic(**kw), model
 
-    def chat(self, system, messages, tools=(), max_tokens=2048, effort=None) -> Reply:  # effort: ignored here
+    def chat(self, system, messages, tools=(), max_tokens=2048, effort=None, on_token=None) -> Reply:  # effort: ignored
+        if on_token is not None and not tools:
+            t, first = time.time(), None
+            with self.client.messages.stream(model=self.model, max_tokens=max_tokens, system=system,
+                                             messages=to_anthropic_messages(messages)) as st:
+                for piece in st.text_stream:
+                    first = first if first is not None else time.time() - t
+                    on_token(piece)
+                r = st.get_final_message()
+            calltrace.record("chat", time.time() - t, model=self.model, stop=getattr(r, "stop_reason", None),
+                             max_tokens=max_tokens, stream=True, first=round(first, 2) if first is not None else None,
+                             **calltrace.usage_fields(getattr(r, "usage", None)))
+            return Reply("".join(b.text for b in r.content if b.type == "text"), [], getattr(r, "stop_reason", "") or "")
         kw = {}
         if tools:
             kw["tools"] = [{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]}
                            for t in tools]
-        r = self.client.messages.create(model=self.model, max_tokens=max_tokens, system=system,
-                                        messages=to_anthropic_messages(messages), **kw)
+        t = time.time()
+        try:
+            r = self.client.messages.create(model=self.model, max_tokens=max_tokens, system=system,
+                                            messages=to_anthropic_messages(messages), **kw)
+        except Exception as e:
+            calltrace.record("chat", time.time() - t, model=self.model, error=type(e).__name__, max_tokens=max_tokens)
+            raise
+        calltrace.record("chat", time.time() - t, model=self.model, stop=getattr(r, "stop_reason", None),
+                         max_tokens=max_tokens, **calltrace.usage_fields(getattr(r, "usage", None)))
         return Reply("".join(b.text for b in r.content if b.type == "text"),
                      [ToolCall(b.id, b.name, dict(b.input)) for b in r.content if b.type == "tool_use"],
                      getattr(r, "stop_reason", "") or "")
@@ -85,15 +107,29 @@ class OpenAILLM:
         kw = {k: v for k, v in (("base_url", base_url), ("api_key", api_key)) if v}
         self.client, self.model = openai.OpenAI(max_retries=6, **kw), model
 
-    def chat(self, system, messages, tools=(), max_tokens=2048, effort=None) -> Reply:
+    def chat(self, system, messages, tools=(), max_tokens=2048, effort=None, on_token=None) -> Reply:
+        """on_token(text): stream the reply, calling it with each piece of visible text (not with reasoning)."""
+        if on_token is not None and not tools:
+            return self._stream(system, messages, max_tokens, effort, on_token)
         kw = {}
         if effort:  # reasoning models (gpt-oss): low/medium/high; sent as an extra body field
             kw["extra_body"] = {"reasoning_effort": effort}
         if tools:
             kw["tools"] = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
                                                              "parameters": t["parameters"]}} for t in tools]
-        r = self.client.chat.completions.create(model=self.model, max_tokens=max_tokens,
-                                                messages=to_openai_messages(system, messages), **kw)
+        t, comp = time.time(), self.client.chat.completions
+        kw.update(model=self.model, max_tokens=max_tokens, messages=to_openai_messages(system, messages))
+        try:
+            raw = getattr(comp, "with_raw_response", None)  # raw response: also says how many retries the SDK made
+            raw = raw.create(**kw) if raw is not None else None
+            r = raw.parse() if raw is not None else comp.create(**kw)
+        except Exception as e:
+            calltrace.record("chat", time.time() - t, model=self.model, error=type(e).__name__, max_tokens=max_tokens,
+                             effort=effort)
+            raise
+        calltrace.record("chat", time.time() - t, model=self.model, stop=getattr(r.choices[0], "finish_reason", None),
+                         retries=getattr(raw, "retries_taken", None), max_tokens=max_tokens, effort=effort,
+                         **calltrace.usage_fields(getattr(r, "usage", None)))
         msg = r.choices[0].message
         calls = []
         for tc in msg.tool_calls or []:
@@ -103,6 +139,32 @@ class OpenAILLM:
                 args = {}
             calls.append(ToolCall(tc.id, tc.function.name, args))
         return Reply(msg.content or "", calls, getattr(r.choices[0], "finish_reason", "") or "")
+
+    def _stream(self, system, messages, max_tokens, effort, on_token):
+        kw = {"extra_body": {"reasoning_effort": effort}} if effort else {}
+        kw.update(model=self.model, max_tokens=max_tokens, messages=to_openai_messages(system, messages), stream=True,
+                  stream_options={"include_usage": True})
+        t, first, parts, stop, usage, think = time.time(), None, [], "", None, 0
+        try:
+            for chunk in self.client.chat.completions.create(**kw):
+                usage = getattr(chunk, "usage", None) or usage
+                for ch in getattr(chunk, "choices", None) or []:
+                    # hidden reasoning arrives in its own field (Workers AI: reasoning_content / reasoning): count, never show
+                    think += len(getattr(ch.delta, "reasoning_content", None) or getattr(ch.delta, "reasoning", None) or "")
+                    piece = getattr(ch.delta, "content", None)
+                    if piece:
+                        first = first if first is not None else time.time() - t
+                        parts.append(piece)
+                        on_token(piece)
+                    stop = getattr(ch, "finish_reason", None) or stop
+        except Exception as e:
+            calltrace.record("chat", time.time() - t, model=self.model, error=type(e).__name__, max_tokens=max_tokens,
+                             effort=effort, stream=True, first=round(first, 2) if first is not None else None)
+            raise
+        calltrace.record("chat", time.time() - t, model=self.model, stop=stop or None, max_tokens=max_tokens, effort=effort,
+                         stream=True, first=round(first, 2) if first is not None else None,
+                         think_chars=think or None, text_chars=sum(map(len, parts)), **calltrace.usage_fields(usage))
+        return Reply("".join(parts), [], stop)
 
 
 def make_llm(settings):
@@ -157,21 +219,26 @@ class _Cloudflare:
         self.account, self.token = account, token
 
     def _post(self, model, body, retries=4):
-        import time
         import urllib.error
         import urllib.request
         url = f"https://api.cloudflare.com/client/v4/accounts/{self.account}/ai/run/{model}"
+        n = len(body.get("text") or body.get("contexts") or []) or None
+        t0 = time.time()
         for attempt in range(retries):
             req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={
                 "Authorization": f"Bearer {self.token}", "Content-Type": "application/json"})
             try:
                 with urllib.request.urlopen(req, timeout=60) as r:
-                    return json.load(r)["result"]
+                    out = json.load(r)["result"]
+                calltrace.record("ai_run", time.time() - t0, model=model, n=n, attempts=attempt + 1)
+                return out
             except urllib.error.HTTPError as e:
                 if e.code not in (429, 500, 502, 503, 504) or attempt == retries - 1:
+                    calltrace.record("ai_run", time.time() - t0, model=model, n=n, attempts=attempt + 1, error=f"HTTP {e.code}")
                     raise RuntimeError(f"Workers AI {model}: HTTP {e.code} {e.read().decode()[:200]}") from None
-            except (urllib.error.URLError, TimeoutError):
+            except (urllib.error.URLError, TimeoutError) as e:
                 if attempt == retries - 1:
+                    calltrace.record("ai_run", time.time() - t0, model=model, n=n, attempts=attempt + 1, error=type(e).__name__)
                     raise
             time.sleep(2 ** (attempt + 1))
 

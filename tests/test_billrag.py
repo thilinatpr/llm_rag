@@ -1543,3 +1543,269 @@ def test_usage_summary_for_read_chatlogs():
     lines = usage_summary(recs)
     assert "2 records" in lines[0] and "cpu_s" in lines[0] and "max 3 s" in lines[0] and "peak_rss_mb" in lines[1]
     assert "no CPU/memory" in usage_summary([{"question": "q"}])[0]
+
+
+# ---------------------------------------------------------------- per-call tracing (calltrace)
+def test_calltrace_records_only_inside_a_trace_and_restores_the_outer_one():
+    from billrag import calltrace
+    calltrace.record("chat", 1.0, model="m")  # no trace: no-op
+    with calltrace.tracing() as outer:
+        calltrace.step("a")
+        calltrace.record("chat", 0.5, model="m", out=10, retries=None)
+        with calltrace.tracing() as inner:
+            calltrace.record("bm25", 0.01)
+        calltrace.record("ai_run", 0.2, n=3)
+    assert [c["kind"] for c in outer.calls] == ["chat", "ai_run"] and [c["kind"] for c in inner.calls] == ["bm25"]
+    assert outer.calls[0]["step"] == "a" and "retries" not in outer.calls[0] and outer.calls[0]["out"] == 10
+    assert calltrace._active is None
+    assert calltrace.usage_fields({"prompt_tokens": 5, "completion_tokens": 7,
+                                   "completion_tokens_details": {"reasoning_tokens": 3}}) == {"in": 5, "out": 7, "reasoning": 3}
+    assert calltrace.usage_fields(type("U", (), {"input_tokens": 4, "output_tokens": 2})()) == {"in": 4, "out": 2}
+    rows = calltrace.summary([[{"step": "answer_direct", "kind": "chat", "model": "m", "s": 10.0, "out": 500, "retries": 1},
+                               {"step": "retrieve0", "kind": "ai_run", "model": "r", "s": 1.0, "attempts": 2}],
+                              [{"step": "answer_direct", "kind": "chat", "model": "m", "s": 30.0, "out": 600}], None])
+    assert rows[0][:4] == ("answer_direct", "chat", "m", 2) and rows[0][5] == 30.0 and rows[0][8] == 1
+    assert rows[1][0] == "retrieve0" and rows[1][8] == 1  # a second attempt counts as a retry
+
+
+def test_openai_adapter_records_tokens_and_sdk_retries():
+    from billrag import calltrace
+    from billrag.llm import OpenAILLM
+
+    class Resp:
+        choices = [type("C", (), {"message": type("M", (), {"content": "ok", "tool_calls": None}), "finish_reason": "stop"})()]
+        usage = {"prompt_tokens": 100, "completion_tokens": 40, "completion_tokens_details": {"reasoning_tokens": 25}}
+
+    class Raw:
+        retries_taken = 2
+
+        def parse(self):
+            return Resp()
+
+    class Client:
+        class chat:
+            class completions:
+                class with_raw_response:
+                    @staticmethod
+                    def create(**kw):
+                        return Raw()
+
+    llm = object.__new__(OpenAILLM)
+    llm.client, llm.model = Client, "gpt-x"
+    with calltrace.tracing() as tr:
+        calltrace.step("evaluate0")
+        assert llm.chat("s", [{"role": "user", "content": "q"}], max_tokens=900, effort="low").text == "ok"
+    c = tr.calls[0]
+    assert (c["kind"], c["step"], c["model"], c["in"], c["out"], c["reasoning"], c["retries"], c["stop"], c["effort"]) == \
+        ("chat", "evaluate0", "gpt-x", 100, 40, 25, 2, "stop", "low")
+
+
+def test_cloudflare_post_records_attempts(monkeypatch):
+    import io
+    import urllib.error
+    from billrag import calltrace, llm as L
+    tries = []
+
+    def fake_urlopen(req, timeout=60):
+        tries.append(1)
+        if len(tries) == 1:
+            raise urllib.error.HTTPError(req.full_url, 503, "busy", {}, io.BytesIO(b""))
+        return io.BytesIO(json.dumps({"result": {"response": []}}).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr(L.time, "sleep", lambda s: None)
+    rr = L.CloudflareReranker("@cf/rr", "acc", "tok")
+    with calltrace.tracing() as tr:
+        rr.scores("q", ["a", "b"])
+    assert tr.calls[0]["kind"] == "ai_run" and tr.calls[0]["attempts"] == 2 and tr.calls[0]["n"] == 2
+
+
+def test_web_log_carries_calls_with_pipeline_steps(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    from billrag import calltrace, web
+    monkeypatch.setenv("BILLRAG_LOG_DIR", str(tmp_path / "logs"))
+    st = make_store(tmp_path)
+
+    class TracedLLM(TranslatingLLM):
+        def chat(self, system, messages, **kw):
+            r = super().chat(system, messages, **kw)
+            calltrace.record("chat", 0.01, model="fake", out=len(r.text))
+            return r
+
+    app = web.App.__new__(web.App)
+    app.s = SimpleNamespace(chat_model="m", answer_model=None, translate_model=None, grade_effort=None, answer_effort=None,
+                            translate="script")
+    app.mode, app.store, app._llm, app._retr = "pipeline", st, TracedLLM(), Retriever(st)
+    app.lock, app.sessions, app.turns = threading.Lock(), web.OrderedDict(), {}
+    app.ask("s1", SI_Q)
+    for _ in range(50):
+        files = list((tmp_path / "logs").glob("*.jsonl"))
+        if files and files[0].read_text().strip():
+            break
+        __import__("time").sleep(0.05)
+    calls = json.loads(files[0].read_text().splitlines()[0])["calls"]
+    steps = {(c["kind"], c["step"]) for c in calls}
+    assert ("bm25", "retrieve0") in steps and ("chat", "evaluate0") in steps
+    assert ("chat", "translate_in") in steps and ("chat", "translate_out") in steps
+
+
+# ---------------------------------------------------------------- streaming (/api/ask/stream)
+def _streaming(cls):
+    """A fake model class that also streams its reply in small pieces when asked (on_token)."""
+    class S(cls):
+        def chat(self, system, messages, tools=(), max_tokens=0, effort=None, on_token=None):
+            r = super().chat(system, messages, tools, max_tokens, effort)
+            if on_token:
+                self.streamed = getattr(self, "streamed", 0) + 1
+                for i in range(0, len(r.text), 5):
+                    on_token(r.text[i:i + 5])
+            return r
+    return S
+
+
+def _collect(p, question):
+    ev = []
+    p.emit = lambda k, d: ev.append((k, d))
+    res = p.ask(question)
+    return res, ev
+
+
+def test_english_answer_streams_steps_then_the_answer_text(tmp_path):
+    st = make_store(tmp_path)
+    res, ev = _collect(Pipeline(st, Retriever(st), _streaming(ScriptLLM)()), "How many days does the amendment allow?")
+    steps = [d for k, d in ev if k == "status"]
+    assert steps[:3] == ["condense", "retrieve0", "evaluate0"] and steps[-1] == "summarise"
+    assert ev.index(("reset", None)) > ev.index(("status", "summarise"))  # a fresh draft for the answer call
+    assert "".join(d for k, d in ev if k == "token") == res.answer  # only the answer call is streamed, not grading
+
+
+def test_leaked_reasoning_is_never_streamed(tmp_path):
+    st = make_store(tmp_path)
+
+    class Leaky(ScriptLLM):
+        def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+            r = super().chat(system, messages, tools, max_tokens, effort)
+            if "CANDIDATES:" not in messages[-1]["content"] and "FOLLOW-UP:" not in messages[-1]["content"]:
+                n = getattr(self, "n", 0)
+                self.n = n + 1
+                if n == 0:
+                    return Reply("analysis: the user wants the number of days, I should look at section 2 ...")
+            return r
+
+    res, ev = _collect(Pipeline(st, Retriever(st), _streaming(Leaky)()), "How many days does the amendment allow?")
+    toks = "".join(d for k, d in ev if k == "token")
+    assert "analysis" not in toks and toks == res.answer and "fifteen days" in res.answer  # retry streamed, leak hidden
+    assert sum(1 for k, _ in ev if k == "reset") == 2
+
+
+def test_sinhala_direct_answer_streams_but_translated_answer_does_not(tmp_path):
+    st = make_store(tmp_path)
+    _with_official(st)
+    res, ev = _collect(Pipeline(st, Retriever(st), _streaming(DirectLLM)()), SI_Q)
+    assert res.path == "direct" and "".join(d for k, d in ev if k == "token").startswith(SI_ANS[:10])
+    assert ("status", "answer_direct") in ev
+    st2 = make_store(tmp_path / "b")  # no official text -> English answer + translation: steps only, no English draft
+    res2, ev2 = _collect(Pipeline(st2, Retriever(st2), _streaming(TranslatingLLM)()), SI_Q)
+    assert res2.path == "translated" and not [d for k, d in ev2 if k == "token"]
+    assert ("status", "translate_out") in ev2
+
+
+def test_openai_adapter_streams_visible_text_and_records_first_token():
+    from billrag import calltrace
+    from billrag.llm import OpenAILLM
+    D = lambda **kw: type("D", (), {"content": None, **kw})()
+    chunks = [type("K", (), {"choices": [type("C", (), {"delta": D(reasoning_content="thinking"), "finish_reason": None})()], "usage": None})(),
+              type("K", (), {"choices": [type("C", (), {"delta": D(content="Hello "), "finish_reason": None})()], "usage": None})(),
+              type("K", (), {"choices": [type("C", (), {"delta": D(content="world"), "finish_reason": "stop"})()], "usage": None})(),
+              type("K", (), {"choices": [], "usage": {"prompt_tokens": 9, "completion_tokens": 4}})()]
+    seen = {}
+
+    class Client:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    seen.update(kw)
+                    return iter(chunks)
+
+    llm = object.__new__(OpenAILLM)
+    llm.client, llm.model = Client, "m"
+    pieces = []
+    with calltrace.tracing() as tr:
+        r = llm.chat("s", [{"role": "user", "content": "q"}], effort="low", on_token=pieces.append)
+    assert r.text == "Hello world" and pieces == ["Hello ", "world"] and r.stop == "stop" and seen["stream"] is True
+    c = tr.calls[0]
+    assert c["stream"] is True and c["out"] == 4 and c["in"] == 9 and isinstance(c["first"], float)
+
+
+def test_web_stream_endpoint_sends_events_then_the_final_answer():
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from billrag.web import make_handler
+
+    class StubApp:
+        secret = None
+
+        def ask(self, sid, q, emit=None):
+            if q == "boom":
+                raise RuntimeError("model down")
+            emit("status", "retrieve0")
+            emit("token", "dra")
+            emit("token", "ft")
+            return "final answer"
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(StubApp()))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def events(q):
+        req = urllib.request.Request(f"http://127.0.0.1:{srv.server_address[1]}/api/ask/stream",
+                                     json.dumps({"question": q}).encode(), {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as r:
+            assert r.headers["Content-Type"].startswith("text/event-stream")
+            raw = r.read().decode()
+        out = []
+        for block in raw.strip().split("\n\n"):
+            lines = dict(line.split(": ", 1) for line in block.split("\n"))
+            out.append((lines["event"], json.loads(lines["data"])))
+        return out
+
+    try:
+        assert events("q") == [("status", {"step": "retrieve0"}), ("token", {"text": "dra"}), ("token", {"text": "ft"}),
+                               ("done", {"answer": "final answer"})]
+        assert events("boom") == [("error", {"error": "RuntimeError: model down"})]
+    finally:
+        srv.shutdown()
+
+
+def test_answer_mode_from_the_page_sets_only_the_answer_effort(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    from billrag import web
+    assert web.answer_mode({"answer": "fast"}) == "fast" and web.answer_mode({"answer": "high"}) is None
+    assert web.answer_mode({}) is None and web.answer_mode({"answer": ["fast"]}) is None
+    monkeypatch.setenv("BILLRAG_CHATLOG", "0")
+    st = make_store(tmp_path)
+
+    def app_with(grade_effort, answer_effort):
+        llm = ScriptLLM()
+        app = web.App.__new__(web.App)
+        app.s = SimpleNamespace(chat_model="m", answer_model=None, translate_model=None, grade_effort=grade_effort,
+                                answer_effort=answer_effort, translate="script")
+        app.mode, app.store, app._llm, app._retr = "pipeline", st, llm, Retriever(st)
+        app.lock, app.sessions, app.turns = threading.Lock(), web.OrderedDict(), {}
+        return app, llm
+
+    app, llm = app_with("low", None)
+    app.ask("s", "How many days does the amendment allow?", mode="fast")
+    assert llm.efforts[-1] == "low" and llm.efforts[0] == "low"  # answer call low; grading keeps its own (low) effort
+    app.ask("s", "How many days does the amendment allow?", mode="thorough")
+    assert llm.efforts[-1] is None  # server default (model default)
+    app.ask("s", "How many days does the amendment allow?")
+    assert llm.efforts[-1] is None
+    app, llm = app_with(None, None)  # server says: this model takes no reasoning effort -> fast must not send one
+    app.ask("s", "How many days does the amendment allow?", mode="fast")
+    assert llm.efforts[-1] is None
+    _text, meta = app_with("low", "medium")[0]._new_responder()("How many days does the amendment allow?", mode="fast")
+    assert meta["answer_mode"] == "fast" and meta["answer_effort"] == "low"

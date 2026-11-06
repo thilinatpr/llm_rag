@@ -27,8 +27,9 @@ billrag/enrich.py         optional: dense vectors (`embed`) and LLM bill summari
 billrag/config.py         all settings come from BILLRAG_* env vars (documented at the top of the file)
 billrag/resolve.py        question grounding before retrieval: greetings, abbreviation (PTSA) -> bill title matching, "closest bills"
 billrag/chatlog.py        one JSON record per chat turn -> R2 `chatlogs/` + local JSONL; `build_id()` = hash of the running code
-billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/search, /api/stats, /healthz); secret-gated in production
+billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/ask/stream, /api/search, /api/stats, /healthz); secret-gated
 billrag/resources.py      CPU/memory: `snapshot()` for /api/stats, `Usage` per request -> log field `usage` (stdlib, /proc + cgroup)
+billrag/calltrace.py      one record per model / Workers AI call (step, model, seconds, tokens, retries) -> log field `calls`
 public/index.html         the chat page (static asset, served by the Worker behind the login; also used by local `serve`)
 src/worker.js             Worker entrypoint: login gate (auth.js) + forwards /api/* and /healthz to the container
 src/auth.js               email one-time-code login (KV codes/sessions, Cloudflare Email Service REST sender), routing
@@ -218,7 +219,10 @@ Every question the live app answers is logged (best-effort, off the request path
 `enough` (did the grader think the evidence sufficed), `evidence` (bill, section, grade 0-3), `candidates_graded`, `warnings`
 (unsupported citations, unusable model output), `llm_calls`, `step_seconds`, `events` (resolve/retrieve/evaluate with the grader's
 "missing" text) and `usage` (`cpu_s` process CPU seconds during the turn, `cpu_pct` = cpu_s / wall seconds, `rss_mb`,
-`rss_delta_mb`, `peak_rss_mb`; also on `search` records).
+`rss_delta_mb`, `peak_rss_mb`; also on `search` records) and `calls` (one entry per model / Workers AI call and local search step:
+`kind` chat|ai_run|bm25|dense_scan, `step`, `model`, `s` seconds incl. retries, `at` offset in the turn, `in`/`out` tokens,
+`reasoning` tokens if the provider reports them, `stop`, `retries` (silent OpenAI-SDK retries), `attempts` (Workers AI `/ai/run`),
+`max_tokens`, `effort`, `error`). `read_chatlogs.py` prints a per-step table: median/max seconds, median output tokens, tokens/s.
 ```bash
 env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY python scripts/read_chatlogs.py [--since 2026-11-05] [--out logs.jsonl] [--show 20]
 ```
@@ -236,6 +240,37 @@ them as private. Records before the first logging deploy do not exist.
   total/available), `cgroup` (memory usage/limit/peak, CPU usage/throttling/limit, whichever files exist), `sessions` /
   `max_sessions`, `turns`, `busy` (a question is running), `retriever_loaded`, `build`, `uptime_s`. Opening it wakes a sleeping
   container and resets the 15-minute idle timer, so don't poll it.
+- **Where a question's time goes** (`calls`, measured 2026-11-06 from the sandbox with production settings): the answer call
+  dominates, and most of it is gpt-oss's **hidden reasoning**, not writing. Streamed answer calls log `first` (seconds to the
+  first visible word), `think_chars` (reasoning characters, never shown) and `text_chars`. Workers AI counts reasoning inside
+  `out` (no `completion_tokens_details`), so `out` alone over-states the answer: a 1,428-char Sinhala answer was 2,611 `out`
+  tokens, but the visible text streamed in ~2.5 s after 14 s of reasoning. Answer step, same questions, `ANSWER_EFFORT` unset
+  (model default) vs `low`:
+
+  | answer step | first visible word | answer call | reasoning chars |
+  |---|---|---|---|
+  | Sinhala direct, default (n=4) | 13.6-26.8 s | 16.7-33.0 s | 2,200-5,700 |
+  | Sinhala direct, `low` (n=4) | 0.6-7.0 s | 7.7-12.7 s | 35-190 |
+  | English, default (n=3) | 2.8-7.0 s | 5.0-10.2 s | 1,100-1,700 |
+  | English, `low` (n=2) | 0.6-0.9 s | 3.0-5.2 s | 75-120 |
+
+  One of 3 Sinhala runs was rejected in each setting (Korean characters, Devanagari danda ।, no citations) and fell back to the
+  slow translated path (89-116 s). Answer quality with `low` was measured on the English eval earlier ("pipeline v5": strict
+  0.83, 23/24), not on Sinhala. Grading: 2.9-8.2 s (one run's grader reply was unusable: +15 s retry, or "using retrieval order").
+  Retrieval: two searches per round, each an embedding (0.2-0.55 s) + reranker (0.5-1.2 s) call, 2-3.5 s in total; BM25 and the
+  dense scan < 0.1 s each. Llama translate-in 0.7-1.3 s. No SDK or `/ai/run` retries seen.
+- **Streaming** (`POST /api/ask/stream`, server-sent events): `status` {step} at each pipeline step, `reset` + `token` {text}
+  while the final answer call writes (English answers and direct Sinhala answers; a translated answer shows steps only, since
+  its draft would be English), then `done` {answer} = the checked answer (citations verified, quotes fixed, warnings, sources),
+  which replaces the draft, or `error`. Replies that start like leaked reasoning ("analysis:") are not streamed. The page falls
+  back to `/api/ask` on a 404 (an older container during a rollout). The Worker passes the stream through unchanged.
+- **Answer speed choice on the page** ("Answer: Thorough | Fast", remembered per browser): requests carry `answer`, and only
+  `web.ANSWER_MODES` names are accepted. `fast` = reasoning effort `low` for the answer call only (grading, translation unchanged),
+  and only when the server sends effort at all (`BILLRAG_GRADE_EFFORT` non-empty); `thorough` / missing = the server default
+  (`BILLRAG_ANSWER_EFFORT`, unset = model default). Logged as `answer_mode` and `answer_effort`. First live check (Sinhala
+  cricket question, fast): answer call 5.1 s, first word 0.8 s, 35 reasoning chars, direct path, no warnings; 20.6 s in total.
+  Sinhala answer quality with `fast` is not measured beyond a handful of runs: compare `direct_fallback` / `warnings` by
+  `answer_mode` in the logs.
 - **Over time:** Cloudflare dashboard -> Workers & Pages -> Containers -> `gov-rag-llm-billragcontainer` has CPU/memory/disk graphs
   per instance (not reachable from the sandbox).
 

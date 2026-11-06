@@ -14,7 +14,7 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 
-from . import glossary as gloss, parse_si, resolve, translate
+from . import calltrace, glossary as gloss, parse_si, resolve, translate
 from .store import normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
@@ -192,12 +192,45 @@ class Pipeline:
         self._last_cut = False  # did the last _llm reply hit max_tokens
         self._glossary = None  # loaded on first non-English question
         self.history = []
+        self.emit = None  # optional emit(kind, data): "status" (step name), "token" (answer text), "reset" (drop the draft)
 
     # ------------------------------------------------------------ steps
-    def _llm(self, system, user, max_tokens, res, effort=None, json_out=False, llm=None):
+    def _step(self, name):
+        calltrace.step(name)
+        if self.emit:
+            self.emit("status", name)
+
+    def _streamer(self):
+        """on_token for a streamed answer call. Holds back the first characters until it is clear the reply is an answer,
+        not leaked reasoning ("analysis: ..."); leaked reasoning is never shown (the final, checked answer replaces it)."""
+        self.emit("reset", None)
+        buf, mode = [], ["wait"]
+
+        def on_token(piece):
+            if mode[0] == "live":
+                self.emit("token", piece)
+            elif mode[0] == "wait":
+                buf.append(piece)
+                head = "".join(buf)
+                if len(head.lstrip()) >= 12 or "\n" in head.lstrip():
+                    mode[0] = "quiet" if REASONING.match(head) else "live"
+                    if mode[0] == "live":
+                        self.emit("token", head)
+
+        def flush():  # a reply shorter than the hold-back window
+            if mode[0] == "wait" and buf and not REASONING.match("".join(buf)):
+                self.emit("token", "".join(buf))
+        return on_token, flush
+
+    def _llm(self, system, user, max_tokens, res, effort=None, json_out=False, llm=None, stream=False):
         def call(u):
             res.llm_calls += 1
-            r = (llm or self.llm).chat(system, [{"role": "user", "content": u}], max_tokens=max_tokens, effort=effort)
+            kw = {}
+            if stream and self.emit:
+                kw["on_token"], flush = self._streamer()
+            r = (llm or self.llm).chat(system, [{"role": "user", "content": u}], max_tokens=max_tokens, effort=effort, **kw)
+            if kw:
+                flush()
             txt, self._last_cut = r.text, getattr(r, "truncated", False)
             txt = LEAK.split(txt)[0].strip() or txt.strip()
             if json_out:
@@ -285,7 +318,7 @@ class Pipeline:
             out.append(e)
         return out
 
-    def summarise(self, question, evidence, enough, missing, res, local=None, focus=None, extra=""):
+    def summarise(self, question, evidence, enough, missing, res, local=None, focus=None, extra="", stream=False):
         """local: (lang code, {(bill, section): official text}) -> write the answer directly in that language."""
         if not evidence:
             return "I could not find anything in the indexed bills that answers this question."
@@ -307,7 +340,7 @@ class Pipeline:
             note += FOCUS_NOTE.format(title=focus["title"], keys=", ".join(focus["bills"]))
         user = f"QUESTION: {question}\n\nEVIDENCE:\n\n" + "\n\n".join(blocks) + note + extra
         system = ANSWER_SYSTEM + (LOCAL_NOTE.format(lang=lang, LANG=lang.upper()) if code else "")
-        return self._llm(system, user, 4000 if code else 1800, res, self.answer_effort, llm=self.answer_llm)
+        return self._llm(system, user, 4000 if code else 1800, res, self.answer_effort, llm=self.answer_llm, stream=stream)
 
     def answer_direct(self, question, user_question, evidence, enough, missing, res, code, focus=None):
         """One-step answer in the user's language when the bill's official text in that language exists for the evidence.
@@ -320,7 +353,8 @@ class Pipeline:
         q = f"{user_question}\n(English rendering used for search: {question})"
         reasons = []
         for _attempt in range(2):  # one retry: a direct answer is ~15 s, the translate-out fallback 30-100 s and worse
-            out = self.summarise(q, evidence, enough, missing, res, local=(code, official), focus=focus, extra=terms)
+            out = self.summarise(q, evidence, enough, missing, res, local=(code, official), focus=focus, extra=terms,
+                                 stream=True)
             out = out.replace("\u200b", "")  # stray zero-width spaces (seen live); ZWJ U+200D is part of Sinhala conjuncts
             why = ("unusable output" if out == LEAK_FALLBACK else "cut off at the output limit" if self._last_cut
                    else translate.check_script(out, code))
@@ -401,16 +435,19 @@ class Pipeline:
         """Translation layer around `_ask`: any language -> English -> pipeline -> answer in the question's language."""
         tr = self.translator
         mode, lang, q_en, t = self.translate_mode, "en", question, time.time()
+        calltrace.step("translate_in")  # also the language-detection call of `ai` mode for an English question
         glossary_hints = []
         tr.calls = 0
         if mode != "off":
             lang = translate.detect(question)  # Sinhala / Tamil by script: free
             if lang != "en":
+                self._step("translate_in")
                 hints = self.glossary(lang).in_question(question) if lang == "si" else []
                 q_en = tr.to_english(question, lang, [(loc, en) for loc, en, _k in hints])
                 q_en = self.keep_titles(q_en, hints)
                 glossary_hints = [f"{loc} = {en}" for loc, en, _k in hints]
             elif mode == "ai":  # any other language (or romanised Sinhala/Tamil): one call detects and translates
+                self._step("translate_in")
                 got = tr.detect_ai(question)
                 if got is None:
                     res = self._ask(question)
@@ -438,6 +475,7 @@ class Pipeline:
             return res
         res.answer_en, res.path = res.answer, "translated"
         t = time.time()
+        self._step("translate_out")
         refs = self.official_texts(res.evidence, lang)
         terms = self.glossary_terms(res.evidence, lang, res)
         out, reasons = tr.from_english(res.answer_en, lang, [(f"{k} \u00a7{n}", t) for k, n, t in refs],
@@ -506,6 +544,7 @@ class Pipeline:
         if notes:
             self.on_event("resolve", {"notes": notes})
         t = time.time()
+        self._step("condense")
         q = self.condense(plan["question"], res)
         res.seconds["condense"] = time.time() - t
         keys = [k for k in {normalize_ref(m) for m in re.findall(r"\d{1,3}\s*/\s*\d{4}", q)} if k and self.store.bill(k)] or None
@@ -513,6 +552,7 @@ class Pipeline:
         enough, missing = True, ""
         for rnd in range(1 + self.extra_rounds):
             t = time.time()
+            self._step(f"retrieve{rnd}")
             cands = []
             for qq in queries:
                 cands += self.retrieve(qq, seen_ids, keys)
@@ -521,6 +561,7 @@ class Pipeline:
             if not cands:
                 break
             t = time.time()
+            self._step(f"evaluate{rnd}")
             scores, enough, missing, more = self.evaluate(q, cands, res)
             res.seconds[f"evaluate{rnd}"] = time.time() - t
             graded += [Evidence(c, scores.get(i, 0)) for i, c in enumerate(cands)]
@@ -533,6 +574,7 @@ class Pipeline:
         res.evidence = self.build_evidence(graded)
         if local and self.direct_local and res.evidence and all(e.section is None for e in res.evidence):
             t = time.time()
+            self._step("bill_sections")
             res.added_sections = self.bill_sections(q, res.evidence)
             res.evidence += res.added_sections
             res.seconds["bill_sections"] = time.time() - t
@@ -542,6 +584,7 @@ class Pipeline:
             self.on_event("focus", focus)
         if local and self.direct_local and res.evidence:
             t = time.time()
+            self._step("answer_direct")
             user_q = local[1] + ("\n(State this first: " + " ".join(notes) + ")" if notes else "")
             out, info = self.answer_direct(q, user_q, res.evidence, enough, missing, res, local[0], focus)
             res.seconds["answer_direct"] = time.time() - t
@@ -554,7 +597,9 @@ class Pipeline:
                 self.on_event("answer_direct", {"fallback": info})
         if res.path != "direct":
             t = time.time()
-            res.answer = self.summarise(q, res.evidence, enough, missing, res, focus=focus)
+            self._step("summarise")
+            res.answer = self.summarise(q, res.evidence, enough, missing, res, focus=focus,
+                                        stream=local is None)  # a translated answer is streamed as statuses only
             res.seconds["summarise"] = time.time() - t
             if notes:
                 res.answer = " ".join(notes) + "\n\n" + res.answer
