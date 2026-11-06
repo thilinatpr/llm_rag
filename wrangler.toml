@@ -44,7 +44,7 @@ R2_BUCKET = "gov-rag"
 # Chat model provider: "workers-ai" (default, gpt-oss-120b via Cloudflare) | "deepseek" (needs the DEEPSEEK_API_KEY secret; model
 # CHAT_MODEL, default deepseek-flash; grading thinking off). See src/chatconfig.js and AGENTS.md "Priorities, DeepSeek". Switch back
 # by setting this to "workers-ai" and redeploying.
-CHAT_PROVIDER = "workers-ai"
+CHAT_PROVIDER = "deepseek"
 # Translation of non-English questions (billrag/translate.py): off | script | ai.
 # script = Sinhala/Tamil by Unicode script, no extra model call for English. ai = one extra call on every other question
 # (English too) that detects ANY language and translates it. Read by the container when it starts.
