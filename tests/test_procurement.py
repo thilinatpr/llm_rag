@@ -430,5 +430,5 @@ def test_pointed_at_clause_is_added_once_with_its_source(tmp_path, monkeypatch):
     assert "[PG2024 §1.1]" in labels and labels.count("[PG2024 §2.1]") == 1  # 1.1 says "Section 2.1"
     ref = next(u for u in units if u["label"] == "[PG2024 §2.1]")
     assert "Referred to by [PG2024 §1.1]" in ref["note"]
-    assert "[PG2024 §1.2]" in labels and "Referred to by" in next(u for u in units if u["label"] == "[PG2024 §1.2]")["note"]
+    assert "[PG2024 §1.2]" not in labels  # "set out in 1.2 below" has no keyword, so it is not followed
     assert pa.verify("Committees are appointed by the CAO [PG2024 §2.1].", units) == []
