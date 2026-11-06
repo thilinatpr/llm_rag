@@ -49,10 +49,12 @@ test("logAsk writes one R2 object per answered question, after the reply", async
   const puts = [], waits = [];
   const env = { LOGS: { put: async (key, body) => puts.push({ key, rec: JSON.parse(body) }) } };
   const ctx = { waitUntil: (p) => waits.push(p) };
-  const response = new Response(JSON.stringify({ answer: "A [x]", sources: ["s1"], warnings: [] }));
+  const response = new Response(JSON.stringify({ answer: "A [x]", sources: ["s1"], warnings: [], standalone: "full q?" }));
   await logAsk(env, ctx, { question: "q?", response, ms: 12, status: 200 });
   await Promise.all(waits);
   assert.equal(puts.length, 1);
+  assert.equal(puts[0].rec.type, "ask"); // read_chatlogs.py counts anything else as a search
+  assert.equal(puts[0].rec.standalone, "full q?");
   assert.match(puts[0].key, /^procurement-logs\/\d{4}-\d\d-\d\d\/\d{9}-[0-9a-f]{8}\.json$/);
   assert.deepEqual([puts[0].rec.question, puts[0].rec.answer, puts[0].rec.sources, puts[0].rec.status], ["q?", "A [x]", ["s1"], 200]);
 });

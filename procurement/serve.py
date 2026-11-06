@@ -1,10 +1,11 @@
 """HTTP server for the Procurement Rules container (stdlib only): python -m procurement.serve
 
 GET  /healthz    {"ok": true}
-POST /api/ask    {"question": str} -> {"answer": str, "sources": [str], "warnings": [str]}
+POST /api/ask    {"question": str, "history": [{"question": str, "answer": str}]} -> {"answer": str, "sources": [str], "warnings": [str],
+                 "standalone": str}   (history is optional: the page sends its last turns; `standalone` = how a follow-up was read)
 
 Every request must carry X-Proxy-Secret (only the login Worker has it). The container holds no Cloudflare token: reranking goes
-through the Worker's Workers AI binding (PROCUREMENT_RERANK_URL). Each question is standalone. One JSON line per question goes to
+through the Worker's Workers AI binding (PROCUREMENT_RERANK_URL). The server keeps no conversation state. One JSON line per question goes to
 stdout (container logs): questions are private, so read those logs only to debug.
 """
 import argparse
@@ -49,13 +50,13 @@ class App:
         self.index, self.llm, self.secret = index, llm, secret
         self.lock = threading.Lock()  # one question at a time; /healthz still answers meanwhile
 
-    def ask(self, question):
+    def ask(self, question, history=None):
         from .ask import ask
         with self.lock:
-            r = ask(self.index, self.llm, question)
-        print(json.dumps({"event": "ask", "question": question, "answer": r.answer, "warnings": r.warnings, "seconds": r.seconds,
-                          "sources": r.sources()}, ensure_ascii=False), flush=True)
-        return {"answer": r.answer, "sources": r.sources(), "warnings": r.warnings}
+            r = ask(self.index, self.llm, question, history=history)
+        print(json.dumps({"event": "ask", "question": question, "standalone": r.standalone, "answer": r.answer, "warnings": r.warnings,
+                          "seconds": r.seconds, "sources": r.sources()}, ensure_ascii=False), flush=True)
+        return {"answer": r.answer, "sources": r.sources(), "warnings": r.warnings, "standalone": r.standalone}
 
 
 def make_handler(app):
@@ -91,12 +92,13 @@ def make_handler(app):
                 n = int(self.headers.get("Content-Length", 0))
                 if n > MAX_BODY:
                     return self.send(413, {"error": "question too long"})
-                question = str(json.loads(self.rfile.read(n) or b"{}").get("question", "")).strip()
+                body = json.loads(self.rfile.read(n) or b"{}")
+                question = str(body.get("question", "")).strip()
                 if not question:
                     return self.send(400, {"error": "empty question"})
                 if len(question) > MAX_QUESTION:
                     return self.send(413, {"error": f"keep the question under {MAX_QUESTION} characters"})
-                self.send(200, app.ask(question))
+                self.send(200, app.ask(question, body.get("history")))
             except Exception as e:
                 print(json.dumps({"event": "error", "error": f"{type(e).__name__}: {e}"}), flush=True)
                 self.send(500, {"error": "The answer could not be produced. Please try again."})

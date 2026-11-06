@@ -432,3 +432,84 @@ def test_pointed_at_clause_is_added_once_with_its_source(tmp_path, monkeypatch):
     assert "Referred to by [PG2024 §1.1]" in ref["note"]
     assert "[PG2024 §1.2]" not in labels  # "set out in 1.2 below" has no keyword, so it is not followed
     assert pa.verify("Committees are appointed by the CAO [PG2024 §2.1].", units) == []
+
+
+class ScriptedLLM(FakeLLM):
+    """First reply rewrites the follow-up, the second answers it; records what each call saw."""
+    def __init__(self, *replies):
+        self.replies, self.seen = list(replies), []
+
+    def chat(self, system, messages, **kw):
+        self.seen.append(messages[-1]["content"])
+        r = self.replies.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r if not isinstance(r, str) else type("R", (), {"text": r, "truncated": False})()
+
+
+HISTORY = [{"question": "Who approves emergency procurement?", "answer": "The CAO [PG2024 §1.2]."}]
+
+
+def test_followup_is_rewritten_before_search_and_answer(tmp_path, monkeypatch):
+    from procurement.ask import ask
+    idx = _index(tmp_path, monkeypatch)
+    llm = ScriptedLLM("How is emergency procurement approved by the CAO?", "By covering approval [PG2024 §1.2].")
+    r = ask(idx, llm, "and how?", history=HISTORY)
+    assert r.standalone == "How is emergency procurement approved by the CAO?" and r.question == "and how?"
+    assert "Who approves emergency procurement?" in llm.seen[0]
+    assert llm.seen[1].startswith("Question: How is emergency procurement approved by the CAO?")
+    assert "The CAO [PG2024" not in llm.seen[1]  # the earlier answer is not evidence
+
+
+def test_no_history_costs_no_extra_call(tmp_path, monkeypatch):
+    from procurement.ask import ask
+    llm = ScriptedLLM("Yes [PG2024 §1.2].")
+    r = ask(_index(tmp_path, monkeypatch), llm, "emergency procurement", history=[])
+    assert len(llm.seen) == 1 and r.standalone == "" and r.warnings == []
+
+
+def test_failed_rewrite_searches_on_the_last_question_too_and_warns(tmp_path, monkeypatch):
+    from procurement.ask import ask
+    for bad in (RuntimeError("down"), "man " * 40):
+        llm = ScriptedLLM(bad, "Yes [PG2024 §1.2].")
+        r = ask(_index(tmp_path, monkeypatch), llm, "emergency procurement", history=HISTORY)
+        assert r.standalone == "" and llm.seen[-1].startswith("Question: Who approves emergency procurement? emergency procurement")
+        assert any("not rewritten" in w for w in r.warnings)
+
+
+def test_history_from_the_browser_is_validated_and_capped():
+    from procurement.ask import MAX_HISTORY, MAX_HISTORY_ANSWER, clean_history
+    assert clean_history("x") == [] and clean_history([1, {"question": 2, "answer": "a"}, {"question": " ", "answer": "a"}]) == []
+    long = [{"question": f"q{i}", "answer": "a" * 9000} for i in range(9)]
+    out = clean_history(long)
+    assert len(out) == MAX_HISTORY and out[-1]["question"] == "q8" and len(out[0]["answer"]) == MAX_HISTORY_ANSWER
+
+
+def test_non_binding_guide_is_capped_paired_and_always_labelled(tmp_path, monkeypatch):
+    from procurement import ask as A
+    idx = _index(tmp_path, monkeypatch)
+    guide = [dict(doc="GPMCM", ref=f"8.{i}", heading="h", part=0) for i in range(5)]
+    monkeypatch.setattr(idx, "search", lambda *a, **k: guide)
+    monkeypatch.setattr(A, "GUIDE_BINDING", (("PG2024", "1.2"),))
+    monkeypatch.setattr(idx, "clause", lambda doc, ref, heading=None: [dict(heading="h", chapter="", page=1, note=None, part=0, text="t")])
+    units = A.gather(idx, "q", docs=A.CURRENT)
+    assert [u["doc"] for u in units].count("GPMCM") == A.MAX_GUIDE and units[0]["doc"] == "PG2024"
+    monkeypatch.setattr(idx, "search", lambda *a, **k: guide[:1])
+    r = A.ask(idx, FakeLLM("Withhold under the contract [GPMCM §8.0]."), "q", docs=A.CURRENT)
+    assert "non-binding guidance" in r.answer and "unofficial" not in r.answer
+
+
+def test_lower_case_ipc_finds_interim_payments(tmp_path, monkeypatch):
+    from procurement.index import QUERY_TERMS
+    assert "interim payment" in QUERY_TERMS["ipc"] and "withhold" in QUERY_TERMS["block"]
+
+
+def test_eval_gold_is_well_formed_and_scoring_handles_typography():
+    import json as _j
+    from procurement.ask import Answer
+    from procurement.evaluate import EVAL, score
+    items = [_j.loads(l) for l in open(EVAL, encoding="utf-8")]
+    assert len(items) == 39 and len({i["id"] for i in items}) == 39 and all(i["facts"] and i["gold"] for i in items)
+    item = dict(id="x", question="q", gold=["PM2024 §2.9"], facts=["seven years"])
+    r = score(item, Answer("q", answer="up to seven\u202fyears [PM2024 §2.9.1].", warnings=["unsupported citations: FR 1"]))
+    assert r["strict"] and r["cited"] and not r["clean"]

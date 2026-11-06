@@ -189,6 +189,7 @@ async function post(path, body, note) {
   if (!r.ok) throw new Error(`${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
   return j;
 }
+const turns = [];  // this page's conversation, sent back so a follow-up can be understood; the server keeps nothing
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = q.value.trim(); if (!text) return;
@@ -198,9 +199,15 @@ document.getElementById('f').addEventListener('submit', async (e) => {
   const wait = add('Reading the rules...', 'bot');
   wait.classList.add('step');
   try {
-    const j = await post('/api/ask', {question: text}, wait);
+    const j = await post('/api/ask', {question: text, history: turns.slice(-2)}, wait);
     wait.classList.remove('step');
     wait.innerHTML = renderMarkdown(j.answer); wait.classList.add('md');
+    turns.push({question: j.standalone || text, answer: j.answer});
+    if (j.standalone) {
+      const n = document.createElement('p'); n.className = 'step';
+      n.textContent = 'Read as: ' + j.standalone;
+      wait.prepend(n);
+    }
     if ((j.warnings || []).some((w) => w.includes('citations'))) {
       const n = document.createElement('p'); n.className = 'step';
       n.textContent = 'Check this answer against the source: one or more of its citations could not be verified.';

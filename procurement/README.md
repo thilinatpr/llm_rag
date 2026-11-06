@@ -149,11 +149,32 @@ citation warning (paragraph numbers of a one-passage circular), fixed: a whole-d
     documents matter.
   - A citation that names the wrong one of two shown passages is not caught (see above).
   - If NPC reissues the Manual, the page numbers move: rerun `check-tables`. A mismatch means the transcriptions need redoing.
-- No eval set yet: turn the 12 questions into gold (doc, ref) items and measure retrieval, as `evals/retrieval_eval.jsonl` does.
 - Not in the index: the Consultancy guidelines, Contract Management Guidelines (PG2024 §1.4(c)), Standard Procurement
   Documents, NPC circulars after 2025, and the Sinhala/Tamil texts.
 - The amendment gazette is encoded by hand (8 rows). Recheck it if NPC publishes more amendments.
 - Supreme Court FR petition (TISL, SCFR/22/2025): status unknown.
+
+## Eval (`python -m procurement.evaluate`, `evals/procurement_eval.jsonl`, 2026-11-07)
+39 items: 35 officer-style questions recovered from an earlier session (the old "38 questions" were never committed, nor was any gold), the
+live payment questions of 2026-11-06 and one follow-up. Gold is written from the source; `--check-gold` fails if a required fact is not in
+its gold passage. No model judge: `strict` = required facts + cites gold; `clean` = strict + no unsupported citation. Regexes are coarse: a
+pass does not prove the whole answer is right (below), so read the answers. n is small: treat gaps under ~0.1 as noise.
+
+Measured with `gpt-oss-120b`, NOT production's `deepseek-flash` (that account ran out of credit during the runs), reranker on:
+| 38 items at the time (3 gap items excluded = 105 answers each), 3 runs | evidence | cited | facts | strict |
+|---|---|---|---|---|
+| heading chain + pointers off | 0.99 | 0.96 | 0.92 | 0.90 |
+| heading chain + pointers on | 1.00 | 0.96 | 0.92 | 0.90 |
+So they neither help nor hurt on this set, at about one more passage per question. All 39 items, final code, 3 runs (117 answers): evidence 0.99, cited
+0.97, facts 0.88, strict 0.86, clean 0.83, warned 0.10. Persistent misses: q29 (the model says a Head of Department has no write-off power, which may be fair), q35
+(omits the 31.03.2025 expiry), q27 (citation), q36 (answers without saying the role is not named). **Known quality problem, payment questions:** answers state
+limits on a "project accountant" more firmly than the sources do (no document names the role), and a citation check cannot catch that.
+
+**Coverage, payment certification:** PM2024 §9.1 already covers certification (C) and joint inspection (F); the live question missed it because no document
+says "IPC" (`index.QUERY_TERMS`). Added GPMCM (Ministry of Finance guide, Feb 2017, chapters 4-10 word for word, `scripts/gpmcm_extract.py`): §8.3.3 lists "unsupported
+or undocumented costs" as a ground for withholding. It is non-binding and predates the 2024 rules: at most 2 passages per question, always with PM2024/PG2024 §9.1 (without
+this it filled every slot and the model invented rules), and a fixed note in code. Not found: NPC's own Contract Management Guidelines (PG2024 §1.4(c), not in the NPC manifest), the works SBD.
+**Follow-ups:** the page sends its last 2 turns (`history`); one extra model call rewrites the question; the server stores nothing; the page shows "Read as: ...".
 
 ## Gazette retrieval (scripts/)
 - documents.gov.lk generic server action (same id as `scripts/scrape_bills.py`) with `apiEndpoint=.../extra-gazette/get-all` and a
