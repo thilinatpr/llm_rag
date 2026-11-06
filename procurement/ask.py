@@ -8,10 +8,18 @@ import re
 import time
 from dataclasses import dataclass, field
 
-CURRENT, ALL = ("PG2024", "PM2024", "CON"), ("PG2024", "PM2024", "CON", "PG2006", "PM2006")
+from .sources import ALL, CURRENT, DOCS
+
+# "supplement N" is NOT an old-regime marker any more: NPC's Supplements 01-07 (2025-26) are current.
 OLD = re.compile(r"\b2006\b|before\s+(?:1st\s+)?jan\w*\s+2025|before\s+2025|pre-?2025|\bold\s+(?:guidelines|manual|rules)"
-                 r"|\bNPA\b|national\s+procurement\s+agency|transition|supplement\s*-?\s*\d|\bTEC\b|\bCAPC\b", re.I)
-CITE = re.compile(r"\b(P[GM](?:2024|2006)|CON)\s*(?:§|Art(?:icle)?\.?)\s*(Definitions|156[A-Z]|\d{1,2}(?:\.\d{1,2}){0,3})", re.I)
+                 r"|\bNPA\b|national\s+procurement\s+agency|transition|\bTEC\b|\bCAPC\b", re.I)
+_IDS = "|".join(sorted((d["id"] for d in DOCS), key=len, reverse=True))
+_CANON = {d["id"].lower(): d["id"] for d in DOCS}
+TRANSLATED = {d["id"] for d in DOCS if d.get("note")}  # our own translations of Sinhala-only circulars (FRA, PFC0120)
+TRANSLATION_NOTE = ("Note: {docs} {verb} an unofficial English translation of Sinhala Treasury circulars made for this tool; "
+                    "the Sinhala text is authoritative.")  # citations are matched case-insensitively ("PFC0326i")
+CITE = re.compile(rf"\b({_IDS})\b(?:\s*(?:§|Art(?:icle)?\.?)\s*(Definitions|156[A-Z]|\d{{1,2}}(?:\.\d{{1,2}}){{0,3}})"
+                  rf"|(?:(?<=FR)|(?<=FRA))\s*(\d{{1,3}}[A-Z]?)\b)?", re.I)  # Financial Regulations: [FR 135], [FRA 108]
 
 SYSTEM = """You answer questions from Sri Lankan public officers about government procurement rules, using ONLY the passages given.
 
@@ -25,6 +33,32 @@ Sources:
 - PG2006 / PM2006 = the old 2006 Guidelines and Manual (NPA). Repealed from 1 January 2025; they still govern only procurement
   actions that began before that date, up to the award of the contract. If you use them, say so explicitly.
 - "Amended by Gazette 2489/10" notes are official amendments to PG2024: apply them.
+- SUP01-SUP07 = NPC Supplements to the Procurement Manual 2024 (2025-2026). Each is labelled with the Manual section it adds to or
+  replaces, e.g. [SUP05 §5.6.1]. Where a supplement and the Manual differ, the supplement is the current rule: say so and cite
+  both. Notes on Manual passages ("Replaced by Supplement 02 ...") point to them.
+- CG2007 = Guidelines for Selection and Employment of Consultants (August 2007), still applied to CONSULTING services, with
+  CGS01 (Supplement 01 to the Consulting Services Manual, 12.12.2025) revising its thresholds and payments. PG2024/PM2024
+  cover goods, works and non-consulting services; do not mix the two regimes.
+- NPCC2024 = NPC Circular 01/2024 (the 2024 Guidelines in force from 1 January 2025). NPCC2023 = NPC Circular 01/2023
+  (interim, historical). Treasury Public Finance Circulars (all issued with NPC concurrence where about procurement):
+  PFC0326 = 03/2026 special relief measures (conflict, Ditwah cyclone; valid until 30.09.2026) and PFC0326i = its amendment
+  03/2026 (i); PFC0126 = 01/2026 (procurement before budget allocation; no award without confirmed budget); PFC0426 = 04/2026
+  (beneficial ownership disclosure, Ditwah procurements over Rs. 20 Mn); PFC0324 = 03/2024 (PFM Act in force; FR 1992 continue
+  where not inconsistent). Cite circulars as [PFC0126].
+- PFMA = Public Financial Management Act, No. 44 of 2024, cited [PFMA §67]. An Act of Parliament: it prevails over the
+  Financial Regulations and circulars where they are inconsistent.
+- FR = Financial Regulations of the Government (1992 edition), cited [FR 135]: delegation of financial authority (FR 135),
+  approval, commitments, payments, advances, losses, stores. The procurement chapter (XIII) is not in this edition and the
+  NPC Guidelines govern procurement.
+- FRA = the amendments to the Financial Regulations by Public Finance Circulars 01/2020, 01/2024, 02/2024 and 01/2024 (I), cited
+  [FRA 108] by FR number; PFC0120 = Part II of PF Circular 01/2020 with its amendments (telephone limits, service fees, urgent
+  services, air tickets, insurance, ...), cited [PFC0120 §4] by Part II paragraph. Both are UNOFFICIAL English translations of
+  Sinhala circulars: when you rely on them, say so in one short phrase ("unofficial translation of PF Circular 02/2024"). Where an
+  FRA passage and the 1992 FR text differ, FRA is the current rule; give its date. Cite amended text as [FRA 108], never as
+  [FR 108], and give the current amount, not one marked "before". If an FR passage you use says it was amended
+  and the amendment is not shown, say the amount may be out of date.
+- LCC2026 = NPC Guidance Note on Life Cycle Cost / Total Cost of Ownership. ESM2026 = NPC Sector Specific Procurement Manual
+  2026 for investor selection in electricity generation, storage, transmission and ancillary services (from 22.10.2026).
 
 Abbreviations: {abbrev}.
 
@@ -61,6 +95,10 @@ class Answer:
 
 
 def label(doc, ref):
+    if not ref:
+        return f"[{doc}]"
+    if doc in ("FR", "FRA"):
+        return f"[{doc} {ref}]"
     return f"[{doc} Art. {ref}]" if doc == "CON" else f"[{doc} §{ref}]"
 
 
@@ -87,15 +125,16 @@ def window(parts, hit, max_chars):
     return text if len(text) <= max_chars + 200 else text[:max_chars] + " [...]"
 
 
-def gather(index, question, k=8, docs=CURRENT, max_units=8, max_chars=3500, first=()):
+def gather(index, question, k=8, docs=CURRENT, max_units=10, max_chars=3500, first=()):
     """Top-k chunks -> whole clauses/sections, each guideline clause paired with its manual section(s) and vice versa."""
     units, seen = [], set()
 
-    def add(doc, ref, heading=None, hit=None):
-        key = (doc, ref, heading if doc.startswith("PM") else None)
-        if key in seen or len(units) >= max_units:
+    def add(doc, ref, heading=None, hit=None, cap=max_units):
+        by_heading = doc.startswith(("PM", "SUP")) or doc == "FRA"  # sections that share a number are separate units
+        key = (doc, ref, heading if by_heading else None)
+        if key in seen or len(units) >= cap:
             return
-        parts = index.clause(doc, ref, heading if doc.startswith("PM") else None)
+        parts = index.clause(doc, ref, heading if by_heading else None)
         if not parts:
             return
         seen.add(key)
@@ -107,7 +146,9 @@ def gather(index, question, k=8, docs=CURRENT, max_units=8, max_chars=3500, firs
         add(doc, ref)
     for c in index.search(question, k=k, docs=docs):
         add(c["doc"], c["ref"], c["heading"], hit=c["part"])
-        if c["doc"] == "CON":
+        for sup in index.supplements_for(c["doc"], c["ref"]):  # the supplement that changes this section comes right after it
+            add(sup["doc"], sup["ref"], sup["heading"], cap=max_units + 3)
+        if c["doc"] not in ("PG2024", "PM2024", "PG2006", "PM2006"):
             continue
         pair = "PM" + c["doc"][2:] if c["doc"].startswith("PG") else "PG" + c["doc"][2:]
         if c["doc"].startswith("PG"):
@@ -115,14 +156,34 @@ def gather(index, question, k=8, docs=CURRENT, max_units=8, max_chars=3500, firs
                 add(pair, m["ref"], m["heading"])
         else:
             add(pair, c["ref"])
+    # a passage that points at a Financial Regulation ("attention should be paid to Financial Regulation (FR) 136 (3)") brings
+    # that regulation along, so the answer can quote it instead of citing a passage it never saw
+    # (and its amendment: an FR note or an FRA passage names "FR 108", whose current text is FRA 108)
+    for u in list(units):
+        for n in dict.fromkeys(FR_REF.findall(u["text"] + " " + (u["note"] or ""))):
+            if (u["doc"], u["ref"]) != ("FR", n):
+                add("FR", n, cap=max_units + 3)
+            for sup in index.supplements_for("FR", n):  # by heading: FRA 113(3) and 113(6) are separate units
+                add(sup["doc"], sup["ref"], sup["heading"], cap=max_units + 3)
+    amended = {u["ref"] for u in units if u["doc"] == "FRA"}
+    for u in units:  # both texts shown: say plainly which one is in force
+        if u["doc"] == "FR" and u["ref"] in amended:
+            u["note"] = (f"SUPERSEDED IN PART: the current text of this regulation is [FRA {u['ref']}] (shown here). Where the two "
+                         f"differ, the amounts and rules of [FRA {u['ref']}] apply; cite [FRA {u['ref']}] for them.")
     return units
+
+
+FR_REF = re.compile(r"\b(?:Financial\s+Regulations?\s*(?:\(FR\)\s*)?|F\.\s?R\.?\s?|FR\s)(\d{1,3})\b")
 
 
 def render(units):
     out = []
     for u in units:
         head = f"{u['label']} {u['heading']} ({u['chapter']}; p. {u['page']})" if u["chapter"] else f"{u['label']} {u['heading']}"
-        out.append(head + "\n" + u["text"] + (f"\n{u['note']}" if u["note"] else ""))
+        if u["doc"] == "FR" and u["note"]:  # "amended, see FRA ..." must be read before 3,000 characters of 1992 text
+            out.append(head + "\n" + u["note"] + "\n" + u["text"])
+        else:
+            out.append(head + "\n" + u["text"] + (f"\n{u['note']}" if u["note"] else ""))
     return "\n\n---\n\n".join(out)
 
 
@@ -130,12 +191,12 @@ def verify(answer, units):
     """Citations that point at no passage shown to the model. A citation may name a sub-clause of a shown clause
     (2.7 shown, 2.7.1 cited) only if that number occurs in the clause text, or a parent of a shown clause."""
     bad = []
-    for doc, ref in CITE.findall(answer):
-        doc = doc.upper()
-        ok = any(u["doc"] == doc and (u["ref"] == ref or u["ref"].startswith(ref + ".")
+    for doc, ref, fr in CITE.findall(answer):
+        doc, ref = _CANON.get(doc.lower(), doc), ref or fr
+        ok = any(u["doc"] == doc and (not ref or not u["ref"] or u["ref"] == ref or u["ref"].startswith(ref + ".")
                                       or (ref.startswith(u["ref"] + ".") and ref in u["text"])) for u in units)
         if not ok:
-            bad.append(f"{doc} Art. {ref}" if doc == "CON" else f"{doc} §{ref}")
+            bad.append(label(doc, ref).strip("[]"))
     return list(dict.fromkeys(bad))
 
 
@@ -179,6 +240,9 @@ def ask(index, llm, question, k=8, effort="low", docs=None):
     res.answer = answer.strip().replace("\u3010", "[").replace("\u3011", "]")
     if not CITE.search(res.answer):
         res.warnings.append("answer has no citations")
+    used = sorted({_CANON.get(d.lower(), d) for d, _, _ in CITE.findall(res.answer)} & TRANSLATED)
+    if used and "unofficial" not in res.answer.lower():  # the model forgets to say so; this must never depend on it
+        res.answer += "\n\n" + TRANSLATION_NOTE.format(docs=" and ".join(used), verb="are" if len(used) > 1 else "is")
     bad = verify(res.answer, res.evidence)
     if bad:
         res.warnings.append("unsupported citations: " + ", ".join(bad))

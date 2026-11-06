@@ -21,6 +21,52 @@ python -m pytest tests/test_procurement.py -q     # offline, synthetic text
 | PG2006 | Government Procurement Guidelines 2006 (Goods & Works), NPA | `data/procurement/ProcurementGuidelines2006_amded12June.pdf` | transitional |
 | PM2006 | Procurement Manual 2006 (with Supplement 8), NPA | `data/procurement/Procurement Manual 2006.pdf` | transitional |
 
+**Financial Regulations (FR):** treasury.gov.lk Resource Center -> FR Manual
+(`/web/resource-center/section/fr manual`, file `/api/file/88bd6063-...`), saved as
+`data/procurement/treasury/Financial Regulations (FR Manual).pdf`. This is the 1992 edition (amendments to 31.12.1991, issued
+29.10.1993), 344 pages. `parse_fr` makes one chunk per regulation: 471 regulations, plus 16 out-of-sequence numbers dropped
+by a longest-increasing-run check (misprints like F.R.487 between 77 and 84). Cited as [FR 135]. **Chapter XIII (supplies,
+tenders, works) is not in this edition.** Later FR amendments by circulars are not included, and the prompt says so. Useful
+here: FR 135 delegation (which Manual 2.9 B relies on), FR 137 approving officer, FR 101-112 losses, vouchers and payments,
+and stores.
+
+**FR amendments and the PFM Act** (web search + treasury.gov.lk Public Finance circular listings 2020-2026, 2026-11-06):
+- **PFMA:** Public Financial Management Act No. 44 of 2024, from treasury.gov.lk/web/public-financial-management-act.
+  Parsed with `billrag.parse` into 71 sections, cited [PFMA §67]. Under s. 67(6) the FR 1992 and existing circulars stay in
+  force until regulations are made, where they are not inconsistent with the Act (PF Circular 03/2024, indexed as PFC0324).
+- **FR amendments (unofficial translation):** PF Circular **01/2020** (28.08.2020) consolidates all PF and Treasury Operations
+  circulars that amended FR 1992. Its amendments are 01/2020 (i) (12.01.2022), (ii) (20.12.2022, English, revoked by (III)), (III)
+  (31.05.2024), (IV) (30.08.2024), 01/2024 and 02/2024 (29.05.2024) and 01/2024 (I) (24.01.2025). Except (ii) they are published in
+  Sinhala and Tamil only, and we assume no official English version exists. All 43 scanned pages (`data/procurement/treasury/
+  fr_amendments/`) were translated from the page images into `npc_texts/FRA.md` (Part I and the FR changes, by FR number:
+  `[FRA 108]`) and `npc_texts/PFC0120.md` (Part II by paragraph: `[PFC0120 §4]`). **No Sinhala reader has checked them yet.**
+  - Every chunk carries `sources.UNOFFICIAL`, and an answer citing these documents always gets a fixed note in code (`ask.TRANSLATION_NOTE`).
+  - The 1992 text they replaced outright (FR 104(1)-(2), 108, 269, 371, 855; `sources.FR_REPLACED`) is cut from the index: a note alone
+    did not stop the model quoting old amounts. Other amended FRs keep their text, marked SUPERSEDED IN PART when FRA is shown.
+  - Open point in the circulars themselves: 01/2024 (I) does not say which limit applies to advance "B" loan write-offs after 31.03.2025.
+- **Procurement circulars, English scans transcribed:**
+  - PFC0326: PF 03/2026, relief measures valid until 30.09.2026; amended by PFC0326i.
+  - PFC0126: PF 01/2026, procurement before budget allocation, no award without a confirmed budget, FR 136(3).
+  - PFC0426: PF 04/2026, beneficial ownership disclosure in Ditwah procurements over Rs. 20 Mn.
+- A passage that refers to an FR ("Financial Regulation (FR) 136 (3)") brings that regulation into the evidence.
+
+**From nprocom.gov.lk (NPC site, fetched 2026-11-06; `scripts/npc_fetch.py`):**
+
+| id | document | text from | status |
+|---|---|---|---|
+| SUP01-05, SUP07 | Supplements to the Manual 2024 (18.09.2025 - 24.09.2026): VRC/PAC payments (01), Non-collusion Declaration + intention to award within 7 days (02), no unsolicited proposals (03), Acceptance Committee payments (04), new CIDA grade tables (05), direct contracting with Government Institutions under LKR 2 Mn (07) | `npc_texts/SUP*.md`: text layer; SUP04 transcribed from the scan | current; shown next to the Manual/Guidelines section they change, and the amended Manual chunks carry a note |
+| CG2007 + CGS01 | Guidelines for Selection and Employment of Consultants (Aug 2007) + Supplement 01 (12.12.2025, revised thresholds and payments) | PDF / `npc_texts/CGS01.md` | current for consulting services |
+| NPCC2024, NPCC2023 | NPC Circulars 01/2024 (2024 Guidelines in force 01.01.2025) and 01/2023 (interim, historical) | `npc_texts/`, transcribed from the scans | current / historical |
+| PFC0326i | Public Finance Circular 03/2026 (i), 13.08.2026: relief for conflict/cyclone price escalation | `npc_texts/PFC0326i.md`, transcribed from the scan | current (temporary) |
+| LCC2026 | Detailed Guidance Note on Life Cycle Cost / Total Cost of Ownership (88 pp) | PDF | current |
+| ESM2026 | Sector Specific Procurement Manual 2026, electricity investor selection (77 pp) | PDF | current from 22.10.2026 |
+
+The site shows documents in a "3D FlipBook" plugin: titles and PDF URLs are base64 JSON in `FB3D_CLIENT_DATA.push(...)`. The
+WordPress media API reports 65 uploads but returns only 3, and the pages have no plain PDF links. Not indexed: Supplement 06
+(Sinhala/Tamil only), NPC Circular 01/2026 and the 2026 procurement-plans circular (Sinhala only), the FAQ (Sinhala only), the
+draft 2026 consultancy guidelines, the Arbitration Act, PF Circular 03/2026 itself (only its amendment is on the site). Manual
+2024 has no §8.2 section in print (8.1 jumps to 8.4); Supplement 02 supplies it and is found through PG2024 §8.2.
+
 PG2024 §1.4(d)(ii) repeals the 2006 Guidelines, the Manual, and all NPA/Treasury supplements and circulars. Under §1.4(e), a
 procurement action begun before 2025-01-01 stays under the 2006 rules until the contract is awarded. So the 2006 documents
 are searched only when a question is about the old regime (`ask.OLD`: "2006", "before 2025", "NPA", "TEC", ...). PG2024 §1.4 is
@@ -89,6 +135,11 @@ hand against the page images:
   - Table-reading rule and abbreviation list in the prompt.
   - A page break ends a heading block (table rows had leaked into headings).
   - "(Procurement Manual Reference - 5.5)" now starts a section: 22 Chapter 05 annexures had been merged into §5.25.
+
+**NPC documents, 11 questions** (2026-11-06, same settings): all 11 right on the facts, e.g. intention to award within 7
+calendar days [SUP02], CIDA "C2 and above" for 1500 Mn / 18 months [SUP05; the Manual table alone said "C2"], Acceptance
+Committee 8,000 / 6,000 for LKR 300 Mn [SUP04], CPCM < Rs. 250 Mn for nationally advertised QCBS [CGS01]. One false
+citation warning (paragraph numbers of a one-passage circular), fixed: a whole-document passage accepts any paragraph.
 
 ## Open
 - **Tables:**

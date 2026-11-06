@@ -248,3 +248,103 @@ def test_rerank_keeps_bm25_top_hits(tmp_path, monkeypatch):
     idx.reranker = Contrarian()
     assert first in [c["id"] for c in idx.search("emergency procurement covering approval", k=2)]
     assert idx.bm25("Who is the NPC?", 5) == idx.bm25("Who is the NPC", 5)
+
+
+def test_curated_texts_parse_and_cover_the_registry():
+    from procurement import sources
+    text = "<!-- SUPX | demo -->\n## 8.2 | Communication (replaces 8.2)\nWithin Seven (07) calendar days.\n" \
+           "## | Whole circular\n01. Paragraph one.\n"
+    chunks, st = parse.parse_curated(text, "SUPX")
+    assert [(c["ref"], c["heading"]) for c in chunks] == [("8.2", "Communication (replaces 8.2)"), ("", "Whole circular")]
+    for d in sources.DOCS:  # every shipped curated file parses into at least one section
+        if d.get("parser") == "curated":
+            assert parse.parse_curated(d["file"].read_text(encoding="utf-8"), d["id"])[0], d["id"]
+
+
+def test_numbered_document_skips_contents_and_centred_headings():
+    pages = ["Contents\n   1.1 Purpose.................... 1\n   1.2 Scope ..................... 2\n   2.1 Methods ............ 5\n",
+             "Foreword text about the note.\n                                 1.1 Purpose\nThe purpose is X.\n"
+             "1.1.1 Detail in 2.5 million cases.\n                                 1.2 Scope\nScope text.\n"
+             "                 2.1 Methods\nMethods text.\n   1.1. Annex item restarting numbering\n"]
+    chunks, st = parse.parse_numbered(pages, "DOCX")
+    assert st["clauses"] == 3 and [c["ref"] for c in chunks] == ["0", "1.1", "1.2", "2.1"]
+    assert "Annex item" in chunks[-1]["text"] and "Foreword" in chunks[0]["text"]
+
+
+def test_citations_of_any_document_and_whole_document_units():
+    units = [dict(doc="PFC0326i", ref="", text=""), dict(doc="SUP05", ref="5.6.1", text="")]
+    assert pa.verify("Relief applies [PFC0326i] and [PFC0326i §03]; grades [SUP05 §5.6.1].", units) == []
+    assert pa.verify("[SUP07 §3.1.6]", units) == ["SUP07 §3.1.6"]
+    assert pa.label("NPCC2024", "") == "[NPCC2024]"
+    assert not pa.OLD.search("What does Supplement 05 change?")  # NPC supplements are current, not the old regime
+
+
+def test_supplements_are_found_for_the_section_they_change(tmp_path, monkeypatch):
+    from procurement import sources
+    idx = _index(tmp_path, monkeypatch)
+    sup = tmp_path / "SUPX.md"
+    sup.write_text("<!-- SUPX -->\n## 1.2 | Emergency procurement: new rule\nCovering approval within 3 days.\n")
+    docs = sources.DOCS + [dict(id="SUPX", kind="supplement", status="current", issued="2026", effective="2026",
+                                amends="PM2024", parser="curated", title="Supplement X", file=sup)]
+    monkeypatch.setattr(pix.sources, "DOCS", docs)
+    pix.build(tmp_path / "i.sqlite", docs=["SUPX"], log=lambda *a: None)
+    idx = pix.Index(tmp_path / "i.sqlite")
+    assert [c["doc"] for c in idx.supplements_for("PG2024", "1.2")] == ["SUPX"]
+    labels = [u["label"] for u in pa.gather(idx, "emergency procurement covering approval", docs=None)]
+    assert "[SUPX §1.2]" in labels
+
+
+def test_financial_regulations_parse_and_cite():
+    pages = ["CONTENTS\n F.R.135 Delegation ....... 84\n",
+             "            CHAPTER III\n       F.R.135. Delegation of Functions for Financial Control. (1) An accounting\n"
+             "Officer may delegate his functions.\n   F.R.487. Misprint. Text.\n       F.R.137. Approval. An officer who is\n"
+             "empowered to approve.\n F.R.138. (1) Certification of vouchers. (a) The certifying officer ...\n"]
+    chunks, st = parse.parse_fr(pages)
+    assert [c["ref"] for c in chunks] == ["135", "137", "138"] and st["dropped"] == 1
+    assert chunks[0]["heading"] == "Delegation of Functions for Financial Control" and chunks[0]["chapter"] == "CHAPTER III"
+    assert chunks[2]["heading"] == "Certification of vouchers"
+    units = [dict(doc="FR", ref="135", text="")]
+    assert pa.verify("Delegation is allowed [FR 135].", units) == [] and pa.verify("[FR 137]", units) == ["FR 137"]
+    assert pa.label("FR", "135") == "[FR 135]"
+
+
+def test_referenced_financial_regulation_is_pulled_in():
+    assert pa.FR_REF.findall("attention should be paid to Financial Regulation (FR) 136 (3); see also F.R.135 and FR 137.") \
+        == ["136", "135", "137"]
+
+
+def test_translated_fr_amendments_are_paired_cited_and_flagged(tmp_path, monkeypatch):
+    from procurement import sources
+    fr, fra = tmp_path / "FR.md", tmp_path / "FRA.md"
+    fr.write_text("<!-- FR -->\n## 108 | Authority to deal with losses\nAccounting Officer: losses up to Rs. 25,000.\n")
+    fra.write_text("<!-- FRA -->\n## 108 | FR 108 - Authorities to deal with losses (amended)\n"
+                   "Accounting Officer: losses as in FR 105(1): Rs. 500,000 (before: Rs. 250,000).\n")
+    docs = [dict(id="FR", kind="regulations", status="current", issued="1993", effective="1992", parser="curated",
+                 title="Financial Regulations", file=fr),
+            dict(id="FRA", kind="regulations", status="current", issued="2025", effective="2020", amends="FR",
+                 parser="curated", note=sources.UNOFFICIAL, title="FR amendments", file=fra)]
+    monkeypatch.setattr(pix.sources, "DOCS", docs)
+    pix.build(tmp_path / "i.sqlite", log=lambda *a: None)
+    idx = pix.Index(tmp_path / "i.sqlite")
+    units = pa.gather(idx, "Accounting Officer authority to deal with losses")
+    by = {u["label"]: u for u in units}
+    assert "[FR 108]" in by and "[FRA 108]" in by  # the amendment comes with the 1992 text (and the other way round)
+    assert "[FRA 108]" in by["[FR 108]"]["note"] and "SUPERSEDED" in by["[FR 108]"]["note"] and "Unofficial" in by["[FRA 108]"]["note"]
+    assert pa.label("FRA", "108") == "[FRA 108]"
+    assert pa.verify("Rs. 500,000 [FRA 108]; telephone [PFC0120 §4].", units) == ["PFC0120 §4"]
+    r = pa.ask(idx, FakeLLM("Up to Rs. 500,000 [FRA 108]."), "Accounting Officer authority to deal with losses")
+    assert r.warnings == [] and "unofficial English translation" in r.answer and "FRA is" in r.answer
+    r = pa.ask(idx, FakeLLM("Up to Rs. 25,000 [FR 108]."), "Accounting Officer authority to deal with losses")
+    assert "unofficial" not in r.answer  # no translated passage cited: no note
+
+
+def test_replaced_1992_text_is_cut_and_the_rest_kept():
+    def part(ref, n, text):
+        return dict(doc="FR", ref=ref, heading="", chapter="", kind="regulation", page=1, part=n, text=text, xref=None)
+    out = pix.drop_replaced([part("103", 0, "Keep."),
+                             part("104", 0, "F.R.104. (1) Inquiry and fixing of responsibility. Old Rs. 500,000."),
+                             part("104", 1, "(2) Reporting. (3) Preliminary Report: still in force."),
+                             part("108", 0, "Old limits.")])
+    assert [c["ref"] for c in out] == ["103", "104", "108"] and out[0]["text"] == "Keep."
+    assert "500,000" not in out[1]["text"] and "(3) Preliminary Report" in out[1]["text"] and "see FRA 104" in out[1]["text"]
+    assert "Old limits" not in out[2]["text"] and "see FRA 108" in out[2]["text"]
