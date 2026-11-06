@@ -2260,3 +2260,50 @@ def test_web_adds_the_machine_translation_note_to_translated_answers(tmp_path, m
     assert "*" + translate.MACHINE_NOTE["ta"] + "*" in ta and ta.index(translate.MACHINE_NOTE["ta"]) < ta.index("Sources:")
     en = app.ask("s2", "How many days does the amendment allow?")
     assert translate.MACHINE_NOTE["ta"] not in en and translate.MACHINE_NOTE["si"] not in en
+
+
+# ---------------------------------------------------------------- coverage line + "Recently added" list
+def test_store_coverage_counts_versions_once_and_lists_recent_bills_by_plain_title(tmp_path):
+    st = make_store(tmp_path)                                  # a presented Bill (086/2026) and its Gazette text (081/2026)
+    c = st.coverage()
+    assert c["bills"] == 1 and c["first"] == "2026-10-14" and c["last"] == "2026-10-21"
+    assert c["recent"] == [{"key": "086/2026", "title": "Trusts (Amendment)", "date": "2026-10-21"}]
+    st.db.execute("CREATE TABLE bill_meta (bill_key TEXT, family TEXT)")   # with metadata, versions are grouped by family
+    st.db.executemany("INSERT INTO bill_meta VALUES (?, ?)", [("086/2026", "081/2026"), ("081/2026", "081/2026")])
+    assert st.coverage()["bills"] == 1 and len(st.coverage(recent=5)["recent"]) == 1
+    st.db.execute("DELETE FROM bill_meta WHERE bill_key = '081/2026'")
+    assert st.coverage()["bills"] == 2                         # 081 now stands alone
+    assert [r["key"] for r in st.coverage()["recent"]] == ["086/2026", "081/2026"]
+
+
+def test_healthz_carries_coverage_and_never_fails_because_of_it():
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from billrag.web import make_handler
+
+    class Good:
+        def coverage(self):
+            return {"bills": 2, "first": "2003-07-07", "last": "2026-10-21", "recent": []}
+
+    class Broken:
+        def coverage(self):
+            raise RuntimeError("db gone")
+
+    for app, want in ((Good(), {"ok": True, "coverage": Good().coverage()}), (Broken(), {"ok": True})):
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{srv.server_address[1]}/healthz") as r:
+                assert json.loads(r.read()) == want
+        finally:
+            srv.shutdown()
+
+
+def test_web_app_computes_coverage_once(tmp_path):
+    from billrag import web
+    st = make_store(tmp_path)
+    app = web.App.__new__(web.App)
+    app.store = st
+    first = app.coverage()
+    st.db.execute("DELETE FROM bills")                          # a later change in the index is not re-read: computed once per process
+    assert app.coverage() is first and first["bills"] == 1
