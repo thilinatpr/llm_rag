@@ -25,6 +25,7 @@ billrag/agent.py          (`--mode agent`) tool-calling loop: search_bills, list
 billrag/llm.py            Anthropic + OpenAI-compatible chat adapters, OpenAI/sentence-transformers embedders
 billrag/enrich.py         optional: dense vectors (`embed`) and LLM bill summaries (`summarize`)
 billrag/config.py         all settings come from BILLRAG_* env vars (documented at the top of the file)
+src/chatconfig.js         which chat model/provider the container gets (CHAT_PROVIDER var: workers-ai | deepseek); pure function, tested in test/worker.test.mjs
 billrag/meta.py           bill metadata outside `chunks`: families, newest instance, bill type, tags, section cross-references (`meta`, `tag`)
 billrag/resolve.py        question grounding before retrieval: greetings, abbreviation (PTSA) -> bill title matching, "closest bills"
 billrag/chatlog.py        one JSON record per chat turn -> R2 `chatlogs/` + local JSONL; `build_id()` = hash of the running code
@@ -654,6 +655,25 @@ answer it, the 5th is not a penalty question and says honestly that the penalty 
   penalty in all 8). 8/8 Sinhala-script and 8/8 romanised questions still retrieve the right bill.
 - **Prompt echo guard** (`translate.echoes_prompt`, in `check_script`): an answer containing the glossary block header or 2+ "English
   term = term" lines is rejected like any unusable output (retry / fallback). Live bug: the translated path appended the glossary list.
+
+### Switching production to DeepSeek (prepared 2026-11-06, NOT done: it needs the owner's go-ahead for each production step)
+Code is merged-ready and defaults to Workers AI, so nothing changes until the steps below. `src/chatconfig.js` maps `CHAT_PROVIDER`:
+`deepseek` + the `DEEPSEEK_API_KEY` secret -> container env `BILLRAG_CHAT_MODEL=deepseek-flash`, `BASE_URL=https://api.deepseek.com`,
+`BILLRAG_GRADE_EFFORT=off`, no Llama translator (a `@cf/` id cannot run on DeepSeek's endpoint, so the chat model translates); a missing
+secret falls back to Workers AI with a Worker-log warning. Embeddings, rerank and R2 keep using the Cloudflare credentials.
+Verified locally with exactly that env (`python -m billrag serve` + POST /api/ask): English hostage question 9.6 s, $0.0005 (90% of input
+cache hits); Sinhala 15.7 s, $0.0032, direct path, no warnings. Steps:
+1. Upload the index with the metadata tables first (old code ignores them): `python scripts/upload_r2.py --bucket gov-rag --include-index`
+   (needs `python -m billrag meta` run on that index; `ingest` and `fetch_index` copies already have it locally only).
+2. `printf %s "$DEEPSEEK_API_KEY" | npx wrangler secret put DEEPSEEK_API_KEY` (stdin; never in `wrangler.toml`). Rotate the key if it ever
+   appeared in a chat transcript.
+3. Set `CHAT_PROVIDER = "deepseek"` in `wrangler.toml` and deploy (see "Deploying from the cloud sandbox"). Check the container can reach
+   `api.deepseek.com` (Cloudflare Containers allow outbound internet by default; not testable from the sandbox).
+4. Verify from the chat logs: `model: deepseek-flash`, `cost.usd`, `warnings` (see "Reading the chat logs"); `read_chatlogs.py` prints cost.
+Rollback: `CHAT_PROVIDER = "workers-ai"` and redeploy (secret can stay). Risks to accept knowingly: an external provider outage takes
+answers down (no automatic fallback to Workers AI at request time), prompts and bill text go to DeepSeek, cost is variable (see the
+cost log), prices change (`BILLRAG_PRICES`). The judge for the eval numbers was DeepSeek-family, and Sinhala quality was spot-checked
+(18 + 16 questions), not measured on a labelled set.
 
 ## Product priority: recent bills
 
