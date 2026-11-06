@@ -145,6 +145,10 @@ class App:
             out = res.answer
             if res.warnings:
                 out += "\n\n\u26a0 " + "\n\u26a0 ".join(res.warnings)
+            from .translate import machine_note
+            note = machine_note(res.lang, res.path, res.answer)
+            if note:
+                out += "\n\n*" + note + "*"
             if res.evidence:
                 out += "\n\nSources:\n" + "\n".join("  " + x for x in res.sources())
             meta = {

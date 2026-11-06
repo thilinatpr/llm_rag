@@ -17,6 +17,10 @@ Applied to the live app on 2026-11-06: the chat page `public/index.html` ("Bill 
 4. **Honesty lines stay.** The footer always says: answers cite the official text, not legal advice, not a government service.
 5. **Sri Lankan, not generic.** Colours come from Kandyan temple paintings; typefaces are Sri Lankan (Mooniak). One
    ornament only: the lotus-petal (palapethi) border at the top of the page.
+6. **Languages are not advertised.** No public page, placeholder or example says which languages the assistant answers in, and nothing
+   names a language where a user could read it as a promise. A person who writes in Sinhala or Tamil is simply answered; the
+   capability stays quiet. (The citizen/පුරවැසි/குடிமக்கள் name line is branding, not a claim.) Notices that appear only inside a
+   Sinhala or Tamil answer, and quota messages chosen by the browser's language, are fine.
 
 ## Colour tokens
 

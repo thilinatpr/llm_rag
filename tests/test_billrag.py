@@ -2197,3 +2197,66 @@ def test_web_public_header_sets_the_lane_and_anon_chats_are_evicted_first(monkey
         srv.shutdown()
     assert seen == [None, "public", None, None]          # only the exact value "public" counts
     assert list(app.sessions) == ["member1", "member2"]   # the anonymous chat went first
+
+
+# ---------------------------------------------------------------- "answer that in Tamil" follow-ups + machine-translation note
+def test_language_switch_only_when_the_message_just_names_a_language():
+    sw = translate.language_switch
+    assert sw("In tamil") == "ta" and sw("can you say this in Tamil?") == "ta" and sw("english please") == "en"
+    assert sw("sinhalen kiyanna") == "si" and sw("\u0ba4\u0bae\u0bbf\u0bb4\u0bbf\u0bb2\u0bcd") == "ta"
+    assert sw("\u0db4\u0dd2\u0dc5\u0dd2\u0dad\u0dd4\u0dbb \u0dc3\u0dd2\u0d82\u0dc4\u0dbd\u0dd9\u0db1\u0dca \u0daf\u0dd9\u0db1\u0dca\u0db1") == "si"
+    for q in ("tamil bill", "Is English an official language?", "what does the tamil nadu bill say", "english or tamil",
+              "in tamil what is the penalty for hostage taking", "How many days?", "", "in"):
+        assert sw(q) is None, q
+
+
+def test_machine_note_only_for_machine_translated_answers():
+    assert translate.machine_note("ta", "translated", TA_ANS) == translate.MACHINE_NOTE["ta"]
+    assert translate.machine_note("ta", "language_switch", TA_ANS)
+    assert translate.machine_note("ta", "translated", "English text (translation failed)") is None
+    assert translate.machine_note("si", "direct", SI_Q) is None      # written from the official Sinhala text
+    assert translate.machine_note("en", "en", "English") is None
+
+
+def test_in_tamil_after_an_english_answer_rerenders_without_searching(tmp_path):
+    st, llm = make_store(tmp_path), TranslatingLLM(lang="ta")
+    p = Pipeline(st, Retriever(st), llm)
+    first = p.ask("How many days does the amendment allow?")
+    n = len(llm.calls)
+    r = p.ask("in tamil")
+    assert llm.calls[n:] == ["FROM_EN"]                      # one translation call: no grading, no search, no condense
+    assert r.path == "language_switch" and r.lang == "ta" and translate.detect(r.answer) == "ta"
+    assert "[086/2026 \u00a72]" in r.answer and r.answer_en == first.answer and not r.warnings
+    assert [e.key for e in r.evidence] == [e.key for e in first.evidence]
+    back = p.ask("english")
+    assert back.answer == first.answer and llm.calls[n:] == ["FROM_EN"]   # English needs no call at all
+    assert p.ask("how many days does the amendment allow?").path == "en"  # a real question is searched again
+
+
+def test_language_switch_needs_a_previous_answer_and_survives_a_failed_translation(tmp_path):
+    st = make_store(tmp_path)
+    llm = TranslatingLLM(lang="ta")
+    p = Pipeline(st, Retriever(st), llm)
+    p.ask("in tamil")                                         # nothing to re-render yet: an ordinary (searched) question
+    assert p.last.path != "language_switch"
+    st2, llm2 = make_store(tmp_path), TranslatingLLM(lang="ta", drop_cites=True)
+    p2 = Pipeline(st2, Retriever(st2), llm2)
+    first = p2.ask("How many days does the amendment allow?")
+    r = p2.ask("in tamil")
+    assert r.answer == first.answer and any("translate" in w for w in r.warnings)   # English kept, with a warning
+
+
+def test_web_adds_the_machine_translation_note_to_translated_answers(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from billrag import web
+    monkeypatch.setenv("BILLRAG_CHATLOG", "0")
+    st = make_store(tmp_path)
+    app = web.App.__new__(web.App)
+    app.s = SimpleNamespace(chat_model="m", answer_model=None, translate_model=None, grade_effort=None, answer_effort=None,
+                            translate="script")
+    app.mode, app.store, app._llm, app._retr = "pipeline", st, TranslatingLLM(lang="ta"), Retriever(st)
+    app.lock, app.sessions, app.turns = threading.Lock(), web.OrderedDict(), {}
+    ta = app.ask("s", TA_ANS + " " + TA_ANS + " " + TA_ANS)
+    assert "*" + translate.MACHINE_NOTE["ta"] + "*" in ta and ta.index(translate.MACHINE_NOTE["ta"]) < ta.index("Sources:")
+    en = app.ask("s2", "How many days does the amendment allow?")
+    assert translate.MACHINE_NOTE["ta"] not in en and translate.MACHINE_NOTE["si"] not in en
