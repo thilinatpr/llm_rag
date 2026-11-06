@@ -610,7 +610,13 @@ a question with no year and no bill number whose hits come from an older instanc
 newest instance (event `newest_instance`). Fixes "appropriation bill" answering about 568/2025 instead of 069/2026 + 080/2026.
 Measured 2026-11-06 (deepseek-flash, thinking off, 24 recent questions): strict 0.79 -> 0.83, cited gold 0.88 -> 0.96 (noise level).
 **Production:** the container restores `index.sqlite` from R2, so metadata goes live only after `upload_r2.py --include-index`
-and a deploy. Not done: following `section_refs` inside the pipeline (the hostage penalty needs it), using tags in ranking.
+and a deploy. `Pipeline.follow_section_refs` (flag `follow_refs`, default on) uses `section_refs`: for the TOP kept clause's bill (and its GS/Bill
+versions only) it adds up to 2 sections the clause points at, and for a question about penalties/offences up to 2 sections that point
+AT the clause and speak of imprisonment/fine/liability (the penalty section s.4 points back at the offence section s.3 and never
+says "hostage"). Fixes the hostage penalty (070/2026 §4(b): <= 20 years rigorous imprisonment + fine <= Rs 20m); 4 of 5 phrasings
+answer it, the 5th is not a penalty question and says honestly that the penalty section is not in its evidence. 72-item eval unchanged
+(strict 0.93, cited gold 0.97). Not done: using tags in ranking; the Sinhala-script hostage question still hedges about a
+"Prevention of Terrorism Act" title (translate-in).
 
 ## Priorities, DeepSeek, cost log, clarification (2026-11-06)
 

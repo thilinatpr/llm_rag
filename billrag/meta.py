@@ -194,3 +194,11 @@ def refs_from(store, key, no):
         return []
     return [r[0] for r in store.db.execute(
         "SELECT ref_no FROM section_refs WHERE bill_key=? AND section_no=? ORDER BY ref_no", (key, int(no)))]
+
+
+def refs_to(store, key, no):
+    """Sections of the same bill that refer TO section `no` (e.g. the penalty section that points at the offence section)."""
+    if not has_meta(store):
+        return []
+    return [r[0] for r in store.db.execute(
+        "SELECT section_no FROM section_refs WHERE bill_key=? AND ref_no=? ORDER BY section_no", (key, int(no)))]

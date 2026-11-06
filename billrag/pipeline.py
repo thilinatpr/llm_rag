@@ -344,23 +344,53 @@ class Pipeline:
             out.append(e)
         return out
 
-    def follow_section_refs(self, evidence):
-        """Sections of the same bill that a kept clause points at ("the penalty in section 3(2)(c)") and that are not in
-        the evidence yet; at most `max_refs`, nearest first. They come after the graded clauses (score 2)."""
+    PENALTY_Q = re.compile(r"\b(penalt\w*|punish\w*|sentenc\w*|fines?|fined|imprison\w*|liable|jail\w*|prison\w*|offen[cs]es?)\b", re.I)
+    PENALTY_TEXT = re.compile(r"imprison|\bfine\b|penalt|punish|liable|sentence", re.I)
+
+    def follow_section_refs(self, evidence, question=""):
+        """Sections of the same bill that belong with a kept clause but were not retrieved, at most `max_refs` of each kind,
+        added after the graded clauses (score 2):
+        - forward: sections the clause points at ("the penalty in section 3(2)(c)");
+        - backward, only for a question about penalties/offences: sections that point AT the clause and speak of
+          imprisonment, fines or liability. An offence section ("hostage-taking is a consequence in s.3(2)(c)") never says
+          what the penalty is; the penalty section (s.4) points back at it and names no offence."""
         have = {(e.key, e.section) for e in evidence if e.section is not None}
         out = []
+
+        def add(key, n):
+            if (key, n) in have:
+                return False
+            r = self.store.db.execute("SELECT id FROM chunks WHERE bill_key=? AND section_no=? AND kind='section' "
+                                      "ORDER BY ord LIMIT 1", (key, n)).fetchone()
+            ch = self.store.chunks_by_ids([r["id"]]).get(r["id"]) if r else None
+            if not ch:
+                return False
+            have.add((key, n))
+            out.append(self.expand(Evidence(ch, 2)))
+            return True
+
+        fwd = back = 0
+        penalty = bool(self.PENALTY_Q.search(question or ""))
+        # only the top-ranked clause's bill (and its own GS / Bill versions): other bills' boilerplate adds noise, not answers
+        top = next((e for e in evidence if e.section is not None and e.score >= 2), None)
+        if top is None:
+            return out
+        b = self.store.bill(top.key)
+        family = {v["key"] for v in self.store.versions(b["title_norm"], b["date"])} | {top.key} if b else {top.key}
         for e in evidence:
-            if e.section is None or e.score < 2:
+            if e.section is None or e.score < 2 or e.key not in family:
                 continue
             for n in meta.refs_from(self.store, e.key, e.section):
-                if (e.key, n) in have or len(out) >= self.max_refs:
-                    continue
-                r = self.store.db.execute("SELECT id FROM chunks WHERE bill_key=? AND section_no=? AND kind='section' "
-                                          "ORDER BY ord LIMIT 1", (e.key, n)).fetchone()
-                ch = self.store.chunks_by_ids([r["id"]]).get(r["id"]) if r else None
-                if ch:
-                    have.add((e.key, n))
-                    out.append(self.expand(Evidence(ch, 2)))
+                if fwd < self.max_refs and add(e.key, n):
+                    fwd += 1
+            if not penalty:
+                continue
+            for n in meta.refs_to(self.store, e.key, e.section):
+                if back >= self.max_refs:
+                    break
+                sec = self.store.section_text(e.key, n)
+                if sec and self.PENALTY_TEXT.search(sec["text"]) and add(e.key, n):
+                    back += 1
         if out:
             self.on_event("followed_refs", {"sections": [f"{x.key} \u00a7{x.section}" for x in out]})
         return out
@@ -625,7 +655,7 @@ class Pipeline:
         res.enough, res.queries, res.graded = enough, [q] + res.queries, graded
         res.evidence = self.build_evidence(graded)
         if self.follow_refs and res.evidence:
-            res.followed = self.follow_section_refs(res.evidence)
+            res.followed = self.follow_section_refs(res.evidence, q)
             res.evidence += res.followed
         if local and self.direct_local and res.evidence and all(e.section is None for e in res.evidence):
             t = time.time()

@@ -1938,3 +1938,29 @@ def test_cost_prices_can_be_overridden_by_env(monkeypatch):
     monkeypatch.setenv("BILLRAG_PRICES", '{"my-model": {"hit": 0.1, "miss": 1.0, "out": 2.0}}')
     off = datetime(2026, 11, 7, 12, tzinfo=timezone.utc)
     assert abs(calltrace.cost_usd("my-model", 1_000_000, 500_000, 0, when=off) - 2.0) < 1e-9
+
+
+def test_pipeline_follows_references_back_to_a_penalty_section(tmp_path):
+    from billrag import meta
+    from billrag.pipeline import Evidence, Pipeline
+    from billrag.store import Store
+    s = Store(tmp_path / "pen.sqlite")
+    for key, d in (("070/2026", "2026-09-22T00:00:00.000Z"), ("444/2024", "2024-05-01T00:00:00.000Z")):
+        s.replace_bill({"key": key, "bill_no": 1, "year": int(key[-4:]), "date": d, "title": "Terror - Bill", "title_norm": "terror",
+                        "kind": "Bill", "long_title": None, "presented_by": None, "presented_on": None, "gazette_date": None,
+                        "printed_no": None, "n_pages": 1, "n_sections": 3, "pdf_path": None, "summary": None},
+                       [{"kind": "section", "section_no": 3, "text": "3. Hostage taking is a consequence listed in subsection (2).", "ctx": "offence"},
+                        {"kind": "section", "section_no": 4, "text": "4. A person who commits an offence under section 3 shall be liable to imprisonment not exceeding twenty years and a fine.", "ctx": "penalty"},
+                        {"kind": "section", "section_no": 5, "text": "5. This Act binds the State; see section 3.", "ctx": "other"}])
+    s.commit()
+    meta.build(s)
+    p = Pipeline(s, None, None)
+
+    def ev(key, no):
+        i = s.db.execute("SELECT id FROM chunks WHERE bill_key=? AND section_no=?", (key, no)).fetchone()[0]
+        return Evidence(s.chunks_by_ids([i])[i], 3)
+    got = p.follow_section_refs([ev("070/2026", 3)], "What is the penalty for hostage taking?")
+    assert [(e.key, e.section) for e in got] == [("070/2026", 4)]              # §4 points at §3 and speaks of imprisonment; §5 does not
+    assert p.follow_section_refs([ev("070/2026", 3)], "Who is hostage taking defined by?") == []   # not a penalty question
+    other = p.follow_section_refs([ev("070/2026", 3), ev("444/2024", 3)], "What is the penalty?")
+    assert {e.key for e in other} == {"070/2026"}                              # an older bill's sections are not pulled in
