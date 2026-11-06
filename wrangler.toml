@@ -1,7 +1,9 @@
 name = "gov-rag-llm"
 main = "src/worker.js"
 compatibility_date = "2026-11-01"
-# Bill Assistant. The workers.dev address stays on until the custom domain has been proven; then set workers_dev = false.
+# Bill Assistant lives on its own subdomain; the old workers.dev address and preview URLs are off.
+workers_dev = false
+preview_urls = false
 routes = [{ pattern = "bills.citizenlk.com", custom_domain = true }]
 
 # Static pages are only reachable through the Worker, so they sit behind the OTP login.

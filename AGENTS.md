@@ -68,8 +68,8 @@ python -m pytest tests -q                                           # must pass 
 
 ## Production: architecture, Cloudflare, deploying, logs
 
-**Live site:** https://bills.citizenlk.com (login required; only addresses in `ALLOWED_EMAILS` can sign in). The old address
-https://gov-rag-llm.patprathnayaka.workers.dev stays on until the custom domain has been proven.
+**Live site:** https://bills.citizenlk.com (login required; only addresses in `ALLOWED_EMAILS` can sign in). The old workers.dev
+address and preview URLs are off (`workers_dev = false`, `preview_urls = false`).
 
 ### citizenlk.com layout
 One subdomain per service, each its own Worker (custom domains in that Worker's Wrangler config), all in this repo:
@@ -362,7 +362,7 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". **Live since 2026-11-06 12:27 UTC: commit `70b48da` (merge of PR #40, on `main`). Python build `ec82b284` is unchanged (`billrag/` did not change since the previous deploy). Worker version `b14d1f49`, container app version 19 (image `sha256:1a9bdffc...`, rebuilt from the same `billrag/` code; rollout completed 12:28 UTC, 1/1 healthy).** New in this deploy: the citizenlk look on the chat page (`public/index.html`) and the sign-in page (`LOGIN_PAGE` in `src/auth.js`), see `DESIGN.md`. Not yet confirmed in a browser or from a chat log (workers.dev is not reachable from the sandbox). **Previous deploy and rollback target:** commit `e5dd298` (merge `2a4c1a3`, PR #35), build `ec82b284`, Worker `be713b7d`, container v18 (image `sha256:ab012c93...`), live 2026-11-06 10:11 UTC; everything described below was already live then. Contains: bill metadata
+"Merged" is not "live". **Live since 2026-11-06 12:45 UTC: commit `b1fcca3` (merge of PR #42, on `main`): Bill Assistant moved to `bills.citizenlk.com`, workers.dev turned off, homepage live on `citizenlk.com` (Worker `citizenlk-home`, version `37a6a5ae`). Python build `ec82b284` is unchanged. Worker `gov-rag-llm` version `95735d1e`, container app version 20 (image `sha256:03fd7aaa...`). Not yet confirmed from a chat log or a signed-in session. Previous: commit `70b48da`, Worker `b14d1f49`, container v19, image `sha256:1a9bdffc...`; rollback: check out `70b48da` and redeploy.** Before that: **Live since 2026-11-06 12:27 UTC: commit `70b48da` (merge of PR #40, on `main`). Python build `ec82b284` is unchanged (`billrag/` did not change since the previous deploy). Worker version `b14d1f49`, container app version 19 (image `sha256:1a9bdffc...`, rebuilt from the same `billrag/` code; rollout completed 12:28 UTC, 1/1 healthy).** New in this deploy: the citizenlk look on the chat page (`public/index.html`) and the sign-in page (`LOGIN_PAGE` in `src/auth.js`), see `DESIGN.md`. Not yet confirmed in a browser or from a chat log (workers.dev is not reachable from the sandbox). **Previous deploy and rollback target:** commit `e5dd298` (merge `2a4c1a3`, PR #35), build `ec82b284`, Worker `be713b7d`, container v18 (image `sha256:ab012c93...`), live 2026-11-06 10:11 UTC; everything described below was already live then. Contains: bill metadata
 (`meta.py`), newest-instance rule, section-reference following (incl. penalty back-references), "which bill?" clarification, literal
 translate-in, prompt-echo guard, per-response cost log (`cost`, `calls[].usd`), the `CHAT_PROVIDER` switch (`src/chatconfig.js`) and
 the independent-judge eval. The index in R2 was re-uploaded 2026-11-06 10:08 UTC with the metadata tables (`bill_meta`, `section_refs`).
