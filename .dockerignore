@@ -6,3 +6,6 @@ evals/
 tests/
 public/
 *.ipynb
+.venv
+.local.env
+.claude

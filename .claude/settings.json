@@ -25,5 +25,11 @@
         ]
       }
     ]
+  },
+  "worktree": {
+    "symlinkDirectories": [
+      "data",
+      ".venv"
+    ]
   }
 }

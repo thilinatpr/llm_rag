@@ -1,0 +1,2 @@
+# gitignored files `claude -w` / EnterWorktree copies into .claude/worktrees/<name> (data/ and .venv are symlinked: .claude/settings.json)
+.local.env
