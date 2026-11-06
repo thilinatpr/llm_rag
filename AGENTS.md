@@ -274,10 +274,12 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". Live since 2026-11-05 16:47 UTC: build `af86776e` = `main` at `fca8f3a` (merge of PR #14: translation
-layer, `TRANSLATE = "ai"`, `TRANSLATE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"`), Worker version `e56e31b8`, container
-app version 9 (image `sha256:f647ba62...`). Previous: build `4cfb4b63` (commit `a2ad066`), container v8 (`sha256:38b7eaea...`);
-before that build `3bbe2bc6`, v7. Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
+"Merged" is not "live". Live since 2026-11-05 17:35 UTC: build `055766b0` = `main` at `5b2cc47` (merge of PR #15: official
+Sinhala text for 2025+ bills), Worker version `0c092e80`, container app version 10 (image `sha256:598eec80...`), R2
+`bills/index.sqlite` with `local_sections` (143 bills / 3,456 sections; uploaded 17:32 UTC; the previous index is kept as
+`bills/index.pre-si.sqlite`, delete it once this has run for a while). Previous: build `af86776e` (`fca8f3a`), container v9
+(`sha256:f647ba62...`); before that `4cfb4b63` (v8). Rollback: redeploy `fca8f3a` (the old code ignores the new tables, so the
+index need not be restored). Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
 `git log origin/main` against the `build` seen in the latest chat log before telling the owner a change is live.
 
 ## Rules
