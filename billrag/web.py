@@ -99,6 +99,7 @@ class App:
         pipe = Pipeline(self.store, r, self._llm, grade_effort=self.s.grade_effort, answer_effort=self.s.answer_effort,
                         answer_llm=make_answer_llm(self.s), translate_mode=getattr(self.s, "translate", "script"),
                         translator=make_translator(self.s, self._llm),
+                        whole_bill=getattr(self.s, "whole_bill", False),
                         on_event=lambda name, data: events.append({"event": name, **(data if isinstance(data, dict) else {"data": data})}))
 
         def answer(q, emit=None, mode=None):
@@ -123,7 +124,7 @@ class App:
                 "model": getattr(self.s, "chat_model", None), "lang": res.lang,
                 "official": [f"{k} \u00a7{n}" for k, n in res.official],
                 "path": res.path, "answer_en": res.answer_en or None, "direct_fallback": res.direct_fallback or None,
-                "quote_fixes": res.quote_fixes or None, "focus": res.focus,
+                "quote_fixes": res.quote_fixes or None, "focus": res.focus, "whole_bill": res.whole_bill,
                 "glossary_hints": res.glossary_hints or None, "glossary_terms": res.glossary_terms or None,
                 "added_sections": [f"{e.key} \u00a7{e.section}" for e in res.added_sections] or None,
                 "direct_rejected": res.direct_rejected or None,

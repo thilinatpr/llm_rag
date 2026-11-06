@@ -17,6 +17,8 @@ Pipeline (retrieve -> grade -> summarise)
                           grading/condense/judging keep BILLRAG_CHAT_MODEL
   BILLRAG_GRADE_EFFORT    reasoning effort for the grading/condense calls (default low; empty = omit the field)
   BILLRAG_ANSWER_EFFORT   reasoning effort for the answer call (default: model default)
+  BILLRAG_WHOLE_BILL      1 = bill-focused follow-ups: once a chat is about one bill, answer from that bill's whole text,
+                          question last, so a context cache (DeepSeek) reuses it (default 0; English questions only)
 
 Translation (questions in other languages; the index is English only - see translate.py)
   BILLRAG_TRANSLATE       off | script (default: Sinhala/Tamil by Unicode script, no extra call for English) |
@@ -62,6 +64,7 @@ class Settings:
     translate_model: str | None
     cf_account_id: str | None
     cf_api_token: str | None
+    whole_bill: bool = False
 
     @property
     def db_path(self) -> Path:
@@ -98,4 +101,5 @@ def load_settings() -> Settings:
         translate_model=e("BILLRAG_TRANSLATE_MODEL") or None,
         cf_account_id=cf_account,
         cf_api_token=cf_token,
+        whole_bill=e("BILLRAG_WHOLE_BILL", "0").lower() in ("1", "true", "on", "yes"),
     )

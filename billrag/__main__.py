@@ -131,7 +131,7 @@ def main(argv=None):
         llm = make_llm(s)
         retriever = Retriever(store, embedder, s.vectors_path, llm if s.rerank == "llm" else None, s.rerank, make_reranker(s))
         make = ((lambda: Pipeline(store, retriever, llm, grade_effort=s.grade_effort, answer_effort=s.answer_effort,
-                                  answer_llm=make_answer_llm(s)))
+                                  answer_llm=make_answer_llm(s), whole_bill=s.whole_bill))
                 if a.mode == "pipeline" else (lambda: Agent(store, retriever, llm)))
         items = [ae.expand_gold(store, i) for i in ae.select([i for i in load_items(a.file) if i["source"]["year"] >= a.since_year], a.limit)]
         t0 = time.time()
@@ -185,7 +185,7 @@ def main(argv=None):
         ev = (lambda n, d: print(f"  \u2192 {n}: {d}", file=sys.stderr)) if a.verbose else None
         pipe = Pipeline(store, retriever, llm, on_event=ev, grade_effort=s.grade_effort, answer_effort=s.answer_effort,
                         answer_llm=make_answer_llm(s), translate_mode=s.translate,
-                        translator=translate.make_translator(s, llm))
+                        translator=translate.make_translator(s, llm), whole_bill=s.whole_bill)
 
         def answer(q):
             from . import calltrace

@@ -1971,3 +1971,90 @@ def test_translate_in_prompts_ask_for_literal_translation():
     for prompt in (translate.TO_EN, translate.DETECT_AND_TRANSLATE):
         assert "when you know it" not in prompt                    # that wording made the model invent real-world Act titles
         assert "Translate literally" in prompt and "NEVER add a bill number" in prompt
+
+
+# ---------------------------------------------------------------- bill-focused mode (whole bill as a cacheable prefix)
+class WholeBillLLM(ScriptLLM):
+    """ScriptLLM with a configurable condensed follow-up and a configurable reply to the whole-bill prompt."""
+
+    def __init__(self, condensed="What must a trustee keep?", wb_reply=None, **kw):
+        super().__init__(**kw)
+        self.condensed, self.wb_reply = condensed, wb_reply
+
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+        user = messages[-1]["content"]
+        if "FOLLOW-UP:" in user:
+            self.calls.append(user)
+            return Reply(self.condensed)
+        if user.startswith("EVIDENCE: the complete text") and self.wb_reply is not None:
+            self.calls.append(user)
+            return Reply(self.wb_reply)
+        return super().chat(system, messages, tools, max_tokens, effort)
+
+
+def add_zebra(st):
+    row = {"key": "090/2026", "bill_no": 90, "year": 2026, "date": "2026-10-30T00:00:00Z", "title": "Zebra Protection - Bill",
+           "title_norm": "zebra protection", "kind": "Bill", "long_title": "to protect zebras", "presented_by": None,
+           "presented_on": None, "gazette_date": None, "printed_no": None, "n_pages": 1, "n_sections": 1, "pdf_path": "x",
+           "summary": None}
+    st.replace_bill(row, [{"kind": "section", "section_no": 1, "page": 1, "text": "Zebra grazing quota applies to herds.",
+                           "ctx": "Bill 090/2026 zebra grazing quota applies to herds"}])
+    st.commit()
+
+
+def test_whole_bill_followup_uses_the_whole_bill_with_the_question_last(tmp_path):
+    st, llm = make_store(tmp_path), WholeBillLLM()
+    p = Pipeline(st, Retriever(st), llm, whole_bill=True)
+    r1 = p.ask("How many days does the amendment allow?")
+    assert r1.path == "en" and p.focus_key == "086/2026"  # all kept evidence from one bill -> the chat is about it
+    r2 = p.ask("and what must a trustee keep?")
+    assert r2.path == "whole_bill" and r2.llm_calls == 2  # condense + one answer call, no grading
+    prompt = llm.calls[-1]
+    assert prompt.startswith("EVIDENCE: the complete text") and prompt.rstrip().endswith("QUESTION: What must a trustee keep?")
+    assert "[086/2026 §1]" in prompt and "[086/2026 §2]" in prompt  # every section, not only retrieved ones
+    assert [(e.key, e.section) for e in r2.evidence] == [("086/2026", 2)]  # sources = the cited sections
+    assert r2.whole_bill["bill"] == "086/2026" and r2.whole_bill["sections"] == 2 and not r2.warnings
+    llm.condensed = "Who presented it?"
+    p.ask("who presented it?")
+    head = lambda u: u.split("QUESTION:")[0]
+    assert head(llm.calls[-1]) == head(prompt)  # identical prefix on every follow-up: what a prefix cache needs
+
+
+def test_whole_bill_is_off_by_default_and_used_for_a_question_naming_one_bill(tmp_path):
+    st, llm = make_store(tmp_path), WholeBillLLM()
+    p = Pipeline(st, Retriever(st), llm)
+    p.ask("How many days?")
+    assert p.ask("and what must a trustee keep?").path == "en" and p.focus_key is None
+    r = Pipeline(st, Retriever(st), WholeBillLLM(), whole_bill=True).ask("What does 081/2026 say about trustee accounts?")
+    assert r.path == "whole_bill" and r.whole_bill["bill"] == "081/2026"  # named bill: whole bill from the first turn
+    r = Pipeline(st, Retriever(st), WholeBillLLM(), whole_bill=True).ask("Compare 081/2026 and 086/2026 on trustee accounts")
+    assert r.path == "en" and r.whole_bill == {"fallback": "question is about several bills"}
+
+
+def test_whole_bill_falls_back_when_the_user_moves_on_or_the_answer_cites_nothing(tmp_path):
+    st = make_store(tmp_path)
+    add_zebra(st)
+    llm = WholeBillLLM(condensed="What is the zebra grazing quota?")
+    p = Pipeline(st, Retriever(st), llm, whole_bill=True)
+    p.ask("How many days does the amendment allow?")
+    r = p.ask("what about zebra grazing?")
+    assert r.path == "en" and r.whole_bill == {"fallback": "retrieval points at another bill"}
+    llm = WholeBillLLM(wb_reply="This bill does not say.")
+    p = Pipeline(st, Retriever(st), llm, whole_bill=True)
+    p.ask("How many days does the amendment allow?")
+    r = p.ask("and what must a trustee keep?")
+    assert r.path == "en" and r.whole_bill["fallback"] == "no citations"  # cites nothing -> the normal pipeline answers
+    assert any("CANDIDATES:" in c for c in llm.calls[-2:]) and "fifteen days" in r.answer
+    p = Pipeline(st, Retriever(st), WholeBillLLM(), whole_bill=True, whole_bill_chars=50)
+    r = p.ask("What does 086/2026 say about trustee accounts?")
+    assert r.path == "en" and r.whole_bill["fallback"].startswith("bill has no sections or is too long")
+
+
+def test_whole_bill_keeps_the_focused_version_when_condense_names_its_sibling(tmp_path):
+    st, llm = make_store(tmp_path), WholeBillLLM()
+    p = Pipeline(st, Retriever(st), llm, whole_bill=True)
+    p.ask("What does 086/2026 say about trustee accounts?")
+    assert p.focus_key == "086/2026"
+    llm.condensed = "What does 081/2026 say about fifteen days?"  # the rewrite picked the GS version's number
+    assert p.ask("and the deadline?").whole_bill["bill"] == "086/2026"
+    assert p.ask("what does 081/2026 say about the deadline?").whole_bill["bill"] == "081/2026"  # typed by the user: honoured

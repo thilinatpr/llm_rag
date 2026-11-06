@@ -25,6 +25,8 @@ export class BillragContainer extends Container {
       BILLRAG_PROXY_SECRET: env.PROXY_SECRET,
       // Translation layer (billrag/translate.py): off | script | ai. Unset -> the Python default ("script").
       BILLRAG_TRANSLATE: env.TRANSLATE,
+      // Bill-focused follow-ups from the whole bill text (pipeline.py, issue #37): "1" turns it on. Unset -> off.
+      BILLRAG_WHOLE_BILL: env.WHOLE_BILL,
       // Optional model for the translate calls only (BILLRAG_TRANSLATE_MODEL) comes from chatEnv: a Workers AI id only with Workers AI.
     };
     this.envVars = Object.fromEntries(Object.entries(pass).filter(([, v]) => v));

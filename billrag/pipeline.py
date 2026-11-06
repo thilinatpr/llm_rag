@@ -51,6 +51,13 @@ UNNAMED = re.compile(rf"\b(?:(?:this|that)\s+(?:{_ADJ}){{0,2}}|the\s+(?:{_ADJ}){
 FOCUS_NOTE = ("\n\nNOTE: the question refers to a bill without naming it. The best-matching evidence is from {title} ({keys}): "
               "answer about THAT bill, name it in your first sentence, and lead with its clauses. Mention another bill only if "
               "it adds something the question asks for, and then say clearly that it is a different bill.")
+# Bill-focused mode (whole_bill=True): questions that are clearly about several bills go through the normal pipeline
+MULTI_BILL = re.compile(r"\b(?:which|what|any|other|another|all|compare\w*|both|between|list)\s+(?:\w+\s+){0,2}(?:bills|acts|laws)\b"
+                        r"|\b(?:which|what|any|another|other)\s+(?:(?:new|recent|older|earlier|previous|later)\s+)?(?:bill|act|law)\b"
+                        r"|\bcompar\w*|\bdiffer\w*\s+from\b", re.I)
+WHOLE_BILL_HEAD = ("EVIDENCE: the complete text of one bill, every section in order. Answer only from it; if this bill does not "
+                   "answer the question, say so.\n\n")
+
 LEAK = re.compile(r"<\|(?:call|start|end|channel|message|return|constrain)\|>|\bto=functions\b")
 
 EVAL_PROMPT = """You are a strict evidence grader for a question-answering system over Sri Lankan bills.
@@ -149,6 +156,8 @@ class Result:
     direct_rejected: str = ""  # the rejected one-step answer (diagnostics)
     direct_fallback: str = ""  # why a one-step local-language answer was rejected (then: English answer + translation)
     path: str = "en"  # how the answer was written: en | direct (in the user's language from official text) | translated
+    #                   | whole_bill (bill-focused follow-up answered from the whole text of one bill)
+    whole_bill: dict = None  # {"bill", "sections", "chars"} when path == "whole_bill", or {"fallback": why} when it was dropped
 
     def sources(self):
         out = []
@@ -179,7 +188,8 @@ STRICT = "\n\nReply with the JSON object ONLY - no analysis, no explanation, no 
 class Pipeline:
     def __init__(self, store, retriever, llm, k_clauses=14, k_bills=4, extra_rounds=1, keep_max=8,
                  evidence_chars=14000, on_event=None, grade_effort=None, answer_effort=None, answer_llm=None,
-                 translate_mode="script", translator=None, direct_local=True, official_chars=2500, prefer_latest=True, follow_refs=True, trust_top=False):
+                 translate_mode="script", translator=None, direct_local=True, official_chars=2500, prefer_latest=True, follow_refs=True, trust_top=False,
+                 whole_bill=False, whole_bill_chars=120000):
         self.store, self.retriever, self.llm = store, retriever, llm
         self.k_clauses, self.k_bills, self.extra_rounds = k_clauses, k_bills, extra_rounds
         self.keep_max, self.evidence_chars = keep_max, evidence_chars
@@ -194,6 +204,9 @@ class Pipeline:
         self.prefer_latest = prefer_latest  # no year in the question -> newest instance of a recurring title
         self._last_cut = False  # did the last _llm reply hit max_tokens
         self._glossary = None  # loaded on first non-English question
+        # bill-focused mode: once a chat is about one bill, follow-ups are answered from its whole text (question LAST, so a
+        # provider-side prefix cache reuses the bill across turns). focus_key = the bill version the chat is about.
+        self.whole_bill, self.whole_bill_chars, self.focus_key = whole_bill, whole_bill_chars, None
         self.history = []
         self.emit = None  # optional emit(kind, data): "status" (step name), "token" (answer text), "reset" (drop the draft)
 
@@ -395,7 +408,8 @@ class Pipeline:
             self.on_event("followed_refs", {"sections": [f"{x.key} \u00a7{x.section}" for x in out]})
         return out
 
-    def summarise(self, question, evidence, enough, missing, res, local=None, focus=None, extra="", stream=False):
+    def summarise(self, question, evidence, enough, missing, res, local=None, focus=None, extra="", stream=False,
+                  question_last=False):
         """local: (lang code, {(bill, section): official text}) -> write the answer directly in that language."""
         if not evidence:
             return "I could not find anything in the indexed bills that answers this question."
@@ -415,7 +429,10 @@ class Pipeline:
                                    "Answer what the evidence supports and state clearly what is missing.")
         if focus:
             note += FOCUS_NOTE.format(title=focus["title"], keys=", ".join(focus["bills"]))
-        user = f"QUESTION: {question}\n\nEVIDENCE:\n\n" + "\n\n".join(blocks) + note + extra
+        if question_last:  # stable prefix (system prompt + bill text) first, so a prefix cache can reuse it across turns
+            user = WHOLE_BILL_HEAD + "\n\n".join(blocks) + note + extra + f"\n\nQUESTION: {question}"
+        else:
+            user = f"QUESTION: {question}\n\nEVIDENCE:\n\n" + "\n\n".join(blocks) + note + extra
         system = ANSWER_SYSTEM + (LOCAL_NOTE.format(lang=lang, LANG=lang.upper()) if code else "")
         return self._llm(system, user, 4000 if code else 1800, res, self.answer_effort, llm=self.answer_llm, stream=stream)
 
@@ -490,6 +507,96 @@ class Pipeline:
             return None
         best = max(fams.values(), key=lambda f: (f["max"], f["sum"], f["date"]))
         return {"title": best["title"], "bills": sorted(best["bills"]), "score": best["max"]}
+
+    # ------------------------------------------------------------ bill-focused mode
+    def family(self, key):
+        """Keys of the bill's own GS / Bill versions (same title, within 300 days), sorted; [key] if unknown."""
+        b = self.store.bill(key)
+        keys = {v["key"] for v in self.store.versions(b["title_norm"], b["date"])} if b else set()
+        return sorted(keys | {key})
+
+    def whole_bill_evidence(self, key):
+        """Every section of the bill, in order, full text (a stable, cacheable prompt prefix); None if it has no sections
+        or is longer than `whole_bill_chars` (Appropriation schedules, very long Acts: the normal pipeline handles those)."""
+        rows = self.store.db.execute("SELECT id, section_no, text FROM chunks WHERE bill_key=? AND kind='section' "
+                                     "AND section_no IS NOT NULL ORDER BY section_no, ord", (key,)).fetchall()
+        first, texts = {}, {}
+        for r in rows:
+            first.setdefault(r["section_no"], r["id"])
+            texts.setdefault(r["section_no"], []).append(r["text"])
+        total = sum(len(t) for ts in texts.values() for t in ts)
+        if not first or total > self.whole_bill_chars:
+            return None
+        chunks = self.store.chunks_by_ids(list(first.values()))
+        return [Evidence({**chunks[i], "text": "\n".join(texts[n])}, 3) for n, i in first.items() if i in chunks]
+
+    def bill_focus(self, question, keys, typed=True):
+        """The bill version to answer from in bill-focused mode, or (None, reason).
+        - The question names bill numbers that are all versions of ONE bill -> the newest one named; but when the number
+          came from the condense step (`typed` False) and is a version of the bill already in focus, the focused version
+          stays (same bill, and an unchanged prompt prefix keeps the cache warm).
+        - A follow-up in a chat that is already about one bill -> that bill, but only if retrieval agrees: the bill's family
+          must be among the top 2 families of a reciprocal-rank vote over the retrieved hits (routing top-2 was 96% on the
+          72 recent eval items). Otherwise the user moved on and the normal pipeline answers.
+        Questions about several bills ("which bills ...", "compare ...") never use it."""
+        if MULTI_BILL.search(question):
+            return None, "question is about several bills"
+        if keys:
+            fams = {tuple(self.family(k)) for k in keys}
+            if len(fams) != 1:
+                return None, "question names several bills"
+            if not typed and self.focus_key and self.focus_key in fams.pop():
+                return self.focus_key, None
+            return max(keys, key=lambda k: (self.store.bill(k) or {}).get("date", "")), None
+        if not (self.history and self.focus_key):
+            return None, None
+        hits = (self.retriever.search(question, k=self.k_clauses, kinds=CLAUSE_KINDS)
+                + self.retriever.search(question, k=self.k_bills, kinds=("overview",)))
+        vote, fam_of = {}, {}
+        for rank, c in enumerate(hits):
+            f = fam_of.setdefault(c["bill_key"], self.family(c["bill_key"])[0])
+            vote[f] = vote.get(f, 0.0) + 1 / (rank + 3)
+        top = sorted(vote, key=lambda f: -vote[f])[:2]
+        if self.family(self.focus_key)[0] not in top:
+            return None, "retrieval points at another bill"
+        return self.focus_key, None
+
+    def single_bill(self, evidence):
+        """After a normal answer: the bill version the chat is now about, if all kept clause evidence (or, failing that,
+        all bill-level evidence) comes from one bill's versions; else None."""
+        clauses = [e for e in evidence if e.section is not None and e.score >= 2]
+        pool = clauses or [e for e in evidence if e.score >= 2]
+        if not pool or len({tuple(self.family(e.key)) for e in pool}) != 1:
+            return None
+        return pool[0].key
+
+    def answer_whole_bill(self, q, key, notes, res):
+        """-> True when answered (res filled), False to fall back to the normal pipeline (res.whole_bill says why)."""
+        ev = self.whole_bill_evidence(key)
+        if not ev:
+            res.whole_bill = {"fallback": "bill has no sections or is too long", "bill": key}
+            return False
+        t = time.time()
+        self._step("whole_bill")
+        answer = self.summarise(q, ev, True, "", res, stream=True, question_last=True)
+        res.seconds["whole_bill"] = time.time() - t
+        info = {"bill": key, "sections": len(ev), "chars": sum(len(e.chunk["text"]) for e in ev)}
+        if answer == LEAK_FALLBACK or not CITE.search(answer):  # cites nothing: maybe not this bill -> normal pipeline
+            res.whole_bill = {**info, "fallback": "unusable answer" if answer == LEAK_FALLBACK else "no citations"}
+            res.warnings = [w for w in res.warnings if "reasoning or unusable" not in w]
+            self.on_event("whole_bill", res.whole_bill)
+            if self.emit:
+                self.emit("reset", None)
+            return False
+        cited = {(k, int(n)) for k, n in CITE.findall(answer) if n}
+        res.answer = (" ".join(notes) + "\n\n" + answer) if notes else answer
+        res.path, res.whole_bill, res.queries = "whole_bill", info, [q]
+        res.evidence = [e for e in ev if (e.key, e.section) in cited]  # sources = what the answer cites, not all sections
+        bad = self.verify(answer, ev)
+        if bad:
+            res.warnings.append("citations not backed by the retrieved evidence: " + ", ".join(bad))
+        self.on_event("whole_bill", info)
+        return True
 
     @staticmethod
     def verify(answer, evidence):
@@ -626,6 +733,15 @@ class Pipeline:
         q = self.condense(plan["question"], res)
         res.seconds["condense"] = time.time() - t
         keys = [k for k in {normalize_ref(m) for m in re.findall(r"\d{1,3}\s*/\s*\d{4}", q)} if k and self.store.bill(k)] or None
+        if self.whole_bill and local is None:  # English only so far (Sinhala: official text would triple the prefix)
+            key, why = self.bill_focus(q, keys, typed=bool(re.search(r"\d{1,3}\s*/\s*\d{4}", plan["question"])))
+            if key and self.answer_whole_bill(q, key, notes, res):
+                self.focus_key = key
+                self.history.append((question, res.answer))
+                return res
+            if why:
+                res.whole_bill = {"fallback": why}
+                self.on_event("whole_bill", res.whole_bill)
         seen_ids, graded, queries = set(), [], [q]
         enough, missing = True, ""
         for rnd in range(1 + self.extra_rounds):
@@ -695,5 +811,7 @@ class Pipeline:
         bad = self.verify(res.answer, res.evidence)
         if bad:
             res.warnings.append("citations not backed by the retrieved evidence: " + ", ".join(bad))
+        if self.whole_bill:
+            self.focus_key = self.single_bill(res.evidence)
         self.history.append((question, res.answer))
         return res
