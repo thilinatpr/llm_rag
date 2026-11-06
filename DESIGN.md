@@ -1,7 +1,8 @@
 # DESIGN.md: citizenlk.com visual design
 
 Design rules for every page under citizenlk.com (homepage, Bill Assistant, Procurement Rules, later services).
-The owner approved the minimal homepage on 2026-11-06; this file records what it uses so other pages match it.
+The owner approved the minimal homepage on 2026-11-06 (`site/index.html`, a standalone static page, not deployed yet);
+this file records what it uses so other pages match it. Start new pages from that file.
 
 ## Principles
 
