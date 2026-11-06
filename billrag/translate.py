@@ -22,7 +22,7 @@ import re
 import unicodedata
 
 SCRIPTS = {"si": ("Sinhala", re.compile(r"[඀-෿]")), "ta": ("Tamil", re.compile(r"[஀-௿]"))}
-CITE = re.compile(r"[\[【]\d{3}/\d{4}(?:\s*§\s*\d+(?:\([^)\]]*\))*)?[\]】]")
+CITE = re.compile(r"[\[【](?:Act \d{1,3}/\d{4}|\d{3}/\d{4})(?:\s*§\s*\d+(?:\([^)\]]*\))*)?[\]】]")
 
 # Translate literally. "Use the English name of an Act when you know it" made the model swap "terrorism act" for the real-world
 # "Prevention of Terrorism Act" (not in the corpus), and the answer then hedged about an Act the user never named (3 of 4 live

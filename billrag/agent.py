@@ -3,7 +3,7 @@ import difflib
 import json
 import re
 
-from . import meta
+from . import acts, meta
 from .store import normalize_ref
 
 SYSTEM = """You are an expert assistant that helps people scrutinize and understand bills of the Parliament of Sri Lanka.
@@ -19,11 +19,12 @@ How to work:
 - Use diff_bills to compare a Gazette (GS) version with the later Bill version, or two related bills.
 - Users mostly care about recently published bills. When several bills match and the user gives no year, prefer the
   newest, state the dates you relied on, and mention older bills only if they are clearly relevant or asked about.
-- "GS" = bill published in the Gazette before presentation; "Bill" = version presented to Parliament. Amendments made
-  later in committee are NOT in this corpus; say so when relevant.
+- "GS" = bill published in the Gazette before presentation; "Bill" = version presented to Parliament; "Act" = certified law, key
+  like "Act 25/2026", numbered separately from bills. get_bill_overview says if a bill became an Act: answer from the Act, and never
+  present a bill as law. An amending Act lists changes to an earlier Act; it is not that Act's current text.
 
 Answer rules:
-- Cite every substantive claim as [bill-key §section], e.g. [077/2026 §12(2)]; cite schedules as [key Schedule].
+- Cite every substantive claim as [key §section], e.g. [077/2026 §12(2)] or [Act 25/2026 §7]; cite schedules as [key Schedule].
 - Distinguish clearly between what the text says (quote short exact phrases) and your interpretation or analysis.
 - If the tools do not contain the answer, say so plainly. Never invent clauses, numbers, or section references.
 - Be concise and structured: a short answer first, then supporting detail. You explain; you do not give legal advice."""
@@ -61,10 +62,10 @@ TOOLS = [
          "top_k": {"type": "integer", "description": "Passages to return (default 8, max 15)"}},
          "required": ["query"]}},
     {"name": "list_bills",
-     "description": "List indexed bills (newest first), optionally filtered by year, title words, or kind (Bill|GS).",
+     "description": "List indexed bills and Acts (newest first), optionally filtered by year, title words, or kind (Bill|GS|Act).",
      "parameters": {"type": "object", "properties": {
          "year": {"type": "integer"}, "title_contains": {"type": "string"},
-         "kind": {"type": "string", "enum": ["Bill", "GS"]}, "limit": {"type": "integer"}}}},
+         "kind": {"type": "string", "enum": ["Bill", "GS", "Act"]}, "limit": {"type": "integer"}}}},
     {"name": "get_bill_overview",
      "description": "Metadata, long title, summary (if available), related versions and the section outline of one bill.",
      "parameters": {"type": "object", "properties": {"bill": {"type": "string", "description": "e.g. '077/2026'"}},
@@ -149,6 +150,7 @@ class Agent:
         lines = [f"{key} | {b['title']} | {b['kind']} | {b['date'][:10]} | {b['n_pages']} pages, {b['n_sections']} sections",
                  f"Long title: {b['long_title']}",
                  *_meta_line(self.store, key),
+                 f"Status: {acts.status_lines(self.store, key)}",
                  f"Presented by: {b['presented_by']} on {b['presented_on']}; Gazette: {b['gazette_date']}"]
         if b.get("summary"):
             lines.append(f"Summary (auto-generated; verify against the clauses): {b['summary']}")

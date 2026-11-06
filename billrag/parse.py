@@ -143,9 +143,9 @@ def clean_page(text: str, titles: set):
     return lines, notes
 
 
-def parse_pages(pages: list, listing_title: str = "") -> ParsedBill:
+def parse_pages(pages: list, listing_title: str = "", extra_titles=()) -> ParsedBill:
     cover = parse_cover(pages[0]) if pages else {}
-    titles = {norm(t) for t in (cover.get("title"), re.sub(r"\s*-\s*(bill|gs)\s*$", "", listing_title, flags=re.I))
+    titles = {norm(t) for t in (cover.get("title"), re.sub(r"\s*-\s*(bill|gs)\s*$", "", listing_title, flags=re.I), *extra_titles)
               if t}
     titles.discard("")
     body = [(i + 1, *clean_page(p, titles)) for i, p in enumerate(pages)]
@@ -237,6 +237,69 @@ def parse_pdf(path: str, listing_title: str = "") -> ParsedBill:
         except Exception:
             pages.append("")
     return parse_pages(pages, listing_title)
+
+
+LIGATURES = str.maketrans({"\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl", "\ufb03": "ffi", "\ufb04": "ffl"})  # search and quotes need plain letters
+ACT_FOOTER = re.compile(r"(?:English\s+)?Acts\s+of\s+the\s+Parliament\s+can\s+be\s+purchased\b.*", re.I | re.S)
+ACT_CERT = re.compile(r"\[?\s*Certified\s+on\s+(\d{1,2})\w*\s+(?:of\s+)?([A-Za-z]+),?\s+(\d{4})\s*\]?", re.I)
+
+
+def act_cover_ok(page_text: str, no, year) -> bool:
+    """Is this PDF really that Act? The listing sometimes holds a file named "... Bill.pdf"; an Act's cover names its number."""
+    return bool(re.search(rf"\bACT,?\s*No\.?\s*{int(no)}\s+OF\s+{int(year)}\b", page_text, re.I))
+
+
+def certified_on(text: str):
+    """'[Certified on 19th of October, 2026]' -> '2026-10-19', or None."""
+    from datetime import datetime
+    m = ACT_CERT.search(text)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%d %B %Y").date().isoformat()
+    except ValueError:
+        return None
+
+
+def parse_act_pages(pages: list, listing_title: str, no, year) -> ParsedBill:
+    """An Act is laid out like a bill, plus a running head on every page ("X (Amendment) Act, No. 25 of 2026", sometimes on two
+    lines), the certification line, and a sales footer that would otherwise land in the last section."""
+    own = f"Act, No. {int(no)} of {int(year)}"
+    head_words = set(norm(f"{listing_title} {own}").split())
+    tail = norm(own)
+
+    def is_head(line):
+        """The running head, possibly glued to the page number ("15National ...") or wrapped ("Personal) Act, No. 12 of 2026").
+        Own-number lines ending in a full stop are sentences (the short-title section), and are kept."""
+        ln = line.strip()
+        if ln.endswith("."):
+            return False
+        words = norm(re.sub(r"^\d{1,3}(?=[A-Za-z])", "", ln)).split()
+        words = words[1:] if words and words[0].isdigit() else words
+        return " ".join(words).endswith(tail) and set(words) <= head_words
+
+    clean = []
+    for p in pages:
+        p = ACT_FOOTER.sub("", ACT_CERT.sub("", p)).translate(LIGATURES)
+        clean.append("\n".join(ln for ln in p.splitlines() if not is_head(ln)))
+    parsed = parse_pages(clean, listing_title, extra_titles=(own, f"{listing_title} {own}"))
+    parsed.cover["certified"] = next((d for d in map(certified_on, pages[:3]) if d), None)
+    parsed.cover.pop("presented_by", None)  # an Act's cover has no presenter; anything matched there is not one
+    return parsed
+
+
+def parse_act_pdf(path: str, listing_title: str, no, year) -> ParsedBill:
+    import pypdf
+    reader = pypdf.PdfReader(path)
+    pages = []
+    for p in reader.pages:
+        try:
+            pages.append(p.extract_text() or "")
+        except Exception:
+            pages.append("")
+    if not any(act_cover_ok(x, no, year) for x in pages[:3]):
+        raise ValueError("not this Act (its number is not on the cover)")
+    return parse_act_pages(pages, listing_title, no, year)
 
 
 def split_text(text: str, max_chars: int = 1400, overlap: int = 150) -> list:

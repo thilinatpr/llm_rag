@@ -13,6 +13,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from . import acts
 from .pipeline import CITE, LEAK, STRICT, parse_json
 
 JUDGE = """You are grading an answer to a question about a Sri Lankan bill against a reference answer taken from the bill text.
@@ -60,6 +61,17 @@ def expand_gold(store, item):
             if (v["key"], g.get("section")) not in have:
                 gold.append({"bill": v["key"], **({"section": g["section"]} if "section" in g else {})})
                 have.add((v["key"], g.get("section")))
+    return with_act_gold(store, {**item, "gold": gold})
+
+
+def with_act_gold(store, item):
+    """The Act a bill became says the same thing under its own section number; that counts too."""
+    gold, have = list(item["gold"]), _gold_pairs(item)
+    for g in item["gold"]:
+        for k, sec in acts.equivalents(store, g["bill"], g.get("section")):
+            if (k, sec) not in have:
+                gold.append({"bill": k, **({"section": sec} if sec is not None else {})})
+                have.add((k, sec))
     return {**item, "gold": gold}
 
 

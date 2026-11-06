@@ -46,7 +46,7 @@ def embed_all(store, embedder, path, batch=256, incremental=True, dtype="float32
     return len(todo)
 
 
-SUM_PROMPT = ("Summarise this Sri Lankan bill for a non-lawyer in at most 110 words: its purpose, who is affected, key "
+SUM_PROMPT = ("Summarise this Sri Lankan {doc} for a non-lawyer in at most 110 words: its purpose, who is affected, key "
               "new powers/obligations/penalties, and which existing laws it amends or creates. Then, on a final line "
               "starting 'Keywords:', give 8-12 plain-language search terms a citizen might use to look for it "
               "(topics, institutions, everyday words - not legal jargon). Use ONLY facts stated in the text below: do not add "
@@ -56,7 +56,7 @@ SUM_PROMPT = ("Summarise this Sri Lankan bill for a non-lawyer in at most 110 wo
 
 
 def _summarise(llm, b, body):
-    prompt = SUM_PROMPT.format(title=b["title"], long_title=b["long_title"] or "n/a", text=body[:9000])
+    prompt = SUM_PROMPT.format(doc="Act" if b.get("kind") == "Act" else "bill", title=b["title"], long_title=b["long_title"] or "n/a", text=body[:9000])
     for _ in range(2):
         s = llm.chat("You are a careful legislative analyst.", [{"role": "user", "content": prompt}],
                      max_tokens=1500).text.strip()

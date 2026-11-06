@@ -5,6 +5,7 @@ import time
 from collections import defaultdict
 
 from . import calltrace
+from .acts import is_act
 
 RRF_K = 60
 SCAN_BLOCK = 4096  # rows per block when scoring float16 vectors (~12 MB of float32 at 768 dims)
@@ -83,15 +84,21 @@ class Retriever:
         elif self.rerank_mode.startswith("cloudflare") and self.reranker and len(fused) > 1:
             fused = self.cross_rerank(query, fused, chunks)
         # collapse identical text across versions (e.g. GS vs Bill) and remember where else it appears
+        # An Act and its bill can share text under different section numbers, so that pair is not recorded as `also_in`
+        # (which means "the same section there too"); the Act's chunk takes the place of the bill's.
         seen, uniq = {}, []
         for i in fused:
             c = chunks[i]
             sig = re.sub(r"\W+", "", c["text"].lower())
-            if sig in seen:
-                seen[sig].setdefault("also_in", []).append(c["bill_key"])
-            else:
+            if sig not in seen:
                 seen[sig] = c
                 uniq.append(i)
+            elif is_act(c["bill_key"]) != is_act(seen[sig]["bill_key"]):
+                if is_act(c["bill_key"]):
+                    uniq[uniq.index(seen[sig]["id"])] = i
+                    seen[sig] = c
+            else:
+                seen[sig].setdefault("also_in", []).append(c["bill_key"])
         fused = uniq
         # diversity: avoid one long bill flooding the results (unless the caller pinned bills)
         cap = k if keys and len(keys) == 1 else max(3, k // 2)

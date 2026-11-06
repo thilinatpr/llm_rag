@@ -57,6 +57,13 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
 - [ ] Automate refresh: after a re-scrape/ingest, run `embed` + `upload_r2.py --include-index` in one command.
 - [ ] Only the *changed* chunks need re-embedding after a small re-ingest; today `embed` redoes all 42k.
 
+## Acts
+- [x] Certified Acts 2024+ in the index, linked to their bills, compared section by section (`billrag/acts.py`; see AGENTS.md). Not live.
+- [ ] Refresh: new Acts need scrape -> `ingest-acts` -> `summarize` -> `embed` -> upload, like new bills.
+- [ ] Older Acts (2015-2023, ~245): principal Acts of today's amendments, and "did this bill pass?" for older bills.
+- [ ] Tamil text of Acts; Sinhala of 2024 Acts (FM Abhaya) and 17 visual-order 2025+ Acts.
+- [ ] Compare schedules; label a bill-to-Act link as uncertain when its text score is low.
+
 ## Data quality
 - [ ] OCR the 2 scanned bills with no text layer (`048/2013`, `011/2012`); OCR also unlocks Sinhala/Tamil.
 - [ ] Find out why 9 bills still have no `long_title` (`select key from bills where long_title is null`).

@@ -13,10 +13,12 @@ documents.gov.lk. The three `*.ipynb` notebooks are older LangChain/OpenAI RAG e
 
 ```
 scripts/scrape_bills.py   documents.gov.lk -> data/bills/{bills.json,bills.csv,pdfs/<year>/<NNN_YYYY>_<LANG>.pdf}
+scripts/scrape_bills.py --source acts   documents.gov.lk/web/acts -> data/acts/{acts.json,acts.csv,pdfs/<year>/<N_YYYY>_<LANG>.pdf}
 scripts/upload_r2.py      data/bills/ -> Cloudflare R2 bucket `gov-rag`, prefix `bills/` (idempotent; --include-index adds index+vectors)
 scripts/fetch_index.py    R2 -> data/bills/{index.sqlite,vectors.npz}: restore the built index in a fresh session (no ingest/embed)
 billrag/parse.py          PDF -> sections/parts/schedules (structure-aware) + cover metadata
-billrag/ingest.py         parse every English PDF -> data/bills/index.sqlite (chunks + FTS5)
+billrag/ingest.py         parse every English PDF -> data/bills/index.sqlite (chunks + FTS5); `ingest-acts` adds certified Acts
+billrag/acts.py           Acts next to bills: bill -> Act links, section-by-section comparison, the status line answers get
 billrag/store.py          SQLite schema, BM25 search, section/outline/version queries
 billrag/retrieve.py       BM25 (+ optional dense) -> RRF -> optional LLM rerank -> dedup of identical text -> diversity cap
 billrag/pipeline.py       DEFAULT chat engine, two steps: retrieve -> AI evidence grading -> AI summary (+ citation check)
@@ -65,6 +67,10 @@ python -m billrag summarize --since-year 2024 --workers 8   # LLM bill summaries
 env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY python scripts/fetch_index.py --bucket gov-rag --pdfs SINHALA --since-year 2025 --no-index
 python -m billrag ingest-si [--since-year 2025]                     # link official Sinhala sections (~3 min; needs pymupdf)
 python -m billrag glossary                                          # rebuild the glossary (~5 s; ingest-si also rebuilds it)
+python scripts/scrape_bills.py --source acts --since-year 2024 --langs ENGLISH SINHALA   # then:
+python -m billrag ingest-acts && python -m billrag summarize --since-year 2024 && python -m billrag embed && python scripts/shrink_vectors.py
+python -m billrag link-acts                                         # recompute links + comparison only (~1 min, no model)
+python scripts/eval_acts.py                                         # bill-vs-Act answer check, 12 questions; read the answers
 python -m pytest tests -q                                           # must pass before every commit
 ```
 
@@ -766,6 +772,7 @@ answer it, the 5th is not a penalty question and says honestly that the penalty 
   | 72 recent items, judge deepseek-v4-pro | strict | cited gold | warned | avg s |
   |---|---|---|---|---|
   | deepseek-flash, grading thinking OFF, answer thinking ON (best) | 0.93-0.94 | 0.94-0.96 | 0.00-0.03 | 9-10 |
+  | same, with Acts in the index (`acts`, 2026-11-07; gold includes the Act's matching section) | 0.94 | 0.99 | 0.03 | 11.1 |
   | gpt-oss-120b (production) | 0.89 | 0.92 | 0.00 | 15.8 |
   | gpt-oss-20b | 0.83 | 0.88 | 0.00 | 12.3 |
   | deepseek-flash, all thinking | 0.90 | 0.93 | 0.54 (grader JSON unusable) | 21.8 |
@@ -812,6 +819,41 @@ Rollback: `CHAT_PROVIDER = "workers-ai"` and redeploy (secret can stay). Risks t
 answers down (no automatic fallback to Workers AI at request time), prompts and bill text go to DeepSeek, cost is variable (see the
 cost log), prices change (`BILLRAG_PRICES`). The judge for the eval numbers was DeepSeek-family, and Sinhala quality was spot-checked
 (18 + 16 questions), not measured on a labelled set.
+
+## Certified Acts next to bills (`billrag/acts.py`, 2026-11-07)
+
+**Why:** a bill is not the law, and the text can change on the way. Bill 063/2026 §17 made offences "cognizable and non-bailable"; Act
+25/2026 has no such clause, and Bill §7 (s.81) went too, so every later section number shifted. The index could not tell. Comparing all linked pairs: most
+sections match, but many differ in wording (`decide` -> `determine`, whole qualifying phrases), so this is not a rare case.
+
+**Stored as:** `bills` + `chunks` rows with kind `Act`, key `Act 25/2026`, title `X Act, No. 25 of 2026`, `date` = certified date from the cover
+(differs from the listing date on 7 Acts). The key cannot be confused with bill 025/2026, and citations read `[Act 25/2026 §7]`. Unlike `local_sections`
+and the glossary, this DOES change `chunks`, so `fingerprint()` changes and `embed` must run; ids of existing chunks do not change, so only the new text is
+embedded. Scope: 2024+ (`acts.ACT_SINCE`), 99 of 101 Acts, about 4,300 chunks. Not indexed: `0/2026` (no number), `49/2024` (no English PDF). Sinhala text linked
+with the same rules as bills: 36 of the 53 from 2025+ (17 visual-order font); 2024 Acts are FM Abhaya (legacy font), so not handled.
+
+**Links (`act_links`):** decided from text, because titles recur and one title can have two Acts on one day (26/2026, 27/2026). A bill goes to the Act it
+shares most word 3-grams with. `direct=1` = the last round before the Act; `direct=0` = an earlier round later re-presented, which must not be described as having
+become the Act. Result: 89 of 99 Acts linked, 173 bills direct, 27 earlier rounds. The 10 unlinked are mostly 2024 incorporation Acts whose bills are far older or
+reworded: their bills say "no Act held". Thresholds are at the top of `acts.py`.
+
+**Comparison (`act_sections`):** `same | changed | dropped | moved | added`, by order-preserving alignment. Lessons, each from a real error:
+- **A similarity threshold cannot decide "same":** "twenty" -> "ten" in a long clause scores 0.99. `material_differences` lists the word differences and only recognised noise
+  (margin notes, split words, the bill's blank Act number) is ignored. It errs towards `changed`, which just shows both texts. Roughly 9 of 14 sampled `changed` rows were real edits; the rest was noise.
+- **Amendment clauses read alike:** "Section 81 ... amended" and "Section 82 ... amended" match on boilerplate, so a different target section never pairs, and a clause whose target no Act section amends is `dropped` even if its words occur elsewhere.
+- **`dropped` is a strong claim:** it requires the clause's text to be absent from the whole Act including schedules, else `moved`. A section-only check called a schedule's text dropped (567/2025 §12). 34 dropped, 30 moved. It says the WORDING is not in the Act, not that the Act is silent on the topic (382/2023 §3 is rewritten, not removed).
+- Schedules are not compared (no section number).
+
+**Answers (`Pipeline.apply_acts`, after grading, no model call; log field `acts`):** a `same` bill clause is replaced by the Act's section; `changed` shows the Act's then the bill's; `dropped`/`moved`/bill-level keep the bill's with the Act's overview beside it. A question naming a bill number or
+comparing versions (`COMPARE`) keeps the bill's clause. Every passage gets a `STATUS:` line (`acts.status_lines`). What it may say is limited: no Act held is "not shown to have passed", never "failed"; a bill older than 2024 is "not checked". The Act's status names its bills ("has the bill become law?" hedged without it) and long title (a Sinhala answer took a "No. 19 of 1994" inside a clause for the Act being amended).
+- `store.versions` leaves Acts out, and retrieval's `also_in` never pairs a bill with an Act: `also_in` means "same section number there", which is false here. Identical text keeps the Act's chunk.
+- `"Act No. 25 of 2026"` restricts retrieval to that Act; a bare `25/2026` stays a bill number, as before. The principal Act of an amendment (mostly older than 2024) is not indexed, so we can say what an amendment does, not what the amended law now reads.
+- Evals count the Act's matching section as gold too (`answer_eval.with_act_gold`).
+
+**Measured** (72 recent items, deepseek-flash, thinking off for grading): retrieval MRR 0.87 -> 0.88, R@10 0.97 -> 0.96 (one item, noise). Answers: see the table row `acts` under "Priorities, DeepSeek". The eval's references come from bills, so correct Act answers can be marked wrong: of 4 misses, the judge failed the 1 July date (Act 10/2026 §3; bill 023/2026 §3 says 1 April) and the unenacted bail clause (063/2026 §17), both checked against the text and both right. Read misses before trusting a drop; re-reference items whose bill became an Act with `changed` or `dropped` status. `scripts/eval_acts.py`
+(hand-written set, `evals/act_eval.jsonl`): 12/12 mechanical checks, but those are phrase matches: reading the answers is what found the three bugs above. Known weak spots: one run cited `Act 25/2026 §17` without that section in evidence (the citation check warned); and a pre-2024 bill can be called "not law" when it did become an Act we do not hold (319/2023 became the 2023 principal Act). Summaries: 9 Acts have none (the model returned unusable output three times; `summarize` retries them).
+
+**Production (NOT done, each step needs the owner's go-ahead). Order matters:** old code cannot read `[Act ...]` citations, while new code works on an old index. 1. Deploy the code. 2. `python scripts/upload_r2.py --bucket gov-rag --include-index` from a worktree holding the new index (index and vectors together: a mismatch is a `VectorsError` on the next start). 3. Restart the container so it restores them; expect ~20 MB more download and ~6 MB more RAM. 4. Check logs: `acts` field, `[Act ...]` citations. Rollback: re-upload the previous index + vectors, then redeploy. `data/acts` is not in R2; re-scrape it (resumable).
 
 ## Product priority: recent bills
 

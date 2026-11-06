@@ -3,7 +3,7 @@ and the section text, plus optional LLM topic tags. Because `chunks` is untouche
 stay valid and an older build of the code simply ignores the tables.
 
 bill_meta   family      key of the earliest bill of the same title within 300 days (a bill's GS + Bill versions share it)
-            stage       gazette (GS) | bill (presented to Parliament) | act/other
+            stage       gazette (GS) | bill (presented to Parliament) | act (certified; billrag/acts.py) | other
             bill_type   appropriation | incorporation | amendment | new | other
             amends      for amendments: the title of the Act being amended
             is_latest   1 if no later bill of the same title exists (i.e. the current instance of a recurring title)
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS section_refs(
   bill_key TEXT NOT NULL, section_no INT NOT NULL, ref_no INT NOT NULL, PRIMARY KEY(bill_key, section_no, ref_no));
 """
 
-STAGE = {"gs": "gazette", "bill": "bill"}
+STAGE = {"gs": "gazette", "bill": "bill", "act": "act"}
 REF = re.compile(r"\bsections?\s+(\d{1,3})(?:\s*(?:,|and|or|to)\s*(\d{1,3}))*", re.I)
 REF_ALL = re.compile(r"\bsections?\s+((?:\d{1,3}(?:\([^)]*\))*\s*(?:,|and|or|to|–|-)?\s*)+)", re.I)
 
@@ -88,7 +88,7 @@ def build(store: Store) -> dict:
         latest_family = fam[bills[-1]["key"]]
         for b in bills:
             bt = bill_type(tn)
-            rows.append((b["key"], tn, fam[b["key"]], STAGE.get((b["kind"] or "").lower(), "act"), bt,
+            rows.append((b["key"], tn, fam[b["key"]], STAGE.get((b["kind"] or "").lower(), "other"), bt,
                          amends(tn, bt), int(fam[b["key"]] == latest_family), latest_family, old_tags.get(b["key"])))
     db.execute("DELETE FROM bill_meta")
     db.executemany("INSERT INTO bill_meta VALUES(?,?,?,?,?,?,?,?,?)", rows)
