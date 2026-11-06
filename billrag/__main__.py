@@ -16,6 +16,7 @@ def main(argv=None):
     sub.add_parser("stats")
     p = sub.add_parser("ingest-si", help="link the official Sinhala text (Unicode PDFs, 2025+) to the English sections")
     p.add_argument("--since-year", type=int, default=2025)
+    sub.add_parser("glossary", help="mine English <-> official Sinhala titles and defined terms from the linked sections")
     p = sub.add_parser("search", help="retrieval only (no LLM / API key needed)")
     p.add_argument("query")
     p.add_argument("-k", type=int, default=6)
@@ -72,6 +73,10 @@ def main(argv=None):
     if a.cmd == "ingest-si":
         from .ingest import ingest_si
         ingest_si(s.data_dir, s.db_path, a.since_year)
+        return 0
+    if a.cmd == "glossary":
+        from . import glossary
+        print(glossary.build(store))
         return 0
     if a.cmd == "stats":
         print(store.stats())

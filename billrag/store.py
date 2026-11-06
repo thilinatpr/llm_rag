@@ -19,7 +19,12 @@ CREATE TABLE IF NOT EXISTS local_sections(
 CREATE TABLE IF NOT EXISTS local_bills(
   bill_key TEXT NOT NULL, lang TEXT NOT NULL, status TEXT, n_sections INT, n_kept INT, pdf TEXT,
   PRIMARY KEY(bill_key, lang));
+CREATE TABLE IF NOT EXISTS glossary(
+  lang TEXT NOT NULL, kind TEXT NOT NULL, en TEXT NOT NULL, local TEXT NOT NULL, n INT, bills TEXT, note TEXT,
+  PRIMARY KEY(lang, kind, en, local));
 """
+# glossary: English <-> official Sinhala term pairs mined from the linked sections (billrag/glossary.py): bill titles (from
+# each bill's short-title section), defined terms ("X" means ...) and "referred to as" names. Outside `chunks` too.
 # local_sections: the official Sinhala (later Tamil) text of a section, linked to the English index by (bill_key,
 # section_no). Kept OUT of `chunks` on purpose: retrieval stays English, and fingerprint()/vectors.npz are unaffected.
 
@@ -183,6 +188,17 @@ class Store:
         rows = self.db.execute("SELECT status, COUNT(*) AS n, SUM(n_kept) AS kept FROM local_bills WHERE lang=? "
                                "GROUP BY status ORDER BY n DESC", (lang,)).fetchall()
         return [dict(r) for r in rows]
+
+    def replace_glossary(self, lang, rows):
+        """rows: [(kind, en, local, n, bills, note)]; replaces the whole glossary for `lang`."""
+        self.db.execute("DELETE FROM glossary WHERE lang=?", (lang,))
+        self.db.executemany("INSERT OR REPLACE INTO glossary VALUES(?,?,?,?,?,?,?)", [(lang, *r) for r in rows])
+
+    def glossary(self, lang="si"):
+        try:
+            return [dict(r) for r in self.db.execute("SELECT * FROM glossary WHERE lang=? ORDER BY n DESC", (lang,))]
+        except sqlite3.OperationalError:  # an index built before the table existed
+            return []
 
     def update_overview(self, key, text):
         r = self.db.execute("SELECT id FROM chunks WHERE bill_key=? AND kind='overview'", (key,)).fetchone()

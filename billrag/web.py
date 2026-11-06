@@ -101,6 +101,7 @@ class App:
                 "official": [f"{k} \u00a7{n}" for k, n in res.official],
                 "path": res.path, "answer_en": res.answer_en or None, "direct_fallback": res.direct_fallback or None,
                 "quote_fixes": res.quote_fixes or None, "focus": res.focus,
+                "glossary_hints": res.glossary_hints or None, "glossary_terms": res.glossary_terms or None,
                 "added_sections": [f"{e.key} \u00a7{e.section}" for e in res.added_sections] or None,
                 "direct_rejected": res.direct_rejected or None,
             }

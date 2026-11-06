@@ -20,6 +20,7 @@ billrag/pipeline.py       DEFAULT chat engine, two steps: retrieve -> AI evidenc
 billrag/answer_eval.py    answer-level eval: cites-the-gold-clause, LLM judge, latency (`billrag eval-answers`)
 billrag/translate.py       translation layer: question -> English -> pipeline -> answer back; garble check, quote alignment to official text
 billrag/parse_si.py       official Sinhala text per section (Unicode PDFs, 2025+) -> table local_sections; `ingest-si`
+billrag/glossary.py       English <-> official Sinhala titles + defined terms mined from local_sections -> table glossary
 billrag/agent.py          (`--mode agent`) tool-calling loop: search_bills, list_bills, get_bill_overview, get_section, diff_bills
 billrag/llm.py            Anthropic + OpenAI-compatible chat adapters, OpenAI/sentence-transformers embedders
 billrag/enrich.py         optional: dense vectors (`embed`) and LLM bill summaries (`summarize`)
@@ -54,6 +55,7 @@ python -m billrag eval -k 10 --since-year 2025 --misses 10 --label NAME   # retr
 python -m billrag summarize --since-year 2024 --workers 8   # LLM bill summaries + search keywords (resumable, newest first)
 env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY python scripts/fetch_index.py --bucket gov-rag --pdfs SINHALA --since-year 2025 --no-index
 python -m billrag ingest-si [--since-year 2025]                     # link official Sinhala sections (~3 min; needs pymupdf)
+python -m billrag glossary                                          # rebuild the glossary (~5 s; ingest-si also rebuilds it)
 python -m pytest tests -q                                           # must pass before every commit
 ```
 
@@ -512,6 +514,30 @@ used the official terms භීෂණකාරී, ප්‍රාණ ඇපක�
   "2026 ආගමන පනත් කෙටුම්පත ගැන කෙටියෙන් කියන්න" 94 s (direct rejected for 枠, translated) -> 17.9 s direct after the retry
   change. Remaining quality issues: odd coinages (අධික්ෂේපණය, කොපරේට් ශරීරය), labels like "[072/2026 summary]", and one
   run of the terrorist-act question where the grader kept nothing in both rounds ("found nothing"; grader variance, not new).
+
+### Glossary: official titles and defined terms (`billrag/glossary.py`, table `glossary`, 2026-11-06)
+Mined deterministically (no model) from the linked section pairs; lives outside `chunks` (fingerprint/vectors unaffected).
+- **Sources:** each bill's §1 short title ("cited as the X Act" <-> "... දරන Y පනත යනුවෙන් හඳුන්වනු ලැබේ"; also "... සංශෝධනය ලෙස",
+  lower-case Appropriation text, the misspelt හදුන්වනු, stray ZWJ/space "යනු‍වෙ න්"); interpretation sections ('"X" means/includes'
+  <-> '"Y" යන්නෙන්/යන්නට'); "hereinafter referred to as the "X"" <-> '"Y" යනුවෙන් සඳහන්'. Terms are paired in order and only when
+  both sides of a section have the same count (mismatched sections are skipped, not guessed). Order holds in the samples read.
+- **Result:** 306 entries: 76 titles (140 of 141 linked bills; 573/2025's English §1 is mis-parsed), 147 defined, 83 referred.
+  Common ones: principal enactment = ප්‍රධාන ප්‍රඥප්තිය (49 bills), bank = බැංකුව (12), written law = ලිඛිත නීතිය (10).
+- **Doubled ය:** the artefact font is in 83 bills and is MORE frequent than the correct spelling (අමාත්‍යයවරයා 415 vs 376), and even the raw
+  PDF cannot tell it from a real ්‍යය (රාජ්‍යය ආයතන vs රාජ්‍යය සහ in one file). For glossary terms only, the spelling found in the clean
+  bills wins (`fix_double_ya`, 5 fixes, recorded in `note`); ව්‍යයවස්ථා in the 22nd Amendment title stays (no clean evidence).
+- **Bill text, not our bug:** 038/2026 §17 defines "eligible exporter" as සුදුසුකම් ලබන **ආනයනකරු** ("importer"). Kept as the bill says.
+- **Use:** (1) translate-in: `Glossary.in_question` finds titles and multi-word terms in a Sinhala question and the TO_EN prompt gets
+  them as "official English names"; `Pipeline.keep_titles` appends a title the translation still dropped. Log `glossary_hints`.
+  (2) answers: `for_english` picks entries whose English term occurs in the evidence (multi-word, or one word in >= 3 bills; at most 15)
+  and both the direct prompt and translate-out get them as "OFFICIAL SINHALA TERMS" (no [ ]). Log `glossary_terms`.
+- **Measured live** (5 Sinhala questions): the hostage question that failed (Llama: "Prevention of Terrorism Act" -> found nothing)
+  now searches "Protection of the State from Terrorism Act" and finds 070/2026 §3, with the official ප්‍රාණ ඇපකරුවන්. It still does
+  not give the penalty: §4(b) sets it by reference to §3(2)(c) paragraphs and never says "hostage", so it needs cross-reference
+  following (not done). Others: 17.7-46.4 s, all direct, no warnings; one "not found" for the terrorist-act question (grader kept only
+  018/2026 §16: grader variance).
+- **Production:** the container restores `index.sqlite` from R2, so the glossary only goes live after `upload_r2.py --include-index`
+  (old code ignores the table; the code without the table just has no hints).
 
 ## Product priority: recent bills
 
