@@ -615,8 +615,7 @@ versions only) it adds up to 2 sections the clause points at, and for a question
 AT the clause and speak of imprisonment/fine/liability (the penalty section s.4 points back at the offence section s.3 and never
 says "hostage"). Fixes the hostage penalty (070/2026 §4(b): <= 20 years rigorous imprisonment + fine <= Rs 20m); 4 of 5 phrasings
 answer it, the 5th is not a penalty question and says honestly that the penalty section is not in its evidence. 72-item eval unchanged
-(strict 0.93, cited gold 0.97). Not done: using tags in ranking; the Sinhala-script hostage question still hedges about a
-"Prevention of Terrorism Act" title (translate-in).
+(strict 0.93, cited gold 0.97). Not done: using tags in ranking.
 
 ## Priorities, DeepSeek, cost log, clarification (2026-11-06)
 
@@ -649,6 +648,10 @@ answer it, the 5th is not a penalty question and says honestly that the penalty 
 - **"Which bill?"** (`resolve.is_vague_bill_question`): a FIRST question made only of filler words around bill/act/law ("tell me about
   the new bill") is answered with the 5 newest bills instead of searching (live bug: it matched a 2018 "New Villages" bill and claimed
   nothing newer exists). Inside a running chat it is not asked back (the condense step resolves "this bill"). Works for Sinhala too.
+- **Literal translate-in** (`translate.LITERAL`, both `TO_EN` and `DETECT_AND_TRANSLATE`): the old wording "Use the English name of an Act
+  or body when you know it" made the model swap "terrorism act" for the real-world "Prevention of Terrorism Act" (not in the corpus),
+  and the answer then hedged about an Act the user never named (3 of 4 runs; 0 of 4 with the literal wording, correct 20-year
+  penalty in all 8). 8/8 Sinhala-script and 8/8 romanised questions still retrieve the right bill.
 - **Prompt echo guard** (`translate.echoes_prompt`, in `check_script`): an answer containing the glossary block header or 2+ "English
   term = term" lines is rejected like any unusable output (retry / fallback). Live bug: the translated path appended the glossary list.
 

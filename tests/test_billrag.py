@@ -1964,3 +1964,10 @@ def test_pipeline_follows_references_back_to_a_penalty_section(tmp_path):
     assert p.follow_section_refs([ev("070/2026", 3)], "Who is hostage taking defined by?") == []   # not a penalty question
     other = p.follow_section_refs([ev("070/2026", 3), ev("444/2024", 3)], "What is the penalty?")
     assert {e.key for e in other} == {"070/2026"}                              # an older bill's sections are not pulled in
+
+
+def test_translate_in_prompts_ask_for_literal_translation():
+    from billrag import translate
+    for prompt in (translate.TO_EN, translate.DETECT_AND_TRANSLATE):
+        assert "when you know it" not in prompt                    # that wording made the model invent real-world Act titles
+        assert "Translate literally" in prompt and "NEVER add a bill number" in prompt
