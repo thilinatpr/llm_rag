@@ -5,7 +5,7 @@ import sys
 from multiprocessing import Pool
 from pathlib import Path
 
-from .parse import parse_pdf, split_text, norm
+from .parse import parse_act_pdf, parse_pdf, split_text, norm
 from .store import Store, bill_key
 
 
@@ -16,6 +16,11 @@ def _safe(s):  # must match scripts/scrape_bills.py
 def english_pdf(data_dir: Path, b: dict):
     year = (b.get("date") or "")[:4] or "unknown"
     p = data_dir / "pdfs" / year / f"{_safe(b['billNoText'])}_ENGLISH.pdf"
+    return p if p.exists() and p.stat().st_size > 0 else None
+
+
+def english_pdf_named(root: Path, date, no_text, lang="ENGLISH"):
+    p = root / "pdfs" / (date or "")[:4] / f"{_safe(no_text)}_{lang}.pdf"
     return p if p.exists() and p.stat().st_size > 0 else None
 
 
@@ -35,7 +40,8 @@ def _work(args):
 
 
 def head_line(bill: dict) -> str:
-    return f"Bill {bill['key']} \u2014 {bill['title']} ({bill['kind']}, {bill['date'][:10]})"
+    prefix = "" if bill["kind"] == "Act" else "Bill "  # an Act's key already says "Act"
+    return f"{prefix}{bill['key']} \u2014 {bill['title']} ({bill['kind']}, {bill['date'][:10]})"
 
 
 def overview_text(bill: dict, outline: list, summary=None) -> str:
@@ -114,28 +120,32 @@ def ingest(data_dir: Path, db_path: Path, limit=None, workers=4, since_year=0):
     return st
 
 
+def link_si(store, key, pdf, lo=0.4, hi=2.5):
+    """Link one document's official Sinhala PDF to its English sections (fail-safe rules: see ingest_si, parse_si)."""
+    from . import parse_si
+    en = store.section_map(key)
+    if not pdf or not en:
+        store.replace_local(key, "si", "no Sinhala PDF" if not pdf else "no English sections", [])
+        return
+    try:
+        secs, why = parse_si.parse_pdf(str(pdf), max(en))
+    except Exception as e:  # odd PDF: record and continue
+        secs, why = [], f"error: {type(e).__name__}: {e}"[:200]
+    keep = [s for s in secs if s.no in en and (len(en[s.no]) < 150 or lo <= len(s.text) / len(en[s.no]) <= hi)]
+    store.replace_local(key, "si", why or "ok", [(s.no, s.heading, s.page, s.text) for s in keep], str(pdf), max(en))
+
+
 def ingest_si(data_dir: Path, db_path: Path, since_year=2025, lo=0.4, hi=2.5):
     """Link the official Sinhala text of each bill (date >= since_year) to its English sections (store.local_sections).
 
     Only Unicode Sinhala PDFs that line up with the English bill section-for-section are linked (see parse_si); within a
     linked bill, a section whose length is outside lo..hi x the English one (boundary slip, tables) is left out."""
-    from . import parse_si
     store = Store(db_path)
-    keys = [r[0] for r in store.db.execute("SELECT key FROM bills WHERE substr(date,1,4) >= ? ORDER BY date DESC",
+    keys = [r[0] for r in store.db.execute("SELECT key FROM bills WHERE substr(date,1,4) >= ? AND kind!='Act' ORDER BY date DESC",
                                            (str(since_year),))]
     for n, key in enumerate(keys, 1):
         hits = sorted((data_dir / "pdfs").glob(f"*/{key.replace('/', '_')}_SINHALA.pdf"))
-        en = store.section_map(key)
-        if not hits or not en:
-            store.replace_local(key, "si", "no Sinhala PDF" if not hits else "no English sections", [])
-            continue
-        try:
-            secs, why = parse_si.parse_pdf(str(hits[0]), max(en))
-        except Exception as e:  # odd PDF: record and continue
-            secs, why = [], f"error: {type(e).__name__}: {e}"[:200]
-        keep = [s for s in secs if s.no in en and (len(en[s.no]) < 150 or lo <= len(s.text) / len(en[s.no]) <= hi)]
-        store.replace_local(key, "si", why or "ok", [(s.no, s.heading, s.page, s.text) for s in keep],
-                            str(hits[0]), max(en))
+        link_si(store, key, hits[0] if hits else None, lo, hi)
         if n % 25 == 0:
             store.commit()
             print(f"  {n}/{len(keys)}", file=sys.stderr)
@@ -144,3 +154,60 @@ def ingest_si(data_dir: Path, db_path: Path, since_year=2025, lo=0.4, hi=2.5):
     print(f"  glossary: {glossary.build(store)}", file=sys.stderr)
     for r in store.local_stats("si"):
         print(f"  {r['n']:4d} bills  {r['status']}" + (f"  ({r['kept']} sections linked)" if r["kept"] else ""), file=sys.stderr)
+
+
+def _work_act(args):
+    path, title, no, year = args
+    try:
+        return parse_act_pdf(str(path), title, no, year), None
+    except Exception as e:  # corrupt/odd PDF, or a file that is not this Act: record and continue
+        return None, f"{type(e).__name__}: {e}"
+
+
+def ingest_acts(acts_dir: Path, db_path: Path, since_year=2024, workers=4):
+    """Add certified Acts (date >= since_year) from data/acts (scripts/scrape_bills.py --source acts) to the index, then link them to
+    their bills and link their official Sinhala text. Existing chunks keep their ids, so `embed` only has to embed the new text."""
+    from . import acts, meta
+    listing = json.loads((acts_dir / "acts.json").read_text(encoding="utf-8"))
+    jobs, skipped = [], []
+    for a in sorted(listing, key=lambda x: x.get("date") or "", reverse=True):
+        if int(a.get("actSubNo") or 0) < since_year:
+            continue
+        if not a.get("actNo"):  # six listing rows are numbered 0
+            skipped.append((a["actNoText"], "no Act number"))
+            continue
+        p = english_pdf_named(acts_dir, a["date"], a["actNoText"])
+        if not p:
+            skipped.append((a["actNoText"], "no English PDF"))
+            continue
+        title = re.sub(r"\s+", " ", a["descriptionEnglish"] or "").strip()
+        jobs.append((a, p, title))
+    store = Store(db_path)
+    added = 0
+    with Pool(workers) as pool:
+        work = [(p, t, a["actNo"], a["actSubNo"]) for a, p, t in jobs]
+        for (a, p, title), (parsed, err) in zip(jobs, pool.imap(_work_act, work, chunksize=2)):
+            if err or not parsed or not parsed.sections:
+                skipped.append((a["actNoText"], err or "no sections found"))
+                continue
+            no, year, c = a["actNo"], a["actSubNo"], parsed.cover
+            key = acts.act_key(no, year)
+            prev = store.bill(key)
+            row = {"key": key, "bill_no": no, "year": year, "date": (c.get("certified") or a["date"][:10]) + "T00:00:00.000Z",
+                   "title": f"{title.rstrip(' ,')} Act, No. {no} of {year}", "title_norm": norm(title), "kind": "Act",
+                   "long_title": c.get("long_title"), "presented_by": None, "presented_on": None,
+                   "gazette_date": c.get("gazette_date"), "printed_no": c.get("printed_no"), "n_pages": parsed.n_pages,
+                   "n_sections": sum(1 for s in parsed.sections if s.kind == "section"), "pdf_path": str(p),
+                   "summary": prev["summary"] if prev else None}
+            store.replace_bill(row, build_chunks(row, parsed))
+            si = english_pdf_named(acts_dir, a["date"], a["actNoText"], "SINHALA")
+            link_si(store, key, si)
+            added += 1
+    store.commit()
+    print(f"  meta: {meta.build(store)}", file=sys.stderr)
+    links = acts.build(store)
+    print(f"  links: {links}", file=sys.stderr)
+    for k, why in skipped:
+        print(f"  ! {k}: {why}", file=sys.stderr)
+    print(f"Indexed {added} Acts; {len(skipped)} skipped", file=sys.stderr)
+    return {"indexed": added, "skipped": skipped, **links}

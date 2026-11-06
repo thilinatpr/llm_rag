@@ -42,8 +42,15 @@ def bill_key(bill_no: int, year: int) -> str:
     return f"{int(bill_no):03d}/{int(year)}"
 
 
+ACT_REF = re.compile(r"\bAct\s*,?\s*(?:No\.?\s*)?(\d{1,3})\s*(?:/|-|of)\s*(\d{4})\b", re.I)
+
+
 def normalize_ref(ref: str):
-    """'77/2026', '077 of 2026', 'bill 77-2026' -> '077/2026'; None if not a number reference."""
+    """'77/2026', '077 of 2026', 'bill 77-2026' -> '077/2026'; 'Act 25/2026', 'Act, No. 25 of 2026' -> 'Act 25/2026';
+    None if not a number reference. Acts and bills are numbered separately, so the word "Act" decides which one is meant."""
+    a = ACT_REF.search(ref)
+    if a:
+        return f"Act {int(a.group(1))}/{int(a.group(2))}"
     m = re.search(r"(\d{1,4})\s*(?:/|-|of|,)\s*(\d{4})", ref)
     return bill_key(m.group(1), m.group(2)) if m else None
 
@@ -57,7 +64,7 @@ class Store:
 
     # ---- coverage (shown on the chat page)
     def coverage(self, recent=8):
-        """What the index holds: {"bills", "first", "last", "recent": [{"key", "title", "date"}]}.
+        """What the index holds: {"bills", "acts", "first", "last", "recent": [{"key", "title", "date"}]}; `recent` lists bills only.
         Versions of one bill (the Gazette text and the presented Bill, `bill_meta.family`) count once, and `recent` lists each bill
         once, newest first, under its plain title. Works without `bill_meta` (then versions are grouped by title and year)."""
         try:
@@ -67,8 +74,11 @@ class Store:
         except sqlite3.OperationalError:
             rows = [tuple(r) for r in self.db.execute(
                 "SELECT key, title, title_norm, date, NULL FROM bills WHERE date IS NOT NULL ORDER BY date DESC, key DESC").fetchall()]
+        acts = sum(1 for r in rows if str(r[0]).startswith("Act "))
         seen, out = set(), []
         for key, title, tnorm, date, family in rows:
+            if str(key).startswith("Act "):
+                continue
             group = family or f"{tnorm}|{date[:4]}"
             if group in seen:
                 continue
@@ -76,7 +86,7 @@ class Store:
             if len(out) < recent:
                 out.append({"key": key, "title": re.sub(r"\s*(-\s*(Bill|GS)|\(GS\))\s*$", "", title).strip(), "date": date[:10]})
         dates = [r[3][:10] for r in rows]
-        return {"bills": len(seen), "first": min(dates, default=None), "last": max(dates, default=None), "recent": out}
+        return {"bills": len(seen), "acts": acts, "first": min(dates, default=None), "last": max(dates, default=None), "recent": out}
 
     # ---- writes
     def replace_bill(self, bill: dict, chunks: list):
@@ -122,9 +132,10 @@ class Store:
 
     def versions(self, title_norm, near_date=None, days=300):
         """Bills sharing a normalized title. Titles like "Finance (Amendment)" recur every year, so pass `near_date`
-        to keep only versions of the *same* bill (its GS and Bill forms are weeks or months apart, not years)."""
+        to keep only versions of the *same* bill (its GS and Bill forms are weeks or months apart, not years).
+        Acts are left out: their section numbers differ from the bill's (see billrag/acts.py)."""
         rows = [dict(r) for r in self.db.execute(
-            "SELECT key,kind,date FROM bills WHERE title_norm=? ORDER BY date", (title_norm,))]
+            "SELECT key,kind,date FROM bills WHERE title_norm=? AND kind!='Act' ORDER BY date", (title_norm,))]
         if near_date:
             from datetime import datetime
             d0 = datetime.fromisoformat(near_date[:10])

@@ -37,7 +37,7 @@ def smalltalk_reply(question):
 
 
 def base_title(title):
-    return re.sub(r"\s+-\s+(Bill|GS)\s*$", "", title or "", flags=re.I).strip()
+    return re.sub(r"\s+(?:-\s+(?:Bill|GS)|Act,?\s+No\.?\s*\d+\s+of\s+\d{4})\s*$", "", title or "", flags=re.I).strip()
 
 
 def _initials(words):
@@ -122,6 +122,8 @@ def which_bill_reply(store, limit=5):
     """Ask which bill is meant and list the newest ones (one line per title, GS + Bill versions together)."""
     lines, seen = [], set()
     for b in store.find_bills(limit=60):
+        if b["kind"] == "Act":
+            continue
         t = base_title(b["title"]).lower()
         if t in seen:
             continue

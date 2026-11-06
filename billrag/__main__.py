@@ -1,4 +1,4 @@
-"""CLI: python -m billrag {ingest,stats,search,ask,chat,serve,embed,summarize}"""
+"""CLI: python -m billrag {ingest,ingest-acts,link-acts,stats,search,ask,chat,serve,embed,summarize}"""
 import argparse
 import os
 import sys
@@ -17,6 +17,10 @@ def main(argv=None):
     sub.add_parser("stats")
     p = sub.add_parser("ingest-si", help="link the official Sinhala text (Unicode PDFs, 2025+) to the English sections")
     p.add_argument("--since-year", type=int, default=2025)
+    p = sub.add_parser("ingest-acts", help="add certified Acts from data/acts and link them to their bills, then run `embed`")
+    p.add_argument("--since-year", type=int, default=2024)
+    p.add_argument("--workers", type=int, default=4)
+    sub.add_parser("link-acts", help="recompute bill -> Act links and the section-by-section comparison (no re-parse)")
     sub.add_parser("glossary", help="mine English <-> official Sinhala titles and defined terms from the linked sections")
     sub.add_parser("meta", help="(re)build bill metadata: families, newest instance, bill type, section cross-references")
     p = sub.add_parser("tag", help="LLM topic tags per bill (newest first, resumable); run `meta` first")
@@ -81,6 +85,15 @@ def main(argv=None):
     if a.cmd == "ingest-si":
         from .ingest import ingest_si
         ingest_si(s.data_dir, s.db_path, a.since_year)
+        return 0
+    if a.cmd == "ingest-acts":
+        from .ingest import ingest_acts
+        out = ingest_acts(s.data_dir.parent / "acts", s.db_path, a.since_year, a.workers)
+        print({k: v for k, v in out.items() if k != "skipped"})
+        return 0
+    if a.cmd == "link-acts":
+        from . import acts
+        print(acts.build(store))
         return 0
     if a.cmd == "glossary":
         from . import glossary
@@ -156,7 +169,8 @@ def main(argv=None):
         import json, pathlib
         from .evaluate import evaluate, format_report, load_items
         r = Retriever(store, embedder, s.vectors_path, make_llm(s) if s.rerank == "llm" else None, s.rerank, make_reranker(s))
-        items = [i for i in load_items(a.file) if i["source"]["year"] >= a.since_year]
+        from .answer_eval import with_act_gold
+        items = [with_act_gold(store, i) for i in load_items(a.file) if i["source"]["year"] >= a.since_year]
         summary, rows, secs = (evaluate(r, items, a.k, ("overview",), ("section", "schedule")) if a.route == "split"
                                else evaluate(r, items, a.k))
         print(format_report(summary, a.label or f"rerank={s.rerank} dense={'on' if r.mat is not None else 'off'}"))

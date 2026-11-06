@@ -169,6 +169,7 @@ class App:
                 "quote_fixes": res.quote_fixes or None, "focus": res.focus,
                 "glossary_hints": res.glossary_hints or None, "glossary_terms": res.glossary_terms or None,
                 "added_sections": [f"{e.key} \u00a7{e.section}" for e in res.added_sections] or None,
+                "acts": res.acts or None,
                 "direct_rejected": res.direct_rejected or None,
                 "answer_mode": mode or "default", "answer_effort": effort,
             }

@@ -14,11 +14,11 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 
-from . import calltrace, glossary as gloss, meta, parse_si, resolve, translate
-from .store import normalize_ref
+from . import acts, calltrace, glossary as gloss, meta, parse_si, resolve, translate
+from .store import ACT_REF, normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
-CITE = re.compile(r"[\[【](\d{3}/\d{4})(?:\s*§\s*(\d+))?")  # also the full-width brackets some models emit
+CITE = re.compile(r"[\[【](Act \d{1,3}/\d{4}|\d{3}/\d{4})(?:\s*§\s*(\d+))?")  # also the full-width brackets some models emit
 REASONING = re.compile(r"^\s*analysis\s*[:\uff1a]?", re.I)
 FINAL = re.compile(r"assistant\s*final\s*[:\uff1a]?\s*|\bfinal(?:\s+answer)?\s*[:\uff1a]\s*", re.I)
 RETRY_NOTE = "\n\nReply with ONLY the final answer, in the format requested. Do not include any analysis or reasoning text."
@@ -83,9 +83,14 @@ Rules:
   whose title differs from the name in the question, say so explicitly and name it, because many bills share near-identical
   boilerplate clauses.
 - If the evidence is incomplete or does not answer the question, say so plainly and say what is missing. Do not guess.
-- Evidence headers say "Gazette text" (the bill as published in the Gazette before presentation) or "Bill" (the version
-  presented to Parliament). If both versions appear and differ, say so. Committee-stage amendments are not in this corpus.
-  Never write the code "GS" in an answer: say "Gazette text".
+- Evidence headers say "Gazette text" (the bill as published in the Gazette before presentation), "Bill" (the version presented
+  to Parliament) or "certified" (an Act: the law as passed). If versions appear and differ, say so. Never write the code "GS" in an
+  answer: say "Gazette text".
+- A STATUS line under a passage says what is known about it: follow it, in your own words (never write the word STATUS; cite the
+  passage as usual). Never present a bill as law. Say whether what you rely on
+  is an Act or a bill, and if a bill became an Act, answer from the Act and mention a difference that bears on the question. If a
+  STATUS says a clause's wording is not in the Act, say it was proposed but not enacted in those words. An amending Act lists changes to an earlier Act, whose
+  full text is usually not in the evidence: say what the amendment does, not what the earlier Act now reads.
 - Users mostly care about recently published bills: when several bills match and the question gives no year, lead with the
   newest and state the dates. Summaries marked auto-generated are hints only: rely on clause text for details.
 - Format and length: BE BRIEF. Start with the direct answer in 1-2 sentences. Then at most 3 one-line bullets, each with its
@@ -127,19 +132,19 @@ class Evidence:
         return self.chunk.get("section_no")
 
 
-KIND_LABEL = {"GS": "Gazette text", "Bill": "Bill"}  # what users (and the answering model) see instead of the internal kind codes
+KIND_LABEL = {"GS": "Gazette text", "Bill": "Bill", "Act": "certified"}  # what users (and the answering model) see instead of the internal kind codes
 
 
 def version_tag(c):
     """'Title (Gazette text, 2026-10-16)' for a chunk: the title without its internal ' - GS' / ' - Bill' suffix, and the version in
     plain words. 'GS' is our own code and means nothing to readers (a live user asked "what is GS"); kinds without a plain name
-    (Acts, other documents) show only the date."""
+    (other documents) show only the date."""
     title = re.sub(r"\s*-\s*(Bill|GS)\s*$", "", c["title"]).strip()
     label = KIND_LABEL.get(c.get("bill_kind"), "")
     return f"{title} ({label + ', ' if label else ''}{c['date'][:10]})"
 
 
-_HEAD = re.compile(r"\u2014 (.*?)(?: - (?:GS|Bill))? \((GS|Bill|Other), (\d{4}-\d\d-\d\d)\)")
+_HEAD = re.compile(r"\u2014 (.*?)(?: - (?:GS|Bill))? \((GS|Bill|Act|Other), (\d{4}-\d\d-\d\d)\)")
 
 
 def shown_text(c):
@@ -170,6 +175,7 @@ class Result:
     glossary_terms: list = field(default_factory=list)  # English terms whose official local form the answer prompt got
     added_sections: list = field(default_factory=list)  # sections added to bill-level-only evidence (bill_sections)
     followed: list = field(default_factory=list)  # sections added because a kept clause refers to them (follow_section_refs)
+    acts: list = field(default_factory=list)  # how bill evidence was related to Acts: {"bill", "section", "act", "act_section", "status"}
     focus: dict = None  # {"title", "bills", "score"}: the bill an unnamed "this new bill" was taken to mean
     quote_fixes: list = field(default_factory=list)  # [(quoted, official)] misspelt quotations replaced by the official text
     direct_rejected: str = ""  # the rejected one-step answer (diagnostics)
@@ -434,7 +440,8 @@ class Pipeline:
             label = f"[{e.key} §{e.section}]" if e.section is not None else f"[{e.key}]"
             kind = "bill-level description" if c["kind"] == "overview" else f"p.{c['page']}"
             also = f" (identical text also in {', '.join(c['also_in'])})" if c.get("also_in") else ""
-            block = f"{label} {version_tag(c)}, {kind}{also}\n{shown_text(c)}"
+            status = c.get("status") or acts.status_lines(self.store, e.key, e.section) if hasattr(self.store, "db") else ""
+            block = f"{label} {version_tag(c)}, {kind}{also}\n" + (f"STATUS: {status}\n" if status else "") + shown_text(c)
             if (e.key, e.section) in official:  # label without [ ] in the header so it is not a second citation form
                 block += f"\n--- OFFICIAL {lang.upper()} TEXT of this section ---\n{official[(e.key, e.section)][:self.official_chars]}"
             blocks.append(block)
@@ -445,6 +452,61 @@ class Pipeline:
         user = f"QUESTION: {question}\n\nEVIDENCE:\n\n" + "\n\n".join(blocks) + note + extra
         system = ANSWER_SYSTEM + (LOCAL_NOTE.format(lang=lang, LANG=lang.upper()) if code else "")
         return self._llm(system, user, 4000 if code else 1800, res, self.answer_effort, llm=self.answer_llm, stream=stream)
+
+    COMPARE = re.compile(r"\b(differ\w*|chang\w*|compar\w*|versus|vs\.?|committee|amended\s+in\s+parliament|original\s+bill|as\s+proposed|proposed\s+in\s+the\s+bill)\b", re.I)
+
+    def _act_section_evidence(self, key, no, score):
+        r = self.store.db.execute("SELECT id FROM chunks WHERE bill_key=? AND section_no=? AND kind='section' ORDER BY ord LIMIT 1",
+                                  (key, int(no))).fetchone()
+        ch = self.store.chunks_by_ids([r["id"]]).get(r["id"]) if r else None
+        return self.expand(Evidence(ch, score)) if ch else None
+
+    def _act_overview_evidence(self, key, score):
+        r = self.store.db.execute("SELECT id FROM chunks WHERE bill_key=? AND kind='overview' LIMIT 1", (key,)).fetchone()
+        ch = self.store.chunks_by_ids([r["id"]]).get(r["id"]) if r else None
+        return Evidence(ch, score) if ch else None
+
+    def apply_acts(self, question, evidence, keys, res):
+        """If a bill in the evidence became an Act, answer from the Act. A clause with the same text is replaced by the Act's section
+        (its number can differ); a changed clause is shown after the Act's version; a clause not in the Act stays, marked by its
+        STATUS line. A question that names the bill number or compares versions keeps the bill's clause too. Deterministic: no model."""
+        if not hasattr(self.store, "db") or not acts.has_tables(self.store):
+            return evidence
+        keep_bills = bool(keys) or bool(self.COMPARE.search(question or ""))
+        have = {(e.key, e.section) for e in evidence}
+        out = []
+
+        def add(ev):
+            if ev and (ev.key, ev.section) not in have:
+                have.add((ev.key, ev.section))
+                out.append(ev)
+                return True
+            return False
+
+        def log(e, act, sec, status):
+            res.acts.append({"bill": e.key, "section": e.section, "act": act, "act_section": sec, "status": status})
+
+        for e in evidence:
+            if acts.is_act(e.key):
+                out.append(e)
+                continue
+            a = acts.act_for_bill(self.store, e.key)
+            if not a or not a["direct"]:
+                out.append(e)
+                continue
+            m = acts.bill_section(self.store, e.key, e.section) if e.section is not None else None
+            if not m or m["act_section"] is None:  # bill-level text, a schedule, or a clause with no counterpart in the Act
+                add(self._act_overview_evidence(a["key"], e.score))
+                out.append(e)
+                log(e, a["key"], None, m["status"] if m else "bill-level")
+                continue
+            add(self._act_section_evidence(m["act_key"], m["act_section"], e.score))
+            log(e, m["act_key"], m["act_section"], m["status"])
+            if m["status"] != "same" or keep_bills:
+                out.append(e)
+        if res.acts:
+            self.on_event("acts", {"related": len(res.acts)})
+        return out
 
     def answer_direct(self, question, user_question, evidence, enough, missing, res, code, focus=None):
         """One-step answer in the user's language when the bill's official text in that language exists for the evidence.
@@ -483,7 +545,7 @@ class Pipeline:
         top = max(evidence, key=lambda e: (e.score, e.chunk["date"]))
         b = self.store.bill(top.key) if hasattr(self.store, "bill") else None
         keys = [top.key]
-        if b and hasattr(self.store, "versions"):
+        if b and hasattr(self.store, "versions") and b.get("kind") != "Act":
             keys = [v["key"] for v in self.store.versions(b["title_norm"], b["date"])] or keys
         out, seen = [], set()
         for c in self.retriever.search(question, k=k * 2, keys=keys, kinds=("section",)):
@@ -520,7 +582,8 @@ class Pipeline:
 
     @staticmethod
     def verify(answer, evidence):
-        """Citations in the answer that do not point at evidence we showed the model."""
+        """Citations in the answer that do not point at evidence we showed the model. Bill and Act section numbers are unrelated,
+        which is why `also_in` never crosses between them (retrieve.py)."""
         ok_sec = {(e.key, e.section) for e in evidence if e.section is not None}
         ok_key = {e.key for e in evidence}
         for e in evidence:  # identical text in sibling versions (GS/Bill) is also fair to cite
@@ -700,7 +763,10 @@ class Pipeline:
         self._step("condense")
         q = self.condense(plan["question"], res)
         res.seconds["condense"] = time.time() - t
-        keys = [k for k in {normalize_ref(m) for m in re.findall(r"\d{1,3}\s*/\s*\d{4}", q)} if k and self.store.bill(k)] or None
+        act_refs = {normalize_ref(m.group(0)) for m in ACT_REF.finditer(q)}  # "Act No. 25 of 2026"; other numbers are bill numbers
+        bare = ACT_REF.sub(" ", q)
+        refs = act_refs | {normalize_ref(m) for m in re.findall(r"\d{1,3}\s*/\s*\d{4}", bare)}
+        keys = [k for k in refs if k and self.store.bill(k)] or None
         seen_ids, graded, queries = set(), [], [q]
         enough, missing = True, ""
         for rnd in range(1 + self.extra_rounds):
@@ -738,6 +804,7 @@ class Pipeline:
             res.added_sections = self.bill_sections(q, res.evidence)
             res.evidence += res.added_sections
             res.seconds["bill_sections"] = time.time() - t
+        res.evidence = self.apply_acts(q, res.evidence, keys, res)
         focus = res.focus = self.focus_bill(q, res.evidence, keys)
         if focus:  # its clauses first (stable sort keeps the grader's order within each group)
             res.evidence.sort(key=lambda e: e.key not in focus["bills"])

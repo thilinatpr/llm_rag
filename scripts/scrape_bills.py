@@ -36,7 +36,9 @@ from pathlib import Path
 
 BASE = "https://documents.gov.lk"
 DEFAULT_ACTION_ID = "40dd03742cae2465a031936880def365fdd014c22b"
-API_ENDPOINT = "http://gvp-api:4500/website-data/bill/get-all"
+# What each listing page itself sends: same server action, its own page and backend path. `no` is the number field in its records.
+SOURCES = {"bills": {"page": "/web/bills", "api": "http://gvp-api:4500/website-data/bill/get-all", "no": "billNoText", "file": "bills"},
+           "acts": {"page": "/web/acts", "api": "http://gvp-api:4500/website-data/act/get-all", "no": "actNoText", "file": "acts"}}
 UA = "Mozilla/5.0 (compatible; llm-rag-bill-scraper/1.0)"
 
 
@@ -54,13 +56,13 @@ def http(req, retries=4, timeout=60):
             time.sleep(2 ** (attempt + 1))
 
 
-def fetch_page(page, limit, action_id):
+def fetch_page(page, limit, action_id, source="bills"):
     body = json.dumps([{
-        "apiEndpoint": API_ENDPOINT, "page": page, "limit": limit,
+        "apiEndpoint": SOURCES[source]["api"], "page": page, "limit": limit,
         "q": "", "search": "", "forwarded": {},
     }]).encode()
     req = urllib.request.Request(
-        f"{BASE}/web/bills", data=body, method="POST",
+        f"{BASE}{SOURCES[source]['page']}", data=body, method="POST",
         headers={"Next-Action": action_id, "Accept": "text/x-component",
                  "Content-Type": "text/plain;charset=UTF-8", "User-Agent": UA})
     text = http(req).decode("utf-8")
@@ -70,12 +72,12 @@ def fetch_page(page, limit, action_id):
     raise RuntimeError("Unexpected response (action ID stale?): " + text[:200])
 
 
-def fetch_all_metadata(action_id, limit=100):
-    first = fetch_page(1, limit, action_id)
+def fetch_all_metadata(action_id, limit=100, source="bills"):
+    first = fetch_page(1, limit, action_id, source)
     bills = list(first["data"])
     total_pages = int(first["pagination"]["totalPages"])
     for p in range(2, total_pages + 1):
-        bills.extend(fetch_page(p, limit, action_id)["data"])
+        bills.extend(fetch_page(p, limit, action_id, source)["data"])
         print(f"  metadata page {p}/{total_pages}", file=sys.stderr)
     total = int(first["pagination"]["total"])
     if len(bills) != total:
@@ -90,7 +92,8 @@ def safe(s):
 
 def pdf_path(out, bill, lang):
     year = (bill.get("date") or "")[:4] or "unknown"
-    return out / "pdfs" / year / f"{safe(bill['billNoText'])}_{lang}.pdf"
+    no = bill.get("billNoText") or bill["actNoText"]
+    return out / "pdfs" / year / f"{safe(no)}_{lang}.pdf"
 
 
 def download(url_file, dest):
@@ -111,7 +114,8 @@ def download(url_file, dest):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", default="data/bills")
+    ap.add_argument("--source", choices=sorted(SOURCES), default="bills", help="which listing (acts: use --out data/acts)")
+    ap.add_argument("--out", default=None, help="default data/<source>")
     ap.add_argument("--action-id", default=DEFAULT_ACTION_ID)
     ap.add_argument("--langs", nargs="+", default=["SINHALA", "TAMIL", "ENGLISH"],
                     choices=["SINHALA", "TAMIL", "ENGLISH"])
@@ -120,15 +124,16 @@ def main():
     ap.add_argument("--metadata-only", action="store_true")
     args = ap.parse_args()
 
-    out = Path(args.out)
+    src = SOURCES[args.source]
+    out = Path(args.out or f"data/{args.source}")
     out.mkdir(parents=True, exist_ok=True)
 
-    print("Fetching bill metadata...", file=sys.stderr)
-    bills = fetch_all_metadata(args.action_id)
+    print(f"Fetching {args.source} metadata...", file=sys.stderr)
+    bills = fetch_all_metadata(args.action_id, source=args.source)
     bills.sort(key=lambda b: b.get("date") or "", reverse=True)
-    (out / "bills.json").write_text(
+    (out / f"{src['file']}.json").write_text(
         json.dumps(bills, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"{len(bills)} bills -> {out/'bills.json'}", file=sys.stderr)
+    print(f"{len(bills)} {args.source} -> {out / (src['file'] + '.json')}", file=sys.stderr)
 
     jobs = []
     for b in bills:
@@ -155,13 +160,13 @@ def main():
                 if done % 100 == 0:
                     print(f"  {done}/{len(jobs)}", file=sys.stderr)
 
-    with (out / "bills.csv").open("w", newline="", encoding="utf-8") as fh:
+    with (out / f"{src['file']}.csv").open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["bill_no", "date", "title", "language", "original_file",
                     "remote_file", "local_path", "status"])
         for b, c in jobs:
             p = pdf_path(out, b, c["language"])
-            w.writerow([b["billNoText"], (b.get("date") or "")[:10],
+            w.writerow([b[src["no"]], (b.get("date") or "")[:10],
                         b.get("descriptionEnglish") or "", c["language"],
                         c.get("originalFileName", ""), c["uploadedFile"],
                         str(p) if p.exists() else "",
