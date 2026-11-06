@@ -19,7 +19,8 @@ import subprocess
 HEADER = re.compile(
     r"GAZETTE EXTRAORDINARY OF THE DEMOCRATIC|ckrcfha|I fldgi|This Gazette Extraordinary can be downloaded"
     r"|^\s*\d*\s*GOVERNMENT PROCUREMENT GUIDELINES\s*\d*\s*$|^\s*\d+A\s*-\s*PG\s*\d+"
-    r"|^\s*PRINTED AT THE DEPARTMENT OF GOVERNMENT PRINTING|^\s*EOG\s+\d+")
+    r"|^\s*PRINTED AT THE DEPARTMENT OF GOVERNMENT PRINTING|^\s*EOG\s+\d+"
+    r"|^\s*Sri L\s?anka Guidelines for Selection and Employment of C\s?onsultants\s*$")
 PAGE_NO = re.compile(r"^\s*(?:\d{1,3}A?|[ivxlc]{1,6})\s*$", re.I)
 CLAUSE_NO = r"\d{1,2}\.\d{1,2}(?:\.\d{1,2})?"
 # right-margin cage in the 2024 Guidelines: "Refer Manual" and/or a clause number, far to the right of the text
@@ -355,6 +356,136 @@ def parse_constitution_npc(pages, doc="CON"):
     return chunks, dict(articles=len(chunks))
 
 
+# ---------------------------------------------------------------- generic numbered documents (NPC guidance notes, manuals)
+
+TOC_LIKE = re.compile(r"\.{4,}|…{2,}|\s{2,}\d{1,3}\s*$")
+NUM_LINE_WIDE = re.compile(rf"^\s{{0,60}}({CLAUSE_NO})\.?(?:\s+(\S.*))?$")  # some manuals centre their headings
+
+
+def parse_numbered(pages, doc):
+    """Level-2 clauses (1.1, 1.2, 2.1, ...) of a numbered document, sequence-checked (`plausible_next`), one chunk per clause
+    with its sub-clauses. The body starts at the first "1.1 <Title>" line that is not a contents line (dot leaders or a
+    trailing page number) and is not followed by more contents lines. Text before it (foreword) becomes ref "0"."""
+    lines = lines_of(pages)
+    start = None
+    for i, (_, ln) in enumerate(lines):
+        if re.match(r"^\s{0,60}1\.1\.?\s+\S", ln) and not TOC_LIKE.search(ln):
+            nxt = [l for _, l in lines[i + 1: i + 8] if l.strip()]
+            if sum(bool(TOC_LIKE.search(l)) for l in nxt) <= 1:
+                start = i; break
+    if start is None:
+        return [], dict(clauses=0)
+    heads, last, chapter, chap_of = [], None, "", {}
+    for i in range(start, len(lines)):
+        ln = lines[i][1]
+        mc = CHAPTER.match(ln)
+        if mc and not TOC_LIKE.search(ln):
+            chapter = re.sub(r"\s+", " ", ln.strip()).title()
+        m = NUM_LINE_WIDE.match(ln)
+        if not m or not m.group(2) or TOC_LIKE.search(ln):
+            continue
+        key = numkey(m.group(1))
+        if len(key) == 2 and plausible_next(last, key) and m.group(2)[:1].isupper():
+            heads.append((i, m.group(1), m.group(2).strip())); last = key
+            chap_of[i] = chapter
+    chunks = []
+    intro = tidy([ln for _, ln in lines[:start] if not TOC_LIKE.search(ln)])
+    for part, piece in enumerate(split_long(intro)):
+        chunks.append(dict(doc=doc, ref="0", heading="Introduction / Foreword", chapter="", kind="intro",
+                           page=1, part=part, text=piece, xref=None))
+    for n, (i, ref, title) in enumerate(heads):
+        end = heads[n + 1][0] if n + 1 < len(heads) else len(lines)
+        body = [ln for _, ln in lines[i + 1: end]]
+        for part, piece in enumerate(split_long(tidy(body))):
+            chunks.append(dict(doc=doc, ref=ref, heading=title, chapter=chap_of[i], kind="clause", page=lines[i][0],
+                               part=part, text=piece, xref=None))
+    return chunks, dict(clauses=len(heads))
+
+
+# ---------------------------------------------------------------- Financial Regulations 1992 ("F.R.135. Title. (1) ...")
+
+FR_HEAD = re.compile(r"^\s{0,16}F\.\s?R\.\s?(\d{1,4}[A-Z]?)(?:\.\s*|\s+)(.*)$")  # "F.R.135. Title" and "F.R.102 Losses"
+
+
+def longest_increasing(nums):
+    """Indices of a longest strictly increasing subsequence (drops misprinted numbers like F.R.487 between 77 and 84)."""
+    import bisect
+    tails, tails_i, prev = [], [], [-1] * len(nums)
+    for i, n in enumerate(nums):
+        j = bisect.bisect_left(tails, n)
+        if j == len(tails):
+            tails.append(n); tails_i.append(i)
+        else:
+            tails[j] = n; tails_i[j] = i
+        prev[i] = tails_i[j - 1] if j else -1
+    out, i = [], tails_i[-1] if tails_i else -1
+    while i >= 0:
+        out.append(i); i = prev[i]
+    return out[::-1]
+
+
+def parse_fr(pages, doc="FR"):
+    """One chunk per Financial Regulation. Heading = the regulation's title sentence ("Delegation of Functions for Financial
+    Control"). Candidates are numbered headings at a line start; the longest increasing run of numbers is kept."""
+    lines = lines_of(pages)
+    cands = []
+    for i, (_, ln) in enumerate(lines):
+        m = FR_HEAD.match(ln)
+        if m and not TOC_LIKE.search(ln) and (m.group(2)[:1].isupper() or m.group(2)[:1] in "(" or not m.group(2)):
+            cands.append((i, int(re.match(r"\d+", m.group(1)).group()), m.group(1), m.group(2)))
+    keep = [cands[k] for k in longest_increasing([c[1] for c in cands])]
+    chapter_at = {i: re.sub(r"\s+", " ", lines[i][1].strip()) for i in range(len(lines))
+                  if re.match(r"^\s*CHAPTER\s+[IVXL]+\s*$", lines[i][1])}
+    chunks = []
+    for n, (i, _, ref, rest) in enumerate(keep):
+        end = keep[n + 1][0] if n + 1 < len(keep) else len(lines)
+        title = re.match(r"([^.(]{3,120}?)\.\s", rest + " ")
+        heading = title.group(1).strip() if title and not rest.startswith("(") else ""
+        if not heading:  # "F.R.102 Losses (1)Losses dealt with ..." -> "Losses"
+            lead = re.match(r"^([A-Z][A-Za-z ,'/&-]{2,80}?)\s*\(\d", rest)
+            heading = lead.group(1).strip() if lead else ""
+        if not heading:  # "F.R.104. (1) Inquiry and fixing of responsibility. (a) ..." -> the first sub-heading
+            sub = re.match(r"^\(\w{1,3}\)\s*([A-Z][^.;:]{3,90})\.\s", rest + " ")
+            heading = sub.group(1).strip() if sub else ""
+        chap = next((chapter_at[c] for c in sorted(chapter_at, reverse=True) if c < i), "")
+        body = [rest] + [ln for _, ln in lines[i + 1: end]]
+        for part, piece in enumerate(split_long(tidy(body))):
+            chunks.append(dict(doc=doc, ref=ref, heading=heading, chapter=chap, kind="regulation", page=lines[i][0],
+                               part=part, text=f"F.R.{ref}. " + piece if part == 0 else piece, xref=None))
+    return chunks, dict(regulations=len(keep), dropped=len(cands) - len(keep))
+
+
+# ---------------------------------------------------------------- Acts of Parliament (reuses the bills parser)
+
+def parse_act(path, doc):
+    """An enacted Act (same layout as a bill): one chunk per section via billrag.parse, cited [DOC §67]."""
+    from billrag.parse import parse_pdf
+    bill = parse_pdf(str(path))
+    chunks = []
+    for sec in bill.sections:
+        if sec.kind != "section" or sec.no is None:
+            continue
+        text = "\n".join(sec.lines) if isinstance(sec.lines, list) else str(sec.lines)
+        for part, piece in enumerate(split_long(text)):
+            chunks.append(dict(doc=doc, ref=str(sec.no), heading=sec.heading or "", chapter=sec.part or "", kind="section",
+                               page=sec.page, part=part, text=piece, xref=None))
+    return chunks, dict(sections=len({c["ref"] for c in chunks}), pages=bill.n_pages)
+
+
+# ---------------------------------------------------------------- curated short texts (procurement/npc_texts/*.md)
+
+def parse_curated(text, doc):
+    """A curated Markdown file: '<!-- ID | title | ... -->' then one '## ref | heading' block per section it covers.
+    An empty ref means the whole document (a circular)."""
+    chunks = []
+    for m in re.finditer(r"^## *([^|\n]*?) *\| *(.+?)\s*$\n(.*?)(?=^## |\Z)", text, re.M | re.S):
+        ref, heading, body = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+        for part, piece in enumerate(split_long(body, 2400)):
+            chunks.append(dict(doc=doc, ref=ref, heading=heading, chapter="", kind="curated", page=None, part=part,
+                               text=piece, xref=None))
+    return chunks, dict(sections=len({c["ref"] + c["heading"] for c in chunks}))
+
+
 PARSERS = {"PG2024": parse_guidelines_2024, "PM2024": parse_manual_2024,
            "PG2006": parse_guidelines_2006, "PM2006": parse_manual_2006,
-           "CON": parse_constitution_npc}
+           "CON": parse_constitution_npc, "FR": parse_fr}
