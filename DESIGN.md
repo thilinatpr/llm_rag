@@ -75,7 +75,7 @@ Abhaya Libre and Yaldevi cover both Sinhala and Latin, so mixed-language lines m
 
 ## Copy
 
-Plain, short, user-side words: "Ask about any bill in Parliament", "Bill Assistant", "Procurement Rules · soon".
+Plain, short, user-side words: "Ask about any bill in Parliament", "Bill Assistant", "Procurement Rules".
 No marketing adjectives, no exclamation marks, no emoji.
 
 ## Avoid
