@@ -32,7 +32,7 @@ src/chatconfig.js         which chat model/provider the container gets (CHAT_PRO
 billrag/meta.py           bill metadata outside `chunks`: families, newest instance, bill type, tags, section cross-references (`meta`, `tag`)
 billrag/resolve.py        question grounding before retrieval: greetings, abbreviation (PTSA) -> bill title matching, "closest bills"
 billrag/chatlog.py        one JSON record per chat turn -> R2 `chatlogs/` + local JSONL; `build_id()` = hash of the running code
-billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/ask/stream, /api/search, /api/stats, /healthz); secret-gated
+billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/ask/stream, /api/search, /api/stats, /healthz incl. `coverage`); secret-gated
 billrag/resources.py      CPU/memory: `snapshot()` for /api/stats, `Usage` per request -> log field `usage` (stdlib, /proc + cgroup)
 billrag/gate.py           admission control for `serve`: N questions at once + bounded FIFO queue (503 when full); separate `public` lane
 src/public.js, quota.js, quota-do.js, util.js   public (anonymous) lane: Turnstile + signed cookie + daily quotas (Durable Object `QuotaCounter`)
@@ -395,6 +395,18 @@ cookie (HMAC, 30 days; only an id) -> `/api/ask`, `/api/ask/stream`, `/healthz` 
   widget, siteverify call and Durable Object counters were exercised that way). NOT checked: chat-log records with `lane: public`, load, shared mobile
   IPs, speaker review of the Sinhala/Tamil texts. To turn on (done 2026-11-06): deploy, set `PUBLIC_CHAT = "on"`, redeploy, try it from a phone, read `lane: public` logs.
   Abuse not covered: an attacker with many IPs and solved challenges can use up the global cap for a day (availability, not cost).
+
+### Coverage notice (what the index holds; written 2026-11-06)
+`Store.coverage()` -> `{bills, first, last, recent[]}`: `bills` counts each bill once (a Gazette text and its presented Bill share `bill_meta.family`;
+without `bill_meta` versions are grouped by title and year), `first`/`last` are the oldest and newest document dates, `recent` lists up to 8
+bills newest first under their plain title (the " - Bill" / " - GS" suffix is stripped). Measured on the production index: 995 bills (1,513
+documents), 2003-07-07 to 2026-10-21. `GET /healthz` carries it as `coverage` (computed once per process; a failure never fails the health check),
+so the numbers follow the index in R2 automatically. The page (`public/index.html`) shows one line in the footer note ("Covers N bills from
+documents.gov.lk, 2003 to 21 Oct 2026.") and a "Latest bills" list on the start screen; clicking an item asks "Summarise the <title> bill <NNN/YYYY>".
+The last answer is kept in `localStorage` (`billrag-coverage`) so both show at once while a sleeping server starts. The dates are the bills' own
+dates, not when we indexed them, and the index is a snapshot: nothing refreshes it automatically (scrape, ingest, embed, upload to R2 by hand).
+Anonymous visitors get it too (`/healthz` is open to a verified visitor). Not shown on the homepage (static, no container) or in "found nothing"
+answers (the greeting also has no evidence, so it would be wrong there). Offline tests + a Playwright run with a stubbed server; not deployed.
 
 ### Small-memory hosting facts
 Index: 42,696 chunks x 768 dims; `index.sqlite` 201 MB, `vectors.npz` 61 MB as float16 (114 MB float32). Server RSS ~124 MB after a

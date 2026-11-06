@@ -4,7 +4,7 @@ Set BILLRAG_PROXY_SECRET to require an `X-Proxy-Secret` header on every request 
 a non-loopback host without it is refused.
 
 GET  /            public/index.html when present (local use); in production the Worker serves it
-GET  /healthz     {"ok": true} (the page polls it while a sleeping container starts)
+GET  /healthz     {"ok": true, "coverage": {bills, first, last, recent[]}} (the page polls it while a sleeping container starts)
 GET  /api/stats   CPU/memory snapshot (billrag/resources.py) + sessions, turns, build; behind the login like all /api/*
 POST /api/ask     {"session": str, "question": str, "answer"?: "fast"|"thorough"} -> {"answer": str}   (needs a chat model)
 POST /api/ask/stream  same body -> text/event-stream: `status` {step}, `token` {text}, `reset` {}, then `done` {answer}
@@ -105,6 +105,13 @@ class App:
         log_turn(type="search", question=query, k=k, results=len(out), seconds=tm.seconds, usage=use.fields(),
                  calls=trace.calls or None, cost=calltrace.cost_summary(trace.calls))
         return out
+
+    def coverage(self):
+        """GET /healthz -> `coverage`: computed once per process (the index does not change while the server runs)."""
+        c = getattr(self, "_coverage", None)
+        if c is None:
+            c = self._coverage = self.store.coverage()
+        return c
 
     def stats(self):
         """GET /api/stats: resource snapshot plus what this server holds. Does not take the lock (answers mid-question)."""
@@ -253,7 +260,14 @@ def make_handler(app):
                     return self._send(404, json.dumps({"error": "UI is served by the Worker (public/index.html)."}))
                 self._send(200, page, "text/html")
             elif self.path == "/healthz":
-                self._send(200, json.dumps({"ok": True}))
+                out = {"ok": True}
+                cov = getattr(app, "coverage", None)
+                if cov:
+                    try:
+                        out["coverage"] = cov()  # what the index holds, for the page's coverage line (no secrets, no counts of chunks)
+                    except Exception:
+                        pass  # the health check must never fail because of this
+                self._send(200, json.dumps(out))
             elif self.path == "/api/stats":
                 self._send(200, json.dumps(app.stats()))
             else:

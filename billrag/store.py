@@ -55,6 +55,29 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
 
+    # ---- coverage (shown on the chat page)
+    def coverage(self, recent=8):
+        """What the index holds: {"bills", "first", "last", "recent": [{"key", "title", "date"}]}.
+        Versions of one bill (the Gazette text and the presented Bill, `bill_meta.family`) count once, and `recent` lists each bill
+        once, newest first, under its plain title. Works without `bill_meta` (then versions are grouped by title and year)."""
+        try:
+            rows = self.db.execute("SELECT b.key, b.title, b.title_norm, b.date, m.family FROM bills b "
+                                   "LEFT JOIN bill_meta m ON m.bill_key = b.key WHERE b.date IS NOT NULL "
+                                   "ORDER BY b.date DESC, b.key DESC").fetchall()
+        except sqlite3.OperationalError:
+            rows = [tuple(r) for r in self.db.execute(
+                "SELECT key, title, title_norm, date, NULL FROM bills WHERE date IS NOT NULL ORDER BY date DESC, key DESC").fetchall()]
+        seen, out = set(), []
+        for key, title, tnorm, date, family in rows:
+            group = family or f"{tnorm}|{date[:4]}"
+            if group in seen:
+                continue
+            seen.add(group)
+            if len(out) < recent:
+                out.append({"key": key, "title": re.sub(r"\s*(-\s*(Bill|GS)|\(GS\))\s*$", "", title).strip(), "date": date[:10]})
+        dates = [r[3][:10] for r in rows]
+        return {"bills": len(seen), "first": min(dates, default=None), "last": max(dates, default=None), "recent": out}
+
     # ---- writes
     def replace_bill(self, bill: dict, chunks: list):
         key = bill["key"]
