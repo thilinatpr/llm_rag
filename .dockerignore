@@ -1,4 +1,6 @@
 data/
+# The Procurement Rules image bakes in its index. Wrangler pipes the Dockerfile over stdin, so this root file is the one that applies.
+!data/procurement/index.sqlite
 .git/
 node_modules/
 .wrangler/
