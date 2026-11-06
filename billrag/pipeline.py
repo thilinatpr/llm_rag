@@ -83,8 +83,9 @@ Rules:
   whose title differs from the name in the question, say so explicitly and name it, because many bills share near-identical
   boilerplate clauses.
 - If the evidence is incomplete or does not answer the question, say so plainly and say what is missing. Do not guess.
-- "GS" = bill published in the Gazette before presentation; "Bill" = version presented to Parliament. If both versions
-  appear and differ, say so. Committee-stage amendments are not in this corpus.
+- Evidence headers say "Gazette text" (the bill as published in the Gazette before presentation) or "Bill" (the version
+  presented to Parliament). If both versions appear and differ, say so. Committee-stage amendments are not in this corpus.
+  Never write the code "GS" in an answer: say "Gazette text".
 - Users mostly care about recently published bills: when several bills match and the question gives no year, lead with the
   newest and state the dates. Summaries marked auto-generated are hints only: rely on clause text for details.
 - Format and length: BE BRIEF. Start with the direct answer in 1-2 sentences. Then at most 3 one-line bullets, each with its
@@ -126,6 +127,31 @@ class Evidence:
         return self.chunk.get("section_no")
 
 
+KIND_LABEL = {"GS": "Gazette text", "Bill": "Bill"}  # what users (and the answering model) see instead of the internal kind codes
+
+
+def version_tag(c):
+    """'Title (Gazette text, 2026-10-16)' for a chunk: the title without its internal ' - GS' / ' - Bill' suffix, and the version in
+    plain words. 'GS' is our own code and means nothing to readers (a live user asked "what is GS"); kinds without a plain name
+    (Acts, other documents) show only the date."""
+    title = re.sub(r"\s*-\s*(Bill|GS)\s*$", "", c["title"]).strip()
+    label = KIND_LABEL.get(c.get("bill_kind"), "")
+    return f"{title} ({label + ', ' if label else ''}{c['date'][:10]})"
+
+
+_HEAD = re.compile(r"\u2014 (.*?)(?: - (?:GS|Bill))? \((GS|Bill|Other), (\d{4}-\d\d-\d\d)\)")
+
+
+def shown_text(c):
+    """The chunk text as the answering model reads it. A bill-level (overview) chunk starts with a stored header like
+    'Bill 084/2026 \u2014 The X - GS (GS, 2026-10-16).'; its internal codes get the same plain words as version_tag. Stored text
+    (and so the vectors) is not changed. Clause text is returned as is."""
+    t = c["text"]
+    if c.get("kind") != "overview":
+        return t
+    return _HEAD.sub(lambda m: f"\u2014 {m.group(1)} ({KIND_LABEL[m.group(2)] + ', ' if m.group(2) in KIND_LABEL else ''}{m.group(3)})", t, count=1)
+
+
 @dataclass
 class Result:
     question: str
@@ -156,7 +182,7 @@ class Result:
             c = e.chunk
             where = f"§{e.section}" if e.section is not None else c["kind"]
             official = " - official Sinhala text used" if (e.key, e.section) in self.official else ""
-            out.append(f"[{e.key} {where}, p.{c['page']}] {c['title']} ({c['bill_kind']}, {c['date'][:10]}){official}")
+            out.append(f"[{e.key} {where}, p.{c['page']}] {version_tag(c)}{official}")
         return out
 
 
@@ -296,11 +322,11 @@ class Pipeline:
         blocks = []
         for i, c in enumerate(cands):
             if c["kind"] == "overview":
-                tag, txt = "[BILL-LEVEL] ", c["text"][:650]
+                tag, txt = "[BILL-LEVEL] ", shown_text(c)[:650]
             else:
                 tag, txt = "", c["text"][:750]
             where = f"§{c['section_no']}" if c.get("section_no") is not None else c["kind"]
-            blocks.append(f"[{i}] {tag}{c['bill_key']} {where} — {c['title']} ({c['bill_kind']}, {c['date'][:10]})\n{txt}")
+            blocks.append(f"[{i}] {tag}{c['bill_key']} {where} — {version_tag(c)}\n{txt}")
         prompt = EVAL_PROMPT.format(question=question, candidates="\n\n".join(blocks))
         d = parse_json(self._llm("You output only valid JSON.", prompt, 1500, res, self.grade_effort, json_out=True))
         if not d or not isinstance(d.get("scores"), list):  # reasoning models sometimes answer in prose: retry once, firmer
@@ -408,7 +434,7 @@ class Pipeline:
             label = f"[{e.key} §{e.section}]" if e.section is not None else f"[{e.key}]"
             kind = "bill-level description" if c["kind"] == "overview" else f"p.{c['page']}"
             also = f" (identical text also in {', '.join(c['also_in'])})" if c.get("also_in") else ""
-            block = f"{label} {c['title']} ({c['bill_kind']}, {c['date'][:10]}), {kind}{also}\n{c['text']}"
+            block = f"{label} {version_tag(c)}, {kind}{also}\n{shown_text(c)}"
             if (e.key, e.section) in official:  # label without [ ] in the header so it is not a second citation form
                 block += f"\n--- OFFICIAL {lang.upper()} TEXT of this section ---\n{official[(e.key, e.section)][:self.official_chars]}"
             blocks.append(block)

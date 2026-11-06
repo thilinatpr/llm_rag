@@ -408,6 +408,14 @@ dates, not when we indexed them, and the index is a snapshot: nothing refreshes 
 Anonymous visitors get it too (`/healthz` is open to a verified visitor). Not shown on the homepage (static, no container) or in "found nothing"
 answers (the greeting also has no evidence, so it would be wrong there). Offline tests + a Playwright run with a stubbed server; not deployed.
 
+### No "GS" jargon (2026-11-06)
+A live user asked "what is GS": Sources lines and answers showed our internal kind codes. `pipeline.version_tag` / `KIND_LABEL` now show
+"Gazette text" (kind GS) and "Bill" (presented version) and drop the " - GS" / " - Bill" title suffix; kinds without a plain name (Acts,
+other documents) show only the date. The same words go to the grader and the answering model (and `shown_text` rewrites the stored
+bill-level chunk header "Bill 084/2026 - Title - GS (GS, date)" on the way out; stored text and vectors are unchanged), and the answer prompt says
+never to write "GS". `Store`, `bills.kind`, the agent (`--mode agent`) and `/api/search` still use the codes. `test/page.test.mjs` compiles the
+page's inline script (a stray `//` comment once broke the whole page) and checks that no page text names the languages.
+
 ### Small-memory hosting facts
 Index: 42,696 chunks x 768 dims; `index.sqlite` 201 MB, `vectors.npz` 61 MB as float16 (114 MB float32). Server RSS ~124 MB after a
 dense search; ~100 MB right after warm-up; one shared `Retriever` serves all conversations. `shrink_vectors.py` converts a float32 file;
