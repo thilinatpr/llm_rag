@@ -6,6 +6,7 @@ Internal message format (provider-neutral):
   {"role":"tool","tool_call_id":str,"name":str,"content":str}
 Tool spec: {"name","description","parameters": <JSON schema>}
 """
+import contextvars
 import json
 import time
 from dataclasses import dataclass, field
@@ -261,7 +262,8 @@ class CloudflareEmbedder(_Cloudflare):
         parts = [[(t or " ")[: self.max_chars] for t in texts[i:i + self.batch]]
                  for i in range(0, len(texts), self.batch)]
         with ThreadPoolExecutor(self.workers) as ex:
-            res = list(ex.map(lambda p: self._post(self.model, {"text": p})["data"], parts))
+            # each task runs in a copy of this turn's context so its ai_run call is traced (see calltrace)
+            res = list(ex.map(lambda p: contextvars.copy_context().run(self._post, self.model, {"text": p})["data"], parts))
         return np.asarray([v for r in res for v in r], dtype="float32")
 
 

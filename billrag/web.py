@@ -10,6 +10,10 @@ POST /api/ask     {"session": str, "question": str, "answer"?: "fast"|"thorough"
 POST /api/ask/stream  same body -> text/event-stream: `status` {step}, `token` {text}, `reset` {}, then `done` {answer}
                   (the checked final answer, which replaces the streamed draft) or `error` {error}
 POST /api/search  {"query": str, "k": int}          -> {"results": [str]} (retrieval only, no key needed)
+
+Concurrency (billrag/gate.py): up to BILLRAG_MAX_CONCURRENT (default 4) questions run at once; up to BILLRAG_MAX_QUEUE (10) wait
+in arrival order (a streamed reply gets `queue` {position} events), each at most BILLRAG_QUEUE_WAIT seconds (90). Beyond that the
+reply is HTTP 503 + Retry-After (a streamed one: an `error` event). One conversation runs one question at a time.
 """
 import hmac
 import json
@@ -23,9 +27,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import calltrace
 from .chatlog import Timer, build_id, log_turn
+from .gate import Busy, Gate
 from .resources import Usage, snapshot
 
 MAX_SESSIONS = 50
+_INIT = threading.Lock()
 # The page's "Answer" choice. Only these names are accepted from the browser; they map to the answer step's reasoning effort:
 # fast = "low" (first word ~1-7 s instead of ~3-27 s, measured 2026-11-06), thorough = the server default (BILLRAG_ANSWER_EFFORT,
 # unset = the model's own default). Grading and translation are not affected.
@@ -50,6 +56,20 @@ class App:
         self._llm = None
         self._retr = None
 
+    def _ensure(self):
+        """Gate and per-conversation locks, created on first use (tests build App without __init__)."""
+        with _INIT:
+            if getattr(self, "_gate", None) is None:
+                env = os.environ.get
+                self._gate = Gate(int(env("BILLRAG_MAX_CONCURRENT") or 4), int(env("BILLRAG_MAX_QUEUE") or 10),
+                                  float(env("BILLRAG_QUEUE_WAIT") or 90))
+                self._slocks = {}
+
+    def _session_lock(self, session):
+        self._ensure()
+        with self.lock:
+            return self._slocks.setdefault(session, threading.Lock())
+
     def _retriever(self):
         """One Retriever for everyone: it holds the vectors (~66 MB) and checks the index fingerprint, so build it once."""
         from .llm import make_embedder, make_llm, make_reranker
@@ -70,17 +90,26 @@ class App:
 
     def search(self, query, k=6):
         from .agent import fmt_passage
-        with self.lock, Timer() as tm, Usage() as use, calltrace.tracing() as trace:
-            out = [fmt_passage(c, 700) for c in self._retriever().search(query, k)]
+        self._ensure()
+        self._gate.acquire()
+        try:
+            with Timer() as tm, Usage() as use, calltrace.tracing() as trace:
+                with self.lock:
+                    retriever = self._retriever()
+                out = [fmt_passage(c, 700) for c in retriever.search(query, k)]
+        finally:
+            self._gate.release()
         log_turn(type="search", question=query, k=k, results=len(out), seconds=tm.seconds, usage=use.fields(),
                  calls=trace.calls or None, cost=calltrace.cost_summary(trace.calls))
         return out
 
     def stats(self):
         """GET /api/stats: resource snapshot plus what this server holds. Does not take the lock (answers mid-question)."""
+        self._ensure()
         out = snapshot()
+        gate = self._gate.counts()
         out.update(build=build_id(), mode=self.mode, sessions=len(self.sessions), max_sessions=MAX_SESSIONS,
-                   turns=sum(self.turns.values()), busy=self.lock.locked(), retriever_loaded=self._retr is not None)
+                   turns=sum(self.turns.values()), busy=gate["running"] > 0, retriever_loaded=self._retr is not None, **gate)
         return out
 
     def _new_responder(self):
@@ -135,28 +164,44 @@ class App:
     def ask(self, session, question, emit=None, mode=None):
         """emit(kind, data), optional: progress events for a streamed reply (see /api/ask/stream).
         mode: one of ANSWER_MODES (the page's Answer choice) or None for the server default."""
-        with self.lock:
-            if session not in self.sessions:
-                self.sessions[session] = self._new_responder()
-                while len(self.sessions) > MAX_SESSIONS:
-                    self.sessions.popitem(last=False)
-            self.sessions.move_to_end(session)
-            responder = self.sessions[session]
-            self.turns[session] = self.turns.get(session, 0) + 1
-            turn = self.turns[session]
-            err, text, meta = None, None, {}
-            with Timer() as tm, Usage() as use, calltrace.tracing() as trace:
-                try:
-                    kw = {k: v for k, v in (("emit", emit), ("mode", mode)) if v}
-                    text, meta = responder(question, **kw)
-                    return text
-                except Exception as e:
-                    err = f"{type(e).__name__}: {e}"
-                    raise
-                finally:
-                    log_turn(type="ask", session=session, turn=turn, question=question, answer=text, error=err,
-                             seconds=round(time.time() - tm.t, 2), usage=use.fields(), calls=trace.calls or None,
-                             cost=calltrace.cost_summary(trace.calls), **meta)
+        self._ensure()
+        slock = self._session_lock(session)
+        # one question per conversation at a time: a follow-up sent early waits for the previous answer (its history)
+        if not slock.acquire(timeout=self._gate.max_wait):
+            raise Busy("The previous question in this chat is still being answered. Please wait for it.")
+        try:
+            on_wait = (lambda pos: emit("queue", pos)) if emit else None
+            waited, concurrent = self._gate.acquire(on_wait)
+            try:
+                with self.lock:
+                    if session not in self.sessions:
+                        self.sessions[session] = self._new_responder()
+                        while len(self.sessions) > MAX_SESSIONS:
+                            old, _ = self.sessions.popitem(last=False)
+                            self._slocks.pop(old, None)
+                    self.sessions.move_to_end(session)
+                    responder = self.sessions[session]
+                    self.turns[session] = self.turns.get(session, 0) + 1
+                    turn = self.turns[session]
+                err, text, meta = None, None, {}
+                with Timer() as tm, Usage() as use, calltrace.tracing() as trace:
+                    try:
+                        kw = {k: v for k, v in (("emit", emit), ("mode", mode)) if v}
+                        text, meta = responder(question, **kw)
+                        return text
+                    except Exception as e:
+                        err = f"{type(e).__name__}: {e}"
+                        raise
+                    finally:
+                        # cpu_s/cpu_pct are process-wide: with `concurrent` > 1 they include the other running turns
+                        log_turn(type="ask", session=session, turn=turn, question=question, answer=text, error=err,
+                                 seconds=round(time.time() - tm.t, 2), usage=use.fields(), calls=trace.calls or None,
+                                 cost=calltrace.cost_summary(trace.calls), queue_wait_s=round(waited, 2),
+                                 concurrent=concurrent, **meta)
+            finally:
+                self._gate.release()
+        finally:
+            slock.release()
 
 
 def answer_mode(body):
@@ -170,6 +215,8 @@ def make_handler(app):
         def _send(self, code, body, ctype="application/json"):
             data = body.encode() if isinstance(body, str) else body
             self.send_response(code)
+            if code == 503:
+                self.send_header("Retry-After", "30")
             self.send_header("Content-Type", ctype + "; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -226,6 +273,8 @@ def make_handler(app):
                     mode = answer_mode(body)
                     return self._send(200, json.dumps({"answer": app.ask(sid, q, mode=mode) if mode else app.ask(sid, q)}))
                 self._send(404, json.dumps({"error": "not found"}))
+            except Busy as e:
+                self._send(503, json.dumps({"error": str(e), "busy": True}))
             except Exception as e:  # surface config problems (missing API key, stale vectors) in the UI
                 self._send(500, json.dumps({"error": f"{type(e).__name__}: {e}"}))
 
@@ -248,8 +297,11 @@ def make_handler(app):
                     alive[0] = False
 
             try:
-                emit = (lambda k, d: send(k, {"step": d} if k == "status" else {"text": d} if k == "token" else {}))
+                emit = (lambda k, d: send(k, {"step": d} if k == "status" else {"text": d} if k == "token"
+                                            else {"position": d} if k == "queue" else {}))
                 send("done", {"answer": app.ask(sid, question, emit=emit, mode=mode) if mode else app.ask(sid, question, emit=emit)})
+            except Busy as e:
+                send("error", {"error": str(e), "busy": True})
             except Exception as e:  # headers are sent already: report the error as an event
                 send("error", {"error": f"{type(e).__name__}: {e}"})
 

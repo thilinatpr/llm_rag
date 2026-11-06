@@ -8,9 +8,11 @@ names the current step with `step(...)`. The records go into the chat log as `ca
   {"kind": "bm25" | "dense_scan", "step": "retrieve0", "s": 0.05}
 `s` = seconds the call took (retries and back-off included), `at` = seconds from the start of the turn to the call's start,
 `retries` = HTTP retries the OpenAI SDK made silently, `out` includes reasoning tokens where the provider counts them so.
-Not thread-local on purpose: `App` runs one turn at a time (its lock), and the embedder calls from worker threads.
+The active trace is a ContextVar, so turns running at the same time (web.App lets several overlap) each record only their
+own calls. A worker thread started inside a turn must run its task in `contextvars.copy_context()` to keep recording.
 Outside a trace every function here is a no-op.
 """
+import contextvars
 import json
 import os
 import threading
@@ -18,7 +20,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-_active = None
+_active = contextvars.ContextVar("billrag_trace", default=None)
 
 # USD per 1M tokens: cache-hit input, cache-miss input, output (reasoning tokens are part of the output count).
 # DeepSeek, https://api-docs.deepseek.com/quick_start/pricing (read 2026-11-06). Those are the OFF-PEAK prices; peak hours
@@ -78,22 +80,24 @@ class Trace:
 
 @contextmanager
 def tracing():
-    global _active
-    prev, _active = _active, Trace()
+    trace = Trace()
+    token = _active.set(trace)
     try:
-        yield _active
+        yield trace
     finally:
-        _active = prev
+        _active.reset(token)
 
 
 def step(name):
-    if _active is not None:
-        _active.step = name
+    t = _active.get()
+    if t is not None:
+        t.step = name
 
 
 def record(kind, seconds, **fields):
-    if _active is not None:
-        _active.add(kind, seconds, fields)
+    t = _active.get()
+    if t is not None:
+        t.add(kind, seconds, fields)
 
 
 def usage_fields(usage):
