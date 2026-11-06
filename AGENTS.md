@@ -297,12 +297,12 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". Live since 2026-11-06 03:37 UTC: build `865441fa` = `main` at `72f9e2a` (merge of PR #23: CPU/memory
-monitoring, `/api/stats` + log field `usage`; includes the glossary from #21), Worker version `1b3787d5`, container app version 14
-(image `sha256:da97e6ba...`). Not yet confirmed from a chat log: look for `build: 865441fa` and a `usage` field. Previous: container
-v13, build `97d30698` = glossary (`4e6927a`, image `sha256:07e85ed0...`; deployed but not recorded here at the time, seen in chat
-logs); before that build `d6b7f072` (`c1ef915`, Worker `75d647ee`, v12, `sha256:f63a9b19...`). Rollback: redeploy `4e6927a`
-(no index change needed). Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
+"Merged" is not "live". Live since 2026-11-06 03:57 UTC: build `865441fa` = `main` at `b55e113` (merge of PR #27: chat page renders
+answer Markdown (bold, lists, tables) instead of showing `*` marks; page-only change, Python code and build id identical to v14),
+Worker version `a1a3c4d6`, container app version 15 (image `sha256:77232f16...`). The page change is in the Worker assets, live at once.
+Previous: container v14, build `865441fa` = `72f9e2a` (PR #23: CPU/memory monitoring, `/api/stats` + log field `usage`; includes the
+glossary from #21), Worker `1b3787d5`, image `sha256:da97e6ba...`. Rollback: redeploy `72f9e2a` (no index change needed).
+Build id `865441fa` cannot tell v14 from v15 (same Python code); check the page itself. Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
 `git log origin/main` against the `build` seen in the latest chat log before telling the owner a change is live.
 
 ## Rules
