@@ -16,7 +16,7 @@ from . import calltrace
 def _effort_body(effort: str) -> dict:
     """"off"/"none" = switch reasoning off (OpenRouter `reasoning.enabled`); else a reasoning_effort level."""
     if str(effort).lower() in ("off", "none"):
-        return {"reasoning": {"enabled": False}}
+        return {"reasoning": {"enabled": False}, "thinking": {"type": "disabled"}}  # OpenRouter / DeepSeek API
     return {"reasoning_effort": effort}
 
 
