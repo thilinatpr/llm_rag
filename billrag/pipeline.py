@@ -108,7 +108,7 @@ Keep bill names, numbers and years. If it is already standalone, return it uncha
 
 CONVERSATION:
 {history}
-
+{extra}
 FOLLOW-UP: {question}"""
 
 
@@ -192,6 +192,7 @@ class Pipeline:
         self._last_cut = False  # did the last _llm reply hit max_tokens
         self._glossary = None  # loaded on first non-English question
         self.history = []
+        self.last_turn = None  # {"question": standalone English question, "bills": [(key, title)]} of the last answered turn
         self.emit = None  # optional emit(kind, data): "status" (step name), "token" (answer text), "reset" (drop the draft)
 
     # ------------------------------------------------------------ steps
@@ -246,12 +247,26 @@ class Pipeline:
                 return LEAK_FALLBACK
         return txt
 
-    def condense(self, question, res):
+    def context(self):
+        """Compact pointer to the previous turn for translating a follow-up: its question and bill titles (no numbers)."""
+        if not self.last_turn:
+            return ""
+        titles = "; ".join(t for _k, t in self.last_turn["bills"])
+        return self.last_turn["question"] + (f" (about: {titles})" if titles else "")
+
+    def condense(self, question, res, original=None):
+        """original: the user's own wording when the question was translated (a translation can lose what a short
+        follow-up refers to; seen live: "Kawuda inne manage karanna" -> "How should debts be managed?")."""
         if not self.history:
             return question
         hist = "\n".join(f"Q: {q}\nA: {a[:600]}" for q, a in self.history[-2:])
-        out = self._llm("You rewrite questions.", CONDENSE_PROMPT.format(history=hist, question=question), 300, res,
-                         self.grade_effort)
+        extra = ""
+        if self.last_turn and self.last_turn["bills"]:
+            extra += "BILLS THE LAST ANSWER WAS ABOUT: " + "; ".join(f"{t} ({k})" for k, t in self.last_turn["bills"]) + "\n"
+        if original and original.strip() != question.strip():
+            extra += f"FOLLOW-UP IN THE USER'S OWN WORDS (the English below is a machine translation of it): {original}\n"
+        out = self._llm("You rewrite questions.", CONDENSE_PROMPT.format(history=hist, question=question, extra=extra), 300,
+                         res, self.grade_effort)
         return out.strip().strip('"') or question
 
     def retrieve(self, query, seen_ids, keys=None):
@@ -443,12 +458,12 @@ class Pipeline:
             if lang != "en":
                 self._step("translate_in")
                 hints = self.glossary(lang).in_question(question) if lang == "si" else []
-                q_en = tr.to_english(question, lang, [(loc, en) for loc, en, _k in hints])
+                q_en = tr.to_english(question, lang, [(loc, en) for loc, en, _k in hints], context=self.context())
                 q_en = self.keep_titles(q_en, hints)
                 glossary_hints = [f"{loc} = {en}" for loc, en, _k in hints]
             elif mode == "ai":  # any other language (or romanised Sinhala/Tamil): one call detects and translates
                 self._step("translate_in")
-                got = tr.detect_ai(question)
+                got = tr.detect_ai(question, context=self.context())
                 if got is None:
                     res = self._ask(question)
                     res.llm_calls += tr.calls
@@ -545,7 +560,7 @@ class Pipeline:
             self.on_event("resolve", {"notes": notes})
         t = time.time()
         self._step("condense")
-        q = self.condense(plan["question"], res)
+        q = self.condense(plan["question"], res, original=local[1] if local else None)
         res.seconds["condense"] = time.time() - t
         keys = [k for k in {normalize_ref(m) for m in re.findall(r"\d{1,3}\s*/\s*\d{4}", q)} if k and self.store.bill(k)] or None
         seen_ids, graded, queries = set(), [], [q]
@@ -611,4 +626,9 @@ class Pipeline:
         if bad:
             res.warnings.append("citations not backed by the retrieved evidence: " + ", ".join(bad))
         self.history.append((question, res.answer))
+        bills = []
+        for e in res.evidence:  # one entry per bill title (GS and Bill versions share it), the strongest first
+            if e.chunk["title"] not in [t for _k, t in bills]:
+                bills.append((e.key, e.chunk["title"]))
+        self.last_turn = {"question": q, "bills": bills[:3]}
         return res
