@@ -106,6 +106,8 @@ def ingest(data_dir: Path, db_path: Path, limit=None, workers=4, since_year=0):
                 store.commit()
                 print(f"  {n}/{len(jobs)}", file=sys.stderr)
     store.commit()
+    from . import meta  # families / newest instance / section cross-references (outside `chunks`)
+    print(f"  meta: {meta.build(store)}", file=sys.stderr)
     st = store.stats()
     print(f"Indexed {st['bills']} bills / {st['chunks']} chunks; {errors} failed; "
           f"{skipped} bills without an English PDF skipped", file=sys.stderr)

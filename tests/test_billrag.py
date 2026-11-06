@@ -1821,3 +1821,153 @@ def test_answer_mode_from_the_page_sets_only_the_answer_effort(tmp_path, monkeyp
 def test_tests_never_upload_chat_logs_to_r2():
     from billrag import chatlog
     assert chatlog._r2() is None and not os.environ.get("R2_BUCKET")
+
+
+# ---- bill metadata (billrag/meta.py): families, newest instance, bill type, cross-references
+def _meta_store(tmp_path):
+    from billrag.store import Store
+    s = Store(tmp_path / "m.sqlite")
+    rows = [("010/2025", 2025, "2025-01-05T00:00:00.000Z", "Appropriation", "appropriation", "Bill"),
+            ("069/2026", 2026, "2026-09-01T00:00:00.000Z", "Appropriation", "appropriation", "Bill"),
+            ("070/2026", 2026, "2026-09-22T00:00:00.000Z", "Customs (Amendment) - GS", "customs amendment", "GS"),
+            ("078/2026", 2026, "2026-10-06T00:00:00.000Z", "Customs (Amendment) - Bill", "customs amendment", "Bill")]
+    for key, y, d, title, tn, kind in rows:
+        s.replace_bill({"key": key, "bill_no": 1, "year": y, "date": d, "title": title, "title_norm": tn, "kind": kind,
+                        "long_title": None, "presented_by": None, "presented_on": None, "gazette_date": None,
+                        "printed_no": None, "n_pages": 1, "n_sections": 2, "pdf_path": None, "summary": None},
+                       [{"kind": "section", "section_no": 1, "text": "1. Short title.", "ctx": "short title"},
+                        {"kind": "section", "section_no": 2, "text": "2. A penalty under section 1 and sections 2 and 1 applies.",
+                         "ctx": "penalty"}])
+    s.commit()
+    return s
+
+
+def test_meta_families_latest_type_and_refs(tmp_path):
+    from billrag import meta
+    s = _meta_store(tmp_path)
+    out = meta.build(s)
+    assert out["bills"] == 4
+    assert meta.meta(s, "010/2025")["is_latest"] == 0 and meta.meta(s, "069/2026")["is_latest"] == 1
+    assert meta.meta(s, "010/2025")["bill_type"] == "appropriation"
+    gs, bill = meta.meta(s, "070/2026"), meta.meta(s, "078/2026")
+    assert gs["family"] == bill["family"] and gs["stage"] == "gazette" and bill["stage"] == "bill"
+    assert bill["bill_type"] == "amendment" and bill["amends"] == "customs"
+    assert meta.keys_where(s, bill_type="appropriation", latest_only=True) == ["069/2026"]
+    assert meta.keys_where(s) is None
+    assert meta.latest_family_keys(s, "appropriation") == ["069/2026"]
+    assert meta.refs_from(s, "069/2026", 2) == [1]          # "section 1", "sections 2 and 1": own section 2 is ignored
+    assert meta.refs_in("sections 4 and 5, 7", 4, {4, 5, 7}) == {5, 7}
+
+
+def test_meta_tags_survive_rebuild(tmp_path):
+    from billrag import meta
+    s = _meta_store(tmp_path)
+    meta.build(s)
+    s.db.execute("UPDATE bill_meta SET tags=? WHERE bill_key='069/2026'", ('["public finance"]',))
+    meta.build(s)
+    assert meta.keys_where(s, tag="public finance") == ["069/2026"]
+
+
+def test_meta_missing_tables_are_tolerated(tmp_path):
+    from billrag import meta
+    from billrag.store import Store
+    s = Store(tmp_path / "old.sqlite")
+    assert meta.keys_where(s, latest_only=True) is None and meta.meta(s, "x") is None and meta.refs_from(s, "x", 1) == []
+
+
+def test_pipeline_follows_section_refs(tmp_path):
+    from billrag import meta
+    from billrag.pipeline import Evidence, Pipeline
+    s = _meta_store(tmp_path)
+    meta.build(s)
+    p = Pipeline(s, None, None)
+    ch = s.chunks_by_ids([r[0] for r in s.db.execute("SELECT id FROM chunks WHERE bill_key='069/2026' AND section_no=2")])
+    ev = [Evidence(next(iter(ch.values())), 3)]
+    got = p.follow_section_refs(ev)
+    assert [(e.key, e.section) for e in got] == [("069/2026", 1)] and got[0].score == 2
+    assert p.follow_section_refs(ev + got) == []          # already in the evidence: nothing added
+
+
+# ---- prompt echo guard, "which bill?" clarification, per-call cost
+def test_glossary_block_echo_is_rejected():
+    from billrag import translate
+    leak = ("පිළිතුර.\n\nනිල සිංහල පද (මෙම වචන භාවිත කරන්න):\n- Board = මණ්ඩලය\n- Minister = අමාත්‍යවරයා\n"
+            "- appointed members = පත් කළ සාමාජිකයන්")
+    assert "glossary" in translate.check_script(leak, "si")
+    assert translate.echoes_prompt("OFFICIAL SINHALA TERMS used in the bills' own Sinhala text")
+    assert not translate.echoes_prompt("- මණ්ඩලය [077/2026 §4]\n- ගාස්තුව 5 = 6")   # one list-like line is not an echo
+
+
+def test_vague_bill_question_is_asked_back(tmp_path):
+    from billrag import resolve
+    s = _meta_store(tmp_path)
+    for q in ("Tell me about the new bill.", "tell me about this bill", "What is the newest act?", "Explain this act please"):
+        assert resolve.is_vague_bill_question(q), q
+    for q in ("Tell me about the new Cricket bill", "Tell me about the 2026 bill", "Summarise 078/2026", "hello",
+              "How long can a person be detained?"):
+        assert not resolve.is_vague_bill_question(q), q
+    r = resolve.resolve_question(s, "Tell me about the new bill")
+    assert r["action"] == "reply" and r.get("clarify") and "069/2026" in r["text"] and "Customs" in r["text"]
+    # inside a running chat "this bill" refers to an earlier turn: not asked back
+    assert resolve.resolve_question(s, "Tell me about this bill", has_history=True)["action"] == "answer"
+
+
+def test_call_cost_uses_cache_and_peak_rates():
+    from datetime import datetime, timezone
+    from billrag import calltrace
+    off, peak = datetime(2026, 11, 7, 12, tzinfo=timezone.utc), datetime(2026, 11, 6, 8, tzinfo=timezone.utc)  # Sat / Fri 08:00 UTC
+    assert not calltrace.is_peak(off) and calltrace.is_peak(peak)
+    usd = calltrace.cost_usd("deepseek-flash", 1_000_000, 1_000_000, 500_000, when=off)
+    assert abs(usd - (500_000 * 0.003 + 500_000 * 0.15 + 1_000_000 * 0.6) / 1e6) < 1e-9
+    assert abs(calltrace.cost_usd("deepseek-flash", 1000, 100, 0, when=peak)
+               - 2 * calltrace.cost_usd("deepseek-flash", 1000, 100, 0, when=off)) < 1e-12
+    assert calltrace.cost_usd("@cf/openai/gpt-oss-20b", 1000, 100) is None        # unpriced model: tokens only
+    assert calltrace.usage_fields({"prompt_tokens": 40, "completion_tokens": 61, "prompt_cache_hit_tokens": 8,
+                                   "completion_tokens_details": {"reasoning_tokens": 56}}) == \
+        {"in": 40, "out": 61, "cache_hit": 8, "reasoning": 56}
+    with calltrace.tracing() as tr:
+        calltrace.record("chat", 1.0, model="deepseek-flash", **{"in": 100, "out": 10, "cache_hit": 0})
+        calltrace.record("chat", 1.0, model="@cf/x", **{"in": 100, "out": 10})
+    c = calltrace.cost_summary(tr.calls)
+    assert c["chat_calls"] == 2 and c["priced_calls"] == 1 and c["usd"] > 0 and c["in"] == 200
+
+
+def test_cost_prices_can_be_overridden_by_env(monkeypatch):
+    from datetime import datetime, timezone
+    from billrag import calltrace
+    monkeypatch.setenv("BILLRAG_PRICES", '{"my-model": {"hit": 0.1, "miss": 1.0, "out": 2.0}}')
+    off = datetime(2026, 11, 7, 12, tzinfo=timezone.utc)
+    assert abs(calltrace.cost_usd("my-model", 1_000_000, 500_000, 0, when=off) - 2.0) < 1e-9
+
+
+def test_pipeline_follows_references_back_to_a_penalty_section(tmp_path):
+    from billrag import meta
+    from billrag.pipeline import Evidence, Pipeline
+    from billrag.store import Store
+    s = Store(tmp_path / "pen.sqlite")
+    for key, d in (("070/2026", "2026-09-22T00:00:00.000Z"), ("444/2024", "2024-05-01T00:00:00.000Z")):
+        s.replace_bill({"key": key, "bill_no": 1, "year": int(key[-4:]), "date": d, "title": "Terror - Bill", "title_norm": "terror",
+                        "kind": "Bill", "long_title": None, "presented_by": None, "presented_on": None, "gazette_date": None,
+                        "printed_no": None, "n_pages": 1, "n_sections": 3, "pdf_path": None, "summary": None},
+                       [{"kind": "section", "section_no": 3, "text": "3. Hostage taking is a consequence listed in subsection (2).", "ctx": "offence"},
+                        {"kind": "section", "section_no": 4, "text": "4. A person who commits an offence under section 3 shall be liable to imprisonment not exceeding twenty years and a fine.", "ctx": "penalty"},
+                        {"kind": "section", "section_no": 5, "text": "5. This Act binds the State; see section 3.", "ctx": "other"}])
+    s.commit()
+    meta.build(s)
+    p = Pipeline(s, None, None)
+
+    def ev(key, no):
+        i = s.db.execute("SELECT id FROM chunks WHERE bill_key=? AND section_no=?", (key, no)).fetchone()[0]
+        return Evidence(s.chunks_by_ids([i])[i], 3)
+    got = p.follow_section_refs([ev("070/2026", 3)], "What is the penalty for hostage taking?")
+    assert [(e.key, e.section) for e in got] == [("070/2026", 4)]              # §4 points at §3 and speaks of imprisonment; §5 does not
+    assert p.follow_section_refs([ev("070/2026", 3)], "Who is hostage taking defined by?") == []   # not a penalty question
+    other = p.follow_section_refs([ev("070/2026", 3), ev("444/2024", 3)], "What is the penalty?")
+    assert {e.key for e in other} == {"070/2026"}                              # an older bill's sections are not pulled in
+
+
+def test_translate_in_prompts_ask_for_literal_translation():
+    from billrag import translate
+    for prompt in (translate.TO_EN, translate.DETECT_AND_TRANSLATE):
+        assert "when you know it" not in prompt                    # that wording made the model invent real-world Act titles
+        assert "Translate literally" in prompt and "NEVER add a bill number" in prompt

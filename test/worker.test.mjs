@@ -123,3 +123,35 @@ test("page is static; only /api/* and /healthz go to the upstream, and only when
   assert.equal(anon.status, 401);
   assert.equal(seen.length, 2);
 });
+
+import { chatEnv, DEEPSEEK_BASE_URL } from "../src/chatconfig.js";
+
+test("chat provider: Workers AI by default, DeepSeek when asked and keyed", () => {
+  const base = { CF_ACCOUNT_ID: "acct", CLOUDFLARE_API_TOKEN: "cf-token", TRANSLATE_MODEL: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" };
+  const wa = chatEnv(base);
+  assert.equal(wa.provider, "workers-ai");
+  assert.equal(wa.vars.BILLRAG_CHAT_MODEL, "@cf/openai/gpt-oss-120b");
+  assert.equal(wa.vars.BILLRAG_CHAT_BASE_URL, "https://api.cloudflare.com/client/v4/accounts/acct/ai/v1");
+  assert.equal(wa.vars.BILLRAG_CHAT_API_KEY, "cf-token");
+  assert.equal(wa.vars.BILLRAG_TRANSLATE_MODEL, "@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+  assert.equal(wa.vars.BILLRAG_GRADE_EFFORT, undefined);                       // unchanged behaviour: the Python default applies
+
+  const ds = chatEnv({ ...base, CHAT_PROVIDER: "DeepSeek", DEEPSEEK_API_KEY: "ds-key", CHAT_MODEL: "@cf/openai/gpt-oss-120b" });
+  assert.equal(ds.provider, "deepseek");
+  assert.equal(ds.vars.BILLRAG_CHAT_MODEL, "deepseek-flash");                   // a Workers AI model id is not sent to DeepSeek
+  assert.equal(ds.vars.BILLRAG_CHAT_BASE_URL, DEEPSEEK_BASE_URL);
+  assert.equal(ds.vars.BILLRAG_CHAT_API_KEY, "ds-key");                         // never the Cloudflare token
+  assert.equal(ds.vars.BILLRAG_GRADE_EFFORT, "off");
+  assert.equal(ds.vars.BILLRAG_TRANSLATE_MODEL, undefined);                     // the Llama translator cannot run on DeepSeek's endpoint
+  assert.equal(chatEnv({ ...base, CHAT_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "k", CHAT_MODEL: "deepseek-v4-pro" }).vars.BILLRAG_CHAT_MODEL, "deepseek-v4-pro");
+});
+
+test("chat provider: deepseek without its secret falls back to Workers AI", () => {
+  const warn = console.warn; let warned = "";
+  console.warn = (m) => { warned = m; };
+  try {
+    const r = chatEnv({ CF_ACCOUNT_ID: "a", CLOUDFLARE_API_TOKEN: "t", CHAT_PROVIDER: "deepseek" });
+    assert.equal(r.provider, "workers-ai");
+    assert.match(warned, /DEEPSEEK_API_KEY/);
+  } finally { console.warn = warn; }
+});

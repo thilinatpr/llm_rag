@@ -13,6 +13,13 @@ from dataclasses import dataclass, field
 from . import calltrace
 
 
+def _effort_body(effort: str) -> dict:
+    """"off"/"none" = switch reasoning off (OpenRouter `reasoning.enabled`); else a reasoning_effort level."""
+    if str(effort).lower() in ("off", "none"):
+        return {"reasoning": {"enabled": False}, "thinking": {"type": "disabled"}}  # OpenRouter / DeepSeek API
+    return {"reasoning_effort": effort}
+
+
 @dataclass
 class ToolCall:
     id: str
@@ -113,7 +120,7 @@ class OpenAILLM:
             return self._stream(system, messages, max_tokens, effort, on_token)
         kw = {}
         if effort:  # reasoning models (gpt-oss): low/medium/high; sent as an extra body field
-            kw["extra_body"] = {"reasoning_effort": effort}
+            kw["extra_body"] = _effort_body(effort)
         if tools:
             kw["tools"] = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
                                                              "parameters": t["parameters"]}} for t in tools]
@@ -141,7 +148,7 @@ class OpenAILLM:
         return Reply(msg.content or "", calls, getattr(r.choices[0], "finish_reason", "") or "")
 
     def _stream(self, system, messages, max_tokens, effort, on_token):
-        kw = {"extra_body": {"reasoning_effort": effort}} if effort else {}
+        kw = {"extra_body": _effort_body(effort)} if effort else {}
         kw.update(model=self.model, max_tokens=max_tokens, messages=to_openai_messages(system, messages), stream=True,
                   stream_options={"include_usage": True})
         t, first, parts, stop, usage, think = time.time(), None, [], "", None, 0

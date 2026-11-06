@@ -25,11 +25,13 @@ billrag/agent.py          (`--mode agent`) tool-calling loop: search_bills, list
 billrag/llm.py            Anthropic + OpenAI-compatible chat adapters, OpenAI/sentence-transformers embedders
 billrag/enrich.py         optional: dense vectors (`embed`) and LLM bill summaries (`summarize`)
 billrag/config.py         all settings come from BILLRAG_* env vars (documented at the top of the file)
+src/chatconfig.js         which chat model/provider the container gets (CHAT_PROVIDER var: workers-ai | deepseek); pure function, tested in test/worker.test.mjs
+billrag/meta.py           bill metadata outside `chunks`: families, newest instance, bill type, tags, section cross-references (`meta`, `tag`)
 billrag/resolve.py        question grounding before retrieval: greetings, abbreviation (PTSA) -> bill title matching, "closest bills"
 billrag/chatlog.py        one JSON record per chat turn -> R2 `chatlogs/` + local JSONL; `build_id()` = hash of the running code
 billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/ask/stream, /api/search, /api/stats, /healthz); secret-gated
 billrag/resources.py      CPU/memory: `snapshot()` for /api/stats, `Usage` per request -> log field `usage` (stdlib, /proc + cgroup)
-billrag/calltrace.py      one record per model / Workers AI call (step, model, seconds, tokens, retries) -> log field `calls`
+billrag/calltrace.py      one record per model / Workers AI call (step, model, seconds, tokens, cache hits, USD, retries) -> log fields `calls`, `cost`
 public/index.html         the chat page (static asset, served by the Worker behind the login; also used by local `serve`)
 src/worker.js             Worker entrypoint: login gate (auth.js) + forwards /api/* and /healthz to the container
 src/auth.js               email one-time-code login (KV codes/sessions, Cloudflare Email Service REST sender), routing
@@ -348,14 +350,16 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". Live since 2026-11-06 05:14 UTC: build `479f9cd3` = `main` at `ce7e189` (merge of PR #29: streaming
-answers via `/api/ask/stream`, the page's "Answer: Thorough | Fast" choice, per-call timing in the log field `calls`), Worker
-version `76ad7347`, container app version 16 (image `sha256:586ad1ec...`). Not yet confirmed from a chat log: look for
-`build: 479f9cd3` with `calls` and `answer_mode` on a real session (records with session `s1` and the questions "hi", "q",
-"නිවැරදි දින කීයද?" are offline-test records that reached R2 on 2026-11-06 04:21-05:08, builds `31238801`, `ddad06e3`, `8377b679`,
-`3b907723`, `71da3e10`, `479f9cd3`: not live traffic). Previous: container v15, build `865441fa` = `b55e113` (PR #27 page
-Markdown), Worker `a1a3c4d6`, image `sha256:77232f16...`. Rollback: redeploy `b55e113` (no index change needed). Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
-`git log origin/main` against the `build` seen in the latest chat log before telling the owner a change is live.
+"Merged" is not "live". **Live since 2026-11-06 10:11 UTC: build `ec82b284` = commit `e5dd298` on branch `claude/elegant-keller-1x4ri0`, which is
+NOT on `main` (deployed from the branch at the owner's request; open a PR and merge it with a merge commit so the deployed SHA is in
+`main`'s history). Worker version `be713b7d` (redeployed 10:15 UTC after the secret was added; first deploy was `3861cd0e`), container app version 18 (image `sha256:ab012c93...`, same image as v17; the v18 rollout restarted the container so it reads the secret).** Contains: bill metadata
+(`meta.py`), newest-instance rule, section-reference following (incl. penalty back-references), "which bill?" clarification, literal
+translate-in, prompt-echo guard, per-response cost log (`cost`, `calls[].usd`), the `CHAT_PROVIDER` switch (`src/chatconfig.js`) and
+the independent-judge eval. The index in R2 was re-uploaded 2026-11-06 10:08 UTC with the metadata tables (`bill_meta`, `section_refs`).
+**Chat model:** `CHAT_PROVIDER = "deepseek"` and the `DEEPSEEK_API_KEY` Worker secret exist (owner added it 2026-11-06) and the container was restarted by the v18 rollout, so it should be answering with `deepseek-flash`. Not yet confirmed from a chat log: no question had been asked on the new instance when this was written; look for `build: ec82b284`, `model: deepseek-flash`, `cost` and empty `warnings`. If a log shows `model: @cf/openai/gpt-oss-120b`, the key was not picked up (Worker log warns "DEEPSEEK_API_KEY secret is missing"). Previous: container v16, build `479f9cd3` = `main` at `ce7e189`, Worker
+`76ad7347`, image `sha256:586ad1ec...`. Rollback: check out `ce7e189` and redeploy (steps 1-5 above; the new index tables are ignored by old
+code). `main` also has later commits (procurement prototype, worktree script) that touch no deployed code. Check `git log origin/main`
+against the `build` seen in the latest chat log before telling the owner a change is live.
 
 ## Rules
 
@@ -611,6 +615,83 @@ Mined deterministically (no model) from the linked section pairs; lives outside 
   018/2026 §16: grader variance).
 - **Production:** the container restores `index.sqlite` from R2, so the glossary only goes live after `upload_r2.py --include-index`
   (old code ignores the table; the code without the table just has no hints).
+
+## Bill metadata (`billrag/meta.py`, tables `bill_meta`, `section_refs`)
+
+Side tables like the glossary: `chunks`, `fingerprint()` and `vectors.npz` are untouched, old code ignores them, and code without
+them degrades to no metadata (every read tolerates missing tables). `python -m billrag meta` (~seconds, deterministic; `ingest` runs it
+too) fills `family` (GS + Bill versions of one title within 300 days), `stage`, `bill_type` (appropriation | incorporation | amendment |
+new), `amends`, `is_latest` (newest instance of a recurring title; all "Appropriation ..." titles count as one) and `section_refs`
+(11,361 "section N" pointers inside a bill). `python -m billrag tag --since-year 2024` adds LLM topic tags (fixed taxonomy
+`meta.TAGS`, resumable, survive a rebuild); NOT run yet. Filters: `billrag search --type/--tag/--latest`, agent tools `find_bills` /
+`search_bills` (`bill_type`, `tag`, `latest_only`), `get_section` lists the sections it refers to. `Pipeline(prefer_latest=True)`:
+a question with no year and no bill number whose hits come from an older instance of a recurring title is searched again inside the
+newest instance (event `newest_instance`). Fixes "appropriation bill" answering about 568/2025 instead of 069/2026 + 080/2026.
+Measured 2026-11-06 (deepseek-flash, thinking off, 24 recent questions): strict 0.79 -> 0.83, cited gold 0.88 -> 0.96 (noise level).
+**Production:** the container restores `index.sqlite` from R2, so metadata goes live only after `upload_r2.py --include-index`
+and a deploy. `Pipeline.follow_section_refs` (flag `follow_refs`, default on) uses `section_refs`: for the TOP kept clause's bill (and its GS/Bill
+versions only) it adds up to 2 sections the clause points at, and for a question about penalties/offences up to 2 sections that point
+AT the clause and speak of imprisonment/fine/liability (the penalty section s.4 points back at the offence section s.3 and never
+says "hostage"). Fixes the hostage penalty (070/2026 §4(b): <= 20 years rigorous imprisonment + fine <= Rs 20m); 4 of 5 phrasings
+answer it, the 5th is not a penalty question and says honestly that the penalty section is not in its evidence. 72-item eval unchanged
+(strict 0.93, cited gold 0.97). Not done: using tags in ranking.
+
+## Priorities, DeepSeek, cost log, clarification (2026-11-06)
+
+**Priority order set by the owner: honesty and accuracy first, then cost, speed last.** Choose models by strict/cited_gold and the
+`warned` rate, not latency.
+- **Eval:** `eval-answers --since-year 2025 --limit 0` is the 72 recent items; 24 items moved by +-0.12 between identical runs, so use
+  72 and an independent judge (`BILLRAG_JUDGE_MODEL/_BASE_URL/_API_KEY`). The report has a `warned` column (answers with an
+  unsupported citation or an unusable grader reply). Rows: `evals/answer_model_comparison/72.*.jsonl`.
+  | 72 recent items, judge deepseek-v4-pro | strict | cited gold | warned | avg s |
+  |---|---|---|---|---|
+  | deepseek-flash, grading thinking OFF, answer thinking ON (best) | 0.93-0.94 | 0.94-0.96 | 0.00-0.03 | 9-10 |
+  | gpt-oss-120b (production) | 0.89 | 0.92 | 0.00 | 15.8 |
+  | gpt-oss-20b | 0.83 | 0.88 | 0.00 | 12.3 |
+  | deepseek-flash, all thinking | 0.90 | 0.93 | 0.54 (grader JSON unusable) | 21.8 |
+  | deepseek-v4-pro, all thinking | 0.90 | 0.93 | 0.69 | 97.7 |
+  The judge is DeepSeek-family (possible bias for DeepSeek rows; cited_gold does not need a judge). NOT deployed: production still uses
+  Workers AI gpt-oss-120b. Using DeepSeek in production needs a Worker secret and `api.deepseek.com` reachable from the container.
+- **Config for that setup:** `BILLRAG_CHAT_PROVIDER=openai BILLRAG_CHAT_MODEL=deepseek-flash BILLRAG_CHAT_BASE_URL=https://api.deepseek.com
+  BILLRAG_CHAT_API_KEY=$DEEPSEEK_API_KEY BILLRAG_GRADE_EFFORT=off` (answer effort unset = thinking on). `off`/`none` sends
+  `thinking: {type: disabled}` + `reasoning: {enabled: false}` (llm._effort_body). Thinking-on grading makes the grader's JSON unusable
+  (pipeline falls back to retrieval order, warning) so keep grading off. `deepseek-v4-pro` costs ~98 s per question: not worth it.
+- **Cost per response:** `billrag/calltrace.py` prices every chat call (`usd` in `calls`) and `web.py` logs `cost` = {usd, in, out,
+  cache_hit, chat_calls, priced_calls, peak}; `ask -v` prints it; `read_chatlogs.py` prints total/median/p90 and cache-hit share.
+  Prices come from the DeepSeek docs (api-docs.deepseek.com/quick_start/pricing, read 2026-11-06, per 1M tokens, off-peak: flash
+  hit $0.003, miss $0.15, out $0.60; v4-pro $0.022 / $0.66 / $1.98); peak (01-04 and 06-10 UTC, Mon-Fri, not Chinese public holidays)
+  is x2, holidays are not known so those days are an upper bound. Reasoning tokens are inside `completion_tokens`. Override with
+  `BILLRAG_PRICES='{"model": {"hit":..,"miss":..,"out":..,"peak_factor":2}}'`. Workers AI models have no price here (tokens only,
+  `priced_calls` < `chat_calls`). `GET api.deepseek.com/user/balance` only has cent precision: use it to reconcile totals, not per answer.
+  Measured: one English question 2 calls, ~3k in / 0.4k out = $0.0013 at peak.
+- **"Which bill?"** (`resolve.is_vague_bill_question`): a FIRST question made only of filler words around bill/act/law ("tell me about
+  the new bill") is answered with the 5 newest bills instead of searching (live bug: it matched a 2018 "New Villages" bill and claimed
+  nothing newer exists). Inside a running chat it is not asked back (the condense step resolves "this bill"). Works for Sinhala too.
+- **Literal translate-in** (`translate.LITERAL`, both `TO_EN` and `DETECT_AND_TRANSLATE`): the old wording "Use the English name of an Act
+  or body when you know it" made the model swap "terrorism act" for the real-world "Prevention of Terrorism Act" (not in the corpus),
+  and the answer then hedged about an Act the user never named (3 of 4 runs; 0 of 4 with the literal wording, correct 20-year
+  penalty in all 8). 8/8 Sinhala-script and 8/8 romanised questions still retrieve the right bill.
+- **Prompt echo guard** (`translate.echoes_prompt`, in `check_script`): an answer containing the glossary block header or 2+ "English
+  term = term" lines is rejected like any unusable output (retry / fallback). Live bug: the translated path appended the glossary list.
+
+### Switching production to DeepSeek (prepared 2026-11-06, NOT done: it needs the owner's go-ahead for each production step)
+Code is merged-ready and defaults to Workers AI, so nothing changes until the steps below. `src/chatconfig.js` maps `CHAT_PROVIDER`:
+`deepseek` + the `DEEPSEEK_API_KEY` secret -> container env `BILLRAG_CHAT_MODEL=deepseek-flash`, `BASE_URL=https://api.deepseek.com`,
+`BILLRAG_GRADE_EFFORT=off`, no Llama translator (a `@cf/` id cannot run on DeepSeek's endpoint, so the chat model translates); a missing
+secret falls back to Workers AI with a Worker-log warning. Embeddings, rerank and R2 keep using the Cloudflare credentials.
+Verified locally with exactly that env (`python -m billrag serve` + POST /api/ask): English hostage question 9.6 s, $0.0005 (90% of input
+cache hits); Sinhala 15.7 s, $0.0032, direct path, no warnings. Steps:
+1. Upload the index with the metadata tables first (old code ignores them): `python scripts/upload_r2.py --bucket gov-rag --include-index`
+   (needs `python -m billrag meta` run on that index; `ingest` and `fetch_index` copies already have it locally only).
+2. `printf %s "$DEEPSEEK_API_KEY" | npx wrangler secret put DEEPSEEK_API_KEY` (stdin; never in `wrangler.toml`). Rotate the key if it ever
+   appeared in a chat transcript.
+3. Set `CHAT_PROVIDER = "deepseek"` in `wrangler.toml` and deploy (see "Deploying from the cloud sandbox"). Check the container can reach
+   `api.deepseek.com` (Cloudflare Containers allow outbound internet by default; not testable from the sandbox).
+4. Verify from the chat logs: `model: deepseek-flash`, `cost.usd`, `warnings` (see "Reading the chat logs"); `read_chatlogs.py` prints cost.
+Rollback: `CHAT_PROVIDER = "workers-ai"` and redeploy (secret can stay). Risks to accept knowingly: an external provider outage takes
+answers down (no automatic fallback to Workers AI at request time), prompts and bill text go to DeepSeek, cost is variable (see the
+cost log), prices change (`BILLRAG_PRICES`). The judge for the eval numbers was DeepSeek-family, and Sinhala quality was spot-checked
+(18 + 16 questions), not measured on a labelled set.
 
 ## Product priority: recent bills
 

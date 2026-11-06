@@ -14,7 +14,7 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 
-from . import calltrace, glossary as gloss, parse_si, resolve, translate
+from . import calltrace, glossary as gloss, meta, parse_si, resolve, translate
 from .store import normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
@@ -143,6 +143,7 @@ class Result:
     glossary_hints: list = field(default_factory=list)  # "local = English" names given to the question -> English step
     glossary_terms: list = field(default_factory=list)  # English terms whose official local form the answer prompt got
     added_sections: list = field(default_factory=list)  # sections added to bill-level-only evidence (bill_sections)
+    followed: list = field(default_factory=list)  # sections added because a kept clause refers to them (follow_section_refs)
     focus: dict = None  # {"title", "bills", "score"}: the bill an unnamed "this new bill" was taken to mean
     quote_fixes: list = field(default_factory=list)  # [(quoted, official)] misspelt quotations replaced by the official text
     direct_rejected: str = ""  # the rejected one-step answer (diagnostics)
@@ -178,7 +179,7 @@ STRICT = "\n\nReply with the JSON object ONLY - no analysis, no explanation, no 
 class Pipeline:
     def __init__(self, store, retriever, llm, k_clauses=14, k_bills=4, extra_rounds=1, keep_max=8,
                  evidence_chars=14000, on_event=None, grade_effort=None, answer_effort=None, answer_llm=None,
-                 translate_mode="script", translator=None, direct_local=True, official_chars=2500):
+                 translate_mode="script", translator=None, direct_local=True, official_chars=2500, prefer_latest=True, follow_refs=True, trust_top=False):
         self.store, self.retriever, self.llm = store, retriever, llm
         self.k_clauses, self.k_bills, self.extra_rounds = k_clauses, k_bills, extra_rounds
         self.keep_max, self.evidence_chars = keep_max, evidence_chars
@@ -189,6 +190,8 @@ class Pipeline:
         self.translator = translator or translate.Translator(llm, grade_effort)  # may use a dedicated translation model
         self.direct_local = direct_local  # Sinhala question + official Sinhala text -> answer in Sinhala in one step
         self.official_chars = official_chars
+        self.follow_refs, self.trust_top, self.max_refs = follow_refs, trust_top, 2
+        self.prefer_latest = prefer_latest  # no year in the question -> newest instance of a recurring title
         self._last_cut = False  # did the last _llm reply hit max_tokens
         self._glossary = None  # loaded on first non-English question
         self.history = []
@@ -262,7 +265,30 @@ class Pipeline:
             if c["id"] not in seen_ids:
                 seen_ids.add(c["id"])
                 fresh.append(c)
+        if self.prefer_latest and not keys and not re.search(r"\b(19|20)\d{2}\b", query):
+            fresh = self.newest_instance(query, fresh, seen_ids)
         return fresh
+
+    def newest_instance(self, query, cands, seen_ids):
+        """Titles recur ("Appropriation", "Finance (Amendment)"); when the question gives no year and the hits come from an
+        older instance, swap them for the same search inside the newest instance (billrag.meta)."""
+        old, groups = set(), {}
+        for c in cands:
+            m = meta.meta(self.store, c["bill_key"])
+            if m and not m["is_latest"]:
+                old.add(c["id"]); groups[m["title_norm"]] = m
+        if not old:
+            return cands
+        out = [c for c in cands if c["id"] not in old]
+        for tn in groups:
+            keys = meta.latest_family_keys(self.store, tn)
+            added = [c for c in self.retriever.search(query, k=3, keys=keys, kinds=CLAUSE_KINDS + ("overview",))
+                     if c["id"] not in seen_ids]
+            for c in added:
+                seen_ids.add(c["id"])
+            out += added
+            self.on_event("newest_instance", {"title": tn, "keys": keys, "dropped": len(old), "added": len(added)})
+        return out
 
     def evaluate(self, question, cands, res):
         """Grade candidates; returns (scores by candidate index, enough, missing, queries)."""
@@ -316,6 +342,57 @@ class Pipeline:
             seen.add(ident)
             used += len(e.chunk["text"])
             out.append(e)
+        return out
+
+    PENALTY_Q = re.compile(r"\b(penalt\w*|punish\w*|sentenc\w*|fines?|fined|imprison\w*|liable|jail\w*|prison\w*|offen[cs]es?)\b", re.I)
+    PENALTY_TEXT = re.compile(r"imprison|\bfine\b|penalt|punish|liable|sentence", re.I)
+
+    def follow_section_refs(self, evidence, question=""):
+        """Sections of the same bill that belong with a kept clause but were not retrieved, at most `max_refs` of each kind,
+        added after the graded clauses (score 2):
+        - forward: sections the clause points at ("the penalty in section 3(2)(c)");
+        - backward, only for a question about penalties/offences: sections that point AT the clause and speak of
+          imprisonment, fines or liability. An offence section ("hostage-taking is a consequence in s.3(2)(c)") never says
+          what the penalty is; the penalty section (s.4) points back at it and names no offence."""
+        have = {(e.key, e.section) for e in evidence if e.section is not None}
+        out = []
+
+        def add(key, n):
+            if (key, n) in have:
+                return False
+            r = self.store.db.execute("SELECT id FROM chunks WHERE bill_key=? AND section_no=? AND kind='section' "
+                                      "ORDER BY ord LIMIT 1", (key, n)).fetchone()
+            ch = self.store.chunks_by_ids([r["id"]]).get(r["id"]) if r else None
+            if not ch:
+                return False
+            have.add((key, n))
+            out.append(self.expand(Evidence(ch, 2)))
+            return True
+
+        fwd = back = 0
+        penalty = bool(self.PENALTY_Q.search(question or ""))
+        # only the top-ranked clause's bill (and its own GS / Bill versions): other bills' boilerplate adds noise, not answers
+        top = next((e for e in evidence if e.section is not None and e.score >= 2), None)
+        if top is None:
+            return out
+        b = self.store.bill(top.key)
+        family = {v["key"] for v in self.store.versions(b["title_norm"], b["date"])} | {top.key} if b else {top.key}
+        for e in evidence:
+            if e.section is None or e.score < 2 or e.key not in family:
+                continue
+            for n in meta.refs_from(self.store, e.key, e.section):
+                if fwd < self.max_refs and add(e.key, n):
+                    fwd += 1
+            if not penalty:
+                continue
+            for n in meta.refs_to(self.store, e.key, e.section):
+                if back >= self.max_refs:
+                    break
+                sec = self.store.section_text(e.key, n)
+                if sec and self.PENALTY_TEXT.search(sec["text"]) and add(e.key, n):
+                    back += 1
+        if out:
+            self.on_event("followed_refs", {"sections": [f"{x.key} \u00a7{x.section}" for x in out]})
         return out
 
     def summarise(self, question, evidence, enough, missing, res, local=None, focus=None, extra="", stream=False):
@@ -534,11 +611,12 @@ class Pipeline:
     def _ask(self, question: str, local=None) -> Result:
         """local: (lang code, the user's original question) for a non-English question; see answer_direct."""
         res = Result(question=question, answer="")
-        plan = resolve.resolve_question(self.store, question)
+        plan = resolve.resolve_question(self.store, question, has_history=bool(self.history))
         if plan["action"] == "reply":  # greeting, or an abbreviation we cannot ground: no search, no model call
             res.answer = plan["text"]
-            self.on_event("resolve", {"reply": True})
-            self.history.append((question, res.answer))
+            self.on_event("resolve", {"reply": True, "clarify": bool(plan.get("clarify"))})
+            if not plan.get("clarify"):  # a "which bill?" question leaves no context the next turn could refer to
+                self.history.append((question, res.answer))
             return res
         notes = plan["notes"]
         if notes:
@@ -563,6 +641,10 @@ class Pipeline:
             t = time.time()
             self._step(f"evaluate{rnd}")
             scores, enough, missing, more = self.evaluate(q, cands, res)
+            if self.trust_top:  # the retriever's best clause is rarely tangential: a grader score of 1 is promoted to 2
+                top = next((i for i, c in enumerate(cands) if c["kind"] in CLAUSE_KINDS), None)
+                if top is not None and scores.get(top) == 1:
+                    scores[top] = 2
             res.seconds[f"evaluate{rnd}"] = time.time() - t
             graded += [Evidence(c, scores.get(i, 0)) for i, c in enumerate(cands)]
             self.on_event("evaluate", {"kept": sum(1 for e in graded if e.score >= 2), "enough": enough, "missing": missing})
@@ -572,6 +654,9 @@ class Pipeline:
             res.queries += more
         res.enough, res.queries, res.graded = enough, [q] + res.queries, graded
         res.evidence = self.build_evidence(graded)
+        if self.follow_refs and res.evidence:
+            res.followed = self.follow_section_refs(res.evidence, q)
+            res.evidence += res.followed
         if local and self.direct_local and res.evidence and all(e.section is None for e in res.evidence):
             t = time.time()
             self._step("bill_sections")

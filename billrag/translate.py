@@ -24,11 +24,16 @@ import unicodedata
 SCRIPTS = {"si": ("Sinhala", re.compile(r"[඀-෿]")), "ta": ("Tamil", re.compile(r"[஀-௿]"))}
 CITE = re.compile(r"[\[【]\d{3}/\d{4}(?:\s*§\s*\d+(?:\([^)\]]*\))*)?[\]】]")
 
+# Translate literally. "Use the English name of an Act when you know it" made the model swap "terrorism act" for the real-world
+# "Prevention of Terrorism Act" (not in the corpus), and the answer then hedged about an Act the user never named (3 of 4 live
+# runs; 0 of 4 with this wording, same correct penalty in all 8).
+LITERAL = ("Translate literally: use the ordinary English words for what the question says (for example 'terrorism act', not a "
+           "specific real-world Act's title). Only write the exact title of an Act or body when the question itself clearly "
+           "names it and you are sure of the title.")
 NO_ADD = ("Copy any bill number, year or section number exactly as the user wrote it, and NEVER add a bill number, year or "
           "bill name that the question does not contain.")
 TO_EN = ("Translate the user's question about a Sri Lankan bill into clear English for a search engine. " + NO_ADD + " "
-         "Use the English name of an Act or body when you know it. "
-         "Reply with ONLY the English question.")
+         + LITERAL + " Reply with ONLY the English question.")
 FROM_EN = ("Translate the answer below into {lang}. Keep every citation in square brackets (like [NNN/YYYY §N]) EXACTLY as "
            "written, in ASCII brackets, untranslated. Keep bill titles, Act names and numbers in English, followed by a {lang} "
            "gloss in parentheses only if it helps. Do not add, remove or soften any statement. Reply with ONLY the translation.")
@@ -47,7 +52,7 @@ MODES = ("off", "script", "ai")
 
 DETECT_AND_TRANSLATE = ("You prepare questions about Sri Lankan bills for an English-only search engine. Identify the language of "
                         "the user's question (romanised Sinhala/Tamil counts as Sinhala/Tamil). If it is not English, translate it "
-                        "into clear English. " + NO_ADD + " Use the English name of an Act or body when you know it. Reply with ONLY JSON: "
+                        "into clear English. " + NO_ADD + " " + LITERAL + " Reply with ONLY JSON: "
                         '{"language": "<English name of the language>", "english": "<the question in English>"}')
 
 
@@ -145,10 +150,23 @@ def garbled(text):
     return None
 
 
+# The glossary block ("OFFICIAL SINHALA TERMS ...\n- Board = ...") is prompt material. A model sometimes copies it into its
+# answer (live: appended, translated, to a Sinhala answer), so an answer that contains the header or 2+ "English term = term"
+# list lines is rejected like any other unusable output.
+TERM_ECHO = re.compile(r"^\s*[-\u2022*]\s*[A-Za-z][A-Za-z ()'/,-]{1,60}?\s=\s+\S", re.M)
+TERM_HEADER = re.compile(r"OFFICIAL\s+\w+\s+(TERMS|NAMES)|OFFICIAL\s+\w+\s+TEXT\s*\(", re.I)
+
+
+def echoes_prompt(out):
+    return bool(TERM_HEADER.search(out or "")) or len(TERM_ECHO.findall(out or "")) >= 2
+
+
 def check_script(out, code):
     """Script-level checks for text that should be in language `code`: -> None or the reason it is unusable."""
     if not out or LEAKED.match(out):
         return "empty or reasoning text"
+    if echoes_prompt(out):
+        return "copied the glossary / reference list from the prompt"
     if code in SCRIPTS and detect(out) != code:
         return f"not in {language_name(code)} script"
     if code in SCRIPTS:

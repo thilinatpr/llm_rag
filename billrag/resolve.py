@@ -100,10 +100,49 @@ def all_bills(store):
     return [dict(r) for r in store.db.execute("SELECT key, title, year FROM bills")]
 
 
-def resolve_question(store, question):
-    """-> {"action": "answer", "question": str, "notes": [str]} | {"action": "reply", "text": str}"""
+# "Tell me about the new bill" names no bill: every word is filler. Searching on it matches whatever the word "new" happens to
+# hit (live: a 2018 "New Villages ... Authority" bill, then "nothing newer exists"), so a first question like that is asked
+# back instead. In a running chat the same words refer to the previous turn, and the condense step resolves them.
+VAGUE_FILLER = set("""tell me about the this that these those new newest latest recent recently proposed upcoming current a an
+bill bills act acts law laws draft drafts legislation please explain describe summarise summarize summary overview what is are
+whats give info information details detail say more can you could i want to know show kindly regarding on of it its any
+there which one ones introduced published presented parliament sri lanka lankan in""".split())
+VAGUE_NEEDS = re.compile(r"\b(bills?|acts?|laws?|drafts?|legislation)\b", re.I)
+
+
+def is_vague_bill_question(question):
+    """True if the question refers to "the new/this bill" but contains no title word, bill number or year."""
+    if re.search(r"\d", question) or not VAGUE_NEEDS.search(question):
+        return False
+    words = re.findall(r"[a-z]+", question.lower())
+    return bool(words) and all(w in VAGUE_FILLER for w in words)
+
+
+def which_bill_reply(store, limit=5):
+    """Ask which bill is meant and list the newest ones (one line per title, GS + Bill versions together)."""
+    lines, seen = [], set()
+    for b in store.find_bills(limit=60):
+        t = base_title(b["title"]).lower()
+        if t in seen:
+            continue
+        seen.add(t)
+        lines.append(f"- {base_title(b['title'])} ({b['key']}, {b['date'][:10]})")
+        if len(lines) == limit:
+            break
+    text = ("I can't tell which bill you mean: the question doesn't name one, and many bills are new. Please give the bill's "
+            "title or number")
+    if lines:
+        return text + ". The most recent bills in the index are:\n" + "\n".join(lines)
+    return text + " (for example 078/2026)."
+
+
+def resolve_question(store, question, has_history=False):
+    """-> {"action": "answer", "question": str, "notes": [str]} | {"action": "reply", "text": str}
+    has_history: the chat already has earlier turns, so "this bill" may refer to one of them (not asked back)."""
     if is_smalltalk(question):
         return {"action": "reply", "text": smalltalk_reply(question)}
+    if not has_history and is_vague_bill_question(question):
+        return {"action": "reply", "text": which_bill_reply(store), "clarify": True}
     unknown = [t for t in candidate_tokens(question) if not known_in_corpus(store, t)]
     if not unknown:
         return {"action": "answer", "question": question, "notes": []}
