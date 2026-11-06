@@ -28,6 +28,9 @@ ACRONYMS = {"PC": "Procurement Committee", "BEC": "Bid Evaluation Committee", "A
             "SBD": "Standard Bidding Document", "CAPC": "Cabinet Appointed Procurement Committee"}
 
 
+HIERARCHICAL = {"PG2024", "PM2024", "PG2006", "PM2006"}  # documents whose refs nest by dots
+
+
 def connect(path=DB):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(str(path), check_same_thread=False)
@@ -159,6 +162,23 @@ class Index:
             sql += " AND heading=?"; args.append(heading)
         rows = [dict(r) for r in self.db.execute(sql + " ORDER BY ord", args)]
         return rows
+
+    def chain(self, doc, ref):
+        """Headings of the clauses above `ref` in the same document, outermost first: [("2", "Governance"), ("2.3", "...")].
+        Refs are dotted numbers (2.3.1 sits under 2.3 under 2), so the parents come from the ref itself, no re-ingest needed.
+        A manual section whose own heading did not extract borrows the guideline clause's title (PM2024 -> PG2024)."""
+        if not ref or doc not in HIERARCHICAL or not re.fullmatch(r"\d{1,2}(?:\.\d{1,2}){1,3}", ref):
+            return []
+        parts = ref.split(".")
+        twin = "PG" + doc[2:] if doc.startswith("PM") else doc
+        out = []
+        for n in range(1, len(parts)):
+            up = ".".join(parts[:n])
+            row = self.db.execute("SELECT heading FROM chunks WHERE doc IN (?,?) AND ref=? AND heading!='' "
+                                  "ORDER BY doc=? DESC, ord LIMIT 1", (doc, twin, up, doc)).fetchone()
+            if row:
+                out.append((up, row["heading"]))
+        return out
 
     def supplements_for(self, doc, ref):
         """Supplement sections that change `ref` of `doc` (or one of its sub-clauses). PG2024 and PM2024 share numbering, so a

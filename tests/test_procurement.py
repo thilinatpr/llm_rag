@@ -403,3 +403,32 @@ def test_worker_reranker_names_itself_and_aligns_scores():
     with mock.patch("urllib.request.urlopen", fake):
         assert serve.WorkerReranker("https://x.test/r", "s").scores("q", ["a", "b"]) == [0.1, 0.9]
     assert seen["ua"] == serve.USER_AGENT and "urllib" not in seen["ua"].lower() and seen["secret"] == "s"
+
+
+def test_heading_chain_gives_the_parents_of_a_clause(tmp_path, monkeypatch):
+    idx = _index(tmp_path, monkeypatch)
+    assert idx.chain("PG2024", "1.2.1") == [("1.2", "Emergency Procurement")]  # chapter 1 has no clause of its own
+    assert idx.chain("PM2024", "1.2.1")[-1] == ("1.2", "Emergency Procurement")  # manual borrows the guideline titles
+    assert idx.chain("PG2024", "2.1") == []
+    assert idx.chain("FR", "135") == [] and idx.chain("PG2024", None) == []
+    units = pa.gather(idx, "covering approval")
+    u = next(u for u in units if u["label"] == "[PG2024 §1.2.1]")
+    assert "Under: " in pa.render([u]) and "1.2 Emergency Procurement" in pa.render([u])
+
+
+def test_xrefs_need_a_keyword_and_follow_lists():
+    assert pa.xrefs("PG2024", "set out in clause 1.2 and Section 2.1, costing Rs. 2.5 million") == [("PG2024", "1.2"), ("PG2024", "2.1")]
+    assert pa.xrefs("PG2024", "see Guidelines 4.2.1, 4.2.2 or 4.3") == [("PG2024", "4.2.1"), ("PG2024", "4.2.2"), ("PG2024", "4.3")]
+    assert pa.xrefs("PM2024", "as Guideline 3.1 requires; Section 3.2 below") == [("PG2024", "3.1"), ("PM2024", "3.2")]
+    assert pa.xrefs("PG2024", "an amount of 2.5 and 3.4 units") == []
+
+
+def test_pointed_at_clause_is_added_once_with_its_source(tmp_path, monkeypatch):
+    idx = _index(tmp_path, monkeypatch)
+    units = pa.gather(idx, "what is the purpose of procurement", k=1)
+    labels = [u["label"] for u in units]
+    assert "[PG2024 §1.1]" in labels and labels.count("[PG2024 §2.1]") == 1  # 1.1 says "Section 2.1"
+    ref = next(u for u in units if u["label"] == "[PG2024 §2.1]")
+    assert "Referred to by [PG2024 §1.1]" in ref["note"]
+    assert "[PG2024 §1.2]" in labels and "Referred to by" in next(u for u in units if u["label"] == "[PG2024 §1.2]")["note"]
+    assert pa.verify("Committees are appointed by the CAO [PG2024 §2.1].", units) == []

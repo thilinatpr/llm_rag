@@ -8,6 +8,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
+from .index import HIERARCHICAL
 from .sources import ALL, CURRENT, DOCS
 
 # "supplement N" is NOT an old-regime marker any more: NPC's Supplements 01-07 (2025-26) are current.
@@ -125,11 +126,27 @@ def window(parts, hit, max_chars):
     return text if len(text) <= max_chars + 200 else text[:max_chars] + " [...]"
 
 
+# "clause 2.3", "Guidelines 4.2.1 and 4.2.2", "paragraph 3.4": a pointer to another clause of the same document ("Guideline(s)"
+# in a Manual points at the Guidelines). A bare number such as "Rs. 2.5 million" has no keyword and is never followed.
+XREF = re.compile(r"\b(guidelines?|(?:sub-?)?clauses?|paragraphs?|paras?\.?|sections?)\s+"
+                  r"(\d{1,2}(?:\.\d{1,2}){1,3}(?:\s*(?:,|and|or|&)\s*\d{1,2}(?:\.\d{1,2}){1,3})*)", re.I)
+MAX_XREF = 3  # extra clauses added through pointers, in all
+
+
+def xrefs(doc, text):
+    """[(doc, ref)] that `text` points at, in reading order, without duplicates."""
+    out = []
+    for kw, refs in XREF.findall(text):
+        target = "PG" + doc[2:] if kw.lower().startswith("guideline") and doc.startswith("PM") else doc
+        out += [(target, r) for r in re.findall(r"\d{1,2}(?:\.\d{1,2}){1,3}", refs)]
+    return list(dict.fromkeys(out))
+
+
 def gather(index, question, k=8, docs=CURRENT, max_units=10, max_chars=3500, first=()):
     """Top-k chunks -> whole clauses/sections, each guideline clause paired with its manual section(s) and vice versa."""
     units, seen = [], set()
 
-    def add(doc, ref, heading=None, hit=None, cap=max_units):
+    def add(doc, ref, heading=None, hit=None, cap=max_units, max_chars=max_chars):
         by_heading = doc.startswith(("PM", "SUP")) or doc == "FRA"  # sections that share a number are separate units
         key = (doc, ref, heading if by_heading else None)
         if key in seen or len(units) >= cap:
@@ -140,7 +157,8 @@ def gather(index, question, k=8, docs=CURRENT, max_units=10, max_chars=3500, fir
         seen.add(key)
         note = next((p["note"] for p in parts if p.get("note")), None)
         units.append(dict(doc=doc, ref=ref, heading=parts[0]["heading"], chapter=parts[0]["chapter"],
-                          page=parts[0]["page"], label=label(doc, ref), text=window(parts, hit, max_chars), note=note))
+                          page=parts[0]["page"], label=label(doc, ref), text=window(parts, hit, max_chars), note=note,
+                          chain=index.chain(doc, ref)))
 
     for doc, ref in first:  # always shown, e.g. PG2024 §1.4 (the transition rule) for questions about the old regime
         add(doc, ref)
@@ -156,6 +174,22 @@ def gather(index, question, k=8, docs=CURRENT, max_units=10, max_chars=3500, fir
                 add(pair, m["ref"], m["heading"])
         else:
             add(pair, c["ref"])
+    # a clause that points at another clause ("as set out in 1.2 below") brings it along, one hop only, and not its own parent
+    # (that is shown as the heading chain). The added clause says who pointed at it.
+    added = 0
+    for u in list(units):
+        if u["doc"] not in HIERARCHICAL:
+            continue
+        for tdoc, tref in xrefs(u["doc"], u["text"]):
+            if added >= MAX_XREF:
+                break
+            if (tdoc, tref) == (u["doc"], u["ref"]) or (u["ref"] or "").startswith(tref + "."):
+                continue
+            n = len(units)
+            add(tdoc, tref, cap=max_units + 3 + MAX_XREF, max_chars=2000)
+            if len(units) > n:
+                units[-1]["note"] = " ".join(filter(None, [units[-1]["note"], f"Referred to by {u['label']}."]))
+                added += 1
     # a passage that points at a Financial Regulation ("attention should be paid to Financial Regulation (FR) 136 (3)") brings
     # that regulation along, so the answer can quote it instead of citing a passage it never saw
     # (and its amendment: an FR note or an FRA passage names "FR 108", whose current text is FRA 108)
@@ -180,6 +214,8 @@ def render(units):
     out = []
     for u in units:
         head = f"{u['label']} {u['heading']} ({u['chapter']}; p. {u['page']})" if u["chapter"] else f"{u['label']} {u['heading']}"
+        if u.get("chain"):  # where the clause sits: its text often only makes sense under its parents
+            head += "\nUnder: " + " > ".join(f"{r} {h}" for r, h in u["chain"])
         if u["doc"] == "FR" and u["note"]:  # "amended, see FRA ..." must be read before 3,000 characters of 1992 text
             out.append(head + "\n" + u["note"] + "\n" + u["text"])
         else:
