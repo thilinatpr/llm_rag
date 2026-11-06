@@ -6,7 +6,8 @@ Credentials from the environment (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACC
   python scripts/read_chatlogs.py [--since 2026-11-05] [--prefix chatlogs] [--out chatlogs.jsonl] [--show 20]
 
 Prints totals plus the turns most worth a look: answers that found nothing, evidence judged insufficient, errors and slow
-turns. With --out the raw records are also written as one JSONL file.
+turns, and CPU/memory per turn from the `usage` field (see billrag/resources.py). With --out the raw records are
+also written as one JSONL file.
 """
 import argparse
 import json
@@ -17,6 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from upload_r2 import client  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from billrag.resources import usage_summary  # noqa: E402
 
 
 def fetch(s3, bucket, prefix, since):
@@ -60,6 +64,8 @@ def main():
         return
     secs = sorted(r.get("seconds") or 0 for r in asks)
     print(f"seconds: median {secs[len(secs) // 2]:.1f}, p90 {secs[int(len(secs) * 0.9)]:.1f}, max {secs[-1]:.1f}")
+    for line in usage_summary(recs):
+        print(line)
 
     def show(title, rows):
         print(f"\n{title} ({len(rows)})")
