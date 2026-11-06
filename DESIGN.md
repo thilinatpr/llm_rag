@@ -1,7 +1,7 @@
 # DESIGN.md: citizenlk.com visual design
 
 Design rules for every page under citizenlk.com (homepage, Bill Assistant, Procurement Rules, later services).
-The owner approved the minimal homepage on 2026-11-06 (`site/index.html`, a standalone static page, not deployed yet);
+The owner approved the minimal homepage on 2026-11-06 (`site/index.html`, a standalone static page);
 this file records what it uses so other pages match it. Start new pages from that file.
 Applied to the live app on 2026-11-06: the chat page `public/index.html` ("Bill Assistant") and the sign-in page
 (`LOGIN_PAGE` in `src/auth.js`) use these tokens; keep them in step with this file.
