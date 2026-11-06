@@ -30,7 +30,7 @@ billrag/resolve.py        question grounding before retrieval: greetings, abbrev
 billrag/chatlog.py        one JSON record per chat turn -> R2 `chatlogs/` + local JSONL; `build_id()` = hash of the running code
 billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/ask/stream, /api/search, /api/stats, /healthz); secret-gated
 billrag/resources.py      CPU/memory: `snapshot()` for /api/stats, `Usage` per request -> log field `usage` (stdlib, /proc + cgroup)
-billrag/calltrace.py      one record per model / Workers AI call (step, model, seconds, tokens, retries) -> log field `calls`
+billrag/calltrace.py      one record per model / Workers AI call (step, model, seconds, tokens, cache hits, USD, retries) -> log fields `calls`, `cost`
 public/index.html         the chat page (static asset, served by the Worker behind the login; also used by local `serve`)
 src/worker.js             Worker entrypoint: login gate (auth.js) + forwards /api/* and /healthz to the container
 src/auth.js               email one-time-code login (KV codes/sessions, Cloudflare Email Service REST sender), routing
@@ -611,6 +611,40 @@ newest instance (event `newest_instance`). Fixes "appropriation bill" answering 
 Measured 2026-11-06 (deepseek-flash, thinking off, 24 recent questions): strict 0.79 -> 0.83, cited gold 0.88 -> 0.96 (noise level).
 **Production:** the container restores `index.sqlite` from R2, so metadata goes live only after `upload_r2.py --include-index`
 and a deploy. Not done: following `section_refs` inside the pipeline (the hostage penalty needs it), using tags in ranking.
+
+## Priorities, DeepSeek, cost log, clarification (2026-11-06)
+
+**Priority order set by the owner: honesty and accuracy first, then cost, speed last.** Choose models by strict/cited_gold and the
+`warned` rate, not latency.
+- **Eval:** `eval-answers --since-year 2025 --limit 0` is the 72 recent items; 24 items moved by +-0.12 between identical runs, so use
+  72 and an independent judge (`BILLRAG_JUDGE_MODEL/_BASE_URL/_API_KEY`). The report has a `warned` column (answers with an
+  unsupported citation or an unusable grader reply). Rows: `evals/answer_model_comparison/72.*.jsonl`.
+  | 72 recent items, judge deepseek-v4-pro | strict | cited gold | warned | avg s |
+  |---|---|---|---|---|
+  | deepseek-flash, grading thinking OFF, answer thinking ON (best) | 0.93-0.94 | 0.94-0.96 | 0.00-0.03 | 9-10 |
+  | gpt-oss-120b (production) | 0.89 | 0.92 | 0.00 | 15.8 |
+  | gpt-oss-20b | 0.83 | 0.88 | 0.00 | 12.3 |
+  | deepseek-flash, all thinking | 0.90 | 0.93 | 0.54 (grader JSON unusable) | 21.8 |
+  | deepseek-v4-pro, all thinking | 0.90 | 0.93 | 0.69 | 97.7 |
+  The judge is DeepSeek-family (possible bias for DeepSeek rows; cited_gold does not need a judge). NOT deployed: production still uses
+  Workers AI gpt-oss-120b. Using DeepSeek in production needs a Worker secret and `api.deepseek.com` reachable from the container.
+- **Config for that setup:** `BILLRAG_CHAT_PROVIDER=openai BILLRAG_CHAT_MODEL=deepseek-flash BILLRAG_CHAT_BASE_URL=https://api.deepseek.com
+  BILLRAG_CHAT_API_KEY=$DEEPSEEK_API_KEY BILLRAG_GRADE_EFFORT=off` (answer effort unset = thinking on). `off`/`none` sends
+  `thinking: {type: disabled}` + `reasoning: {enabled: false}` (llm._effort_body). Thinking-on grading makes the grader's JSON unusable
+  (pipeline falls back to retrieval order, warning) so keep grading off. `deepseek-v4-pro` costs ~98 s per question: not worth it.
+- **Cost per response:** `billrag/calltrace.py` prices every chat call (`usd` in `calls`) and `web.py` logs `cost` = {usd, in, out,
+  cache_hit, chat_calls, priced_calls, peak}; `ask -v` prints it; `read_chatlogs.py` prints total/median/p90 and cache-hit share.
+  Prices come from the DeepSeek docs (api-docs.deepseek.com/quick_start/pricing, read 2026-11-06, per 1M tokens, off-peak: flash
+  hit $0.003, miss $0.15, out $0.60; v4-pro $0.022 / $0.66 / $1.98); peak (01-04 and 06-10 UTC, Mon-Fri, not Chinese public holidays)
+  is x2, holidays are not known so those days are an upper bound. Reasoning tokens are inside `completion_tokens`. Override with
+  `BILLRAG_PRICES='{"model": {"hit":..,"miss":..,"out":..,"peak_factor":2}}'`. Workers AI models have no price here (tokens only,
+  `priced_calls` < `chat_calls`). `GET api.deepseek.com/user/balance` only has cent precision: use it to reconcile totals, not per answer.
+  Measured: one English question 2 calls, ~3k in / 0.4k out = $0.0013 at peak.
+- **"Which bill?"** (`resolve.is_vague_bill_question`): a FIRST question made only of filler words around bill/act/law ("tell me about
+  the new bill") is answered with the 5 newest bills instead of searching (live bug: it matched a 2018 "New Villages" bill and claimed
+  nothing newer exists). Inside a running chat it is not asked back (the condense step resolves "this bill"). Works for Sinhala too.
+- **Prompt echo guard** (`translate.echoes_prompt`, in `check_script`): an answer containing the glossary block header or 2+ "English
+  term = term" lines is rejected like any unusable output (retry / fallback). Live bug: the translated path appended the glossary list.
 
 ## Product priority: recent bills
 

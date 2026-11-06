@@ -581,11 +581,12 @@ class Pipeline:
     def _ask(self, question: str, local=None) -> Result:
         """local: (lang code, the user's original question) for a non-English question; see answer_direct."""
         res = Result(question=question, answer="")
-        plan = resolve.resolve_question(self.store, question)
+        plan = resolve.resolve_question(self.store, question, has_history=bool(self.history))
         if plan["action"] == "reply":  # greeting, or an abbreviation we cannot ground: no search, no model call
             res.answer = plan["text"]
-            self.on_event("resolve", {"reply": True})
-            self.history.append((question, res.answer))
+            self.on_event("resolve", {"reply": True, "clarify": bool(plan.get("clarify"))})
+            if not plan.get("clarify"):  # a "which bill?" question leaves no context the next turn could refer to
+                self.history.append((question, res.answer))
             return res
         notes = plan["notes"]
         if notes:

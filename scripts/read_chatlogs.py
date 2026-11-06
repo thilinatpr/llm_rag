@@ -67,6 +67,12 @@ def main():
     print(f"seconds: median {secs[len(secs) // 2]:.1f}, p90 {secs[int(len(secs) * 0.9)]:.1f}, max {secs[-1]:.1f}")
     for line in usage_summary(recs):
         print(line)
+    costs = [r["cost"] for r in asks if r.get("cost") and r["cost"].get("priced_calls")]
+    if costs:  # model spend per answer (priced models only; see billrag/calltrace.py PRICES)
+        usd = sorted(c["usd"] for c in costs)
+        print(f"model cost ({len(costs)} answers with a priced model): total ${sum(usd):.4f}, median ${usd[len(usd) // 2]:.5f}, "
+              f"p90 ${usd[int(len(usd) * 0.9)]:.5f}, max ${usd[-1]:.5f}; cache-hit input "
+              f"{sum(c['cache_hit'] for c in costs) / max(1, sum(c['in'] for c in costs)):.0%}")
     rows = calltrace.summary([r.get("calls") for r in asks])
     if rows:
         print(f"\nmodel/API calls by step ({sum(1 for r in asks if r.get('calls'))} questions with call records; s = seconds per call)")

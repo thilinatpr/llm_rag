@@ -1886,3 +1886,55 @@ def test_pipeline_follows_section_refs(tmp_path):
     got = p.follow_section_refs(ev)
     assert [(e.key, e.section) for e in got] == [("069/2026", 1)] and got[0].score == 2
     assert p.follow_section_refs(ev + got) == []          # already in the evidence: nothing added
+
+
+# ---- prompt echo guard, "which bill?" clarification, per-call cost
+def test_glossary_block_echo_is_rejected():
+    from billrag import translate
+    leak = ("පිළිතුර.\n\nනිල සිංහල පද (මෙම වචන භාවිත කරන්න):\n- Board = මණ්ඩලය\n- Minister = අමාත්‍යවරයා\n"
+            "- appointed members = පත් කළ සාමාජිකයන්")
+    assert "glossary" in translate.check_script(leak, "si")
+    assert translate.echoes_prompt("OFFICIAL SINHALA TERMS used in the bills' own Sinhala text")
+    assert not translate.echoes_prompt("- මණ්ඩලය [077/2026 §4]\n- ගාස්තුව 5 = 6")   # one list-like line is not an echo
+
+
+def test_vague_bill_question_is_asked_back(tmp_path):
+    from billrag import resolve
+    s = _meta_store(tmp_path)
+    for q in ("Tell me about the new bill.", "tell me about this bill", "What is the newest act?", "Explain this act please"):
+        assert resolve.is_vague_bill_question(q), q
+    for q in ("Tell me about the new Cricket bill", "Tell me about the 2026 bill", "Summarise 078/2026", "hello",
+              "How long can a person be detained?"):
+        assert not resolve.is_vague_bill_question(q), q
+    r = resolve.resolve_question(s, "Tell me about the new bill")
+    assert r["action"] == "reply" and r.get("clarify") and "069/2026" in r["text"] and "Customs" in r["text"]
+    # inside a running chat "this bill" refers to an earlier turn: not asked back
+    assert resolve.resolve_question(s, "Tell me about this bill", has_history=True)["action"] == "answer"
+
+
+def test_call_cost_uses_cache_and_peak_rates():
+    from datetime import datetime, timezone
+    from billrag import calltrace
+    off, peak = datetime(2026, 11, 7, 12, tzinfo=timezone.utc), datetime(2026, 11, 6, 8, tzinfo=timezone.utc)  # Sat / Fri 08:00 UTC
+    assert not calltrace.is_peak(off) and calltrace.is_peak(peak)
+    usd = calltrace.cost_usd("deepseek-flash", 1_000_000, 1_000_000, 500_000, when=off)
+    assert abs(usd - (500_000 * 0.003 + 500_000 * 0.15 + 1_000_000 * 0.6) / 1e6) < 1e-9
+    assert abs(calltrace.cost_usd("deepseek-flash", 1000, 100, 0, when=peak)
+               - 2 * calltrace.cost_usd("deepseek-flash", 1000, 100, 0, when=off)) < 1e-12
+    assert calltrace.cost_usd("@cf/openai/gpt-oss-20b", 1000, 100) is None        # unpriced model: tokens only
+    assert calltrace.usage_fields({"prompt_tokens": 40, "completion_tokens": 61, "prompt_cache_hit_tokens": 8,
+                                   "completion_tokens_details": {"reasoning_tokens": 56}}) == \
+        {"in": 40, "out": 61, "cache_hit": 8, "reasoning": 56}
+    with calltrace.tracing() as tr:
+        calltrace.record("chat", 1.0, model="deepseek-flash", **{"in": 100, "out": 10, "cache_hit": 0})
+        calltrace.record("chat", 1.0, model="@cf/x", **{"in": 100, "out": 10})
+    c = calltrace.cost_summary(tr.calls)
+    assert c["chat_calls"] == 2 and c["priced_calls"] == 1 and c["usd"] > 0 and c["in"] == 200
+
+
+def test_cost_prices_can_be_overridden_by_env(monkeypatch):
+    from datetime import datetime, timezone
+    from billrag import calltrace
+    monkeypatch.setenv("BILLRAG_PRICES", '{"my-model": {"hit": 0.1, "miss": 1.0, "out": 2.0}}')
+    off = datetime(2026, 11, 7, 12, tzinfo=timezone.utc)
+    assert abs(calltrace.cost_usd("my-model", 1_000_000, 500_000, 0, when=off) - 2.0) < 1e-9

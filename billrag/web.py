@@ -73,7 +73,7 @@ class App:
         with self.lock, Timer() as tm, Usage() as use, calltrace.tracing() as trace:
             out = [fmt_passage(c, 700) for c in self._retriever().search(query, k)]
         log_turn(type="search", question=query, k=k, results=len(out), seconds=tm.seconds, usage=use.fields(),
-                 calls=trace.calls or None)
+                 calls=trace.calls or None, cost=calltrace.cost_summary(trace.calls))
         return out
 
     def stats(self):
@@ -155,7 +155,8 @@ class App:
                     raise
                 finally:
                     log_turn(type="ask", session=session, turn=turn, question=question, answer=text, error=err,
-                             seconds=round(time.time() - tm.t, 2), usage=use.fields(), calls=trace.calls or None, **meta)
+                             seconds=round(time.time() - tm.t, 2), usage=use.fields(), calls=trace.calls or None,
+                             cost=calltrace.cost_summary(trace.calls), **meta)
 
 
 def answer_mode(body):

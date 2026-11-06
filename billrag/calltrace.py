@@ -11,11 +11,54 @@ names the current step with `step(...)`. The records go into the chat log as `ca
 Not thread-local on purpose: `App` runs one turn at a time (its lock), and the embedder calls from worker threads.
 Outside a trace every function here is a no-op.
 """
+import json
+import os
 import threading
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 
 _active = None
+
+# USD per 1M tokens: cache-hit input, cache-miss input, output (reasoning tokens are part of the output count).
+# DeepSeek, https://api-docs.deepseek.com/quick_start/pricing (read 2026-11-06). Those are the OFF-PEAK prices; peak hours
+# (01:00-04:00 and 06:00-10:00 UTC, Mon-Fri, not Chinese public holidays) cost double (`PEAK_FACTOR`). Prices change: override or
+# extend with BILLRAG_PRICES='{"model-id": {"hit": 0.003, "miss": 0.15, "out": 0.6, "peak_factor": 2}}'. A model without a
+# price is logged with tokens only (no `usd`): Workers AI models are billed differently and are not priced here.
+PRICES = {
+    "deepseek-flash": {"hit": 0.003, "miss": 0.15, "out": 0.6, "peak_factor": 2.0},
+    "deepseek-v4-flash": {"hit": 0.003, "miss": 0.15, "out": 0.6, "peak_factor": 2.0},   # retired name, billed as Flash
+    "deepseek-v4-pro": {"hit": 0.022, "miss": 0.66, "out": 1.98, "peak_factor": 2.0},
+}
+PEAK_UTC = ((1, 4), (6, 10))  # [start, end) hours, Monday-Friday
+
+
+def prices(model):
+    extra = {}
+    if os.environ.get("BILLRAG_PRICES"):
+        try:
+            extra = json.loads(os.environ["BILLRAG_PRICES"])
+        except ValueError:
+            extra = {}
+    return extra.get(model) or PRICES.get(model)
+
+
+def is_peak(when=None):
+    """DeepSeek peak window by UTC clock. Chinese public holidays (off-peak all day) are not known here, so on those days
+    the logged cost is an upper bound."""
+    d = when or datetime.now(timezone.utc)
+    return d.weekday() < 5 and any(a <= d.hour < b for a, b in PEAK_UTC)
+
+
+def cost_usd(model, tokens_in, tokens_out, cache_hit=None, when=None):
+    """-> USD for one call, or None when the model has no price. `cache_hit` of None = no cache information: all input is billed
+    as a cache miss (the upper bound)."""
+    pr = prices(model)
+    if pr is None or not isinstance(tokens_in, int) or not isinstance(tokens_out, int):
+        return None
+    hit = min(cache_hit or 0, tokens_in)
+    usd = (hit * pr["hit"] + (tokens_in - hit) * pr["miss"] + tokens_out * pr["out"]) / 1e6
+    return usd * (pr.get("peak_factor", 1.0) if is_peak(when) else 1.0)
 
 
 class Trace:
@@ -25,6 +68,10 @@ class Trace:
     def add(self, kind, seconds, fields):
         rec = {"kind": kind, "step": self.step, "s": round(seconds, 2), "at": round(time.time() - self.t0 - seconds, 2)}
         rec.update({k: v for k, v in fields.items() if v is not None})
+        if kind == "chat":
+            usd = cost_usd(rec.get("model"), rec.get("in"), rec.get("out"), rec.get("cache_hit"))
+            if usd is not None:
+                rec["usd"] = round(usd, 7)
         with self.lock:
             self.calls.append(rec)
 
@@ -56,10 +103,26 @@ def usage_fields(usage):
     get = (lambda o, k: o.get(k) if isinstance(o, dict) else getattr(o, k, None))
     out = {"in": get(usage, "prompt_tokens") or get(usage, "input_tokens"),
            "out": get(usage, "completion_tokens") or get(usage, "output_tokens")}
+    hit = get(usage, "prompt_cache_hit_tokens")   # DeepSeek; OpenAI-style: prompt_tokens_details.cached_tokens
+    if hit is None:
+        hit = get(get(usage, "prompt_tokens_details"), "cached_tokens") if get(usage, "prompt_tokens_details") is not None else None
+    out["cache_hit"] = hit
     details = get(usage, "completion_tokens_details")
     if details is not None:
         out["reasoning"] = get(details, "reasoning_tokens")
     return {k: v for k, v in out.items() if isinstance(v, int)}
+
+
+def cost_summary(calls):
+    """One turn's model spend from its `calls`: {"usd", "in", "out", "cache_hit", "chat_calls", "priced_calls", "peak"}.
+    `usd` counts only priced calls (priced_calls < chat_calls means part of the turn ran on an unpriced model, e.g. Workers AI)."""
+    chat = [c for c in calls or [] if c.get("kind") == "chat"]
+    if not chat:
+        return None
+    priced = [c for c in chat if "usd" in c]
+    return {"usd": round(sum(c["usd"] for c in priced), 6), "in": sum(c.get("in") or 0 for c in chat),
+            "out": sum(c.get("out") or 0 for c in chat), "cache_hit": sum(c.get("cache_hit") or 0 for c in chat),
+            "chat_calls": len(chat), "priced_calls": len(priced), "peak": is_peak()}
 
 
 def summary(records):

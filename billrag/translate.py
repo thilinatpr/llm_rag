@@ -145,10 +145,23 @@ def garbled(text):
     return None
 
 
+# The glossary block ("OFFICIAL SINHALA TERMS ...\n- Board = ...") is prompt material. A model sometimes copies it into its
+# answer (live: appended, translated, to a Sinhala answer), so an answer that contains the header or 2+ "English term = term"
+# list lines is rejected like any other unusable output.
+TERM_ECHO = re.compile(r"^\s*[-\u2022*]\s*[A-Za-z][A-Za-z ()'/,-]{1,60}?\s=\s+\S", re.M)
+TERM_HEADER = re.compile(r"OFFICIAL\s+\w+\s+(TERMS|NAMES)|OFFICIAL\s+\w+\s+TEXT\s*\(", re.I)
+
+
+def echoes_prompt(out):
+    return bool(TERM_HEADER.search(out or "")) or len(TERM_ECHO.findall(out or "")) >= 2
+
+
 def check_script(out, code):
     """Script-level checks for text that should be in language `code`: -> None or the reason it is unusable."""
     if not out or LEAKED.match(out):
         return "empty or reasoning text"
+    if echoes_prompt(out):
+        return "copied the glossary / reference list from the prompt"
     if code in SCRIPTS and detect(out) != code:
         return f"not in {language_name(code)} script"
     if code in SCRIPTS:

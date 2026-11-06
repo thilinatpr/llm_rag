@@ -188,7 +188,10 @@ def main(argv=None):
                         translator=translate.make_translator(s, llm))
 
         def answer(q):
-            r = pipe.ask(q)
+            from . import calltrace
+            with calltrace.tracing() as trace:
+                r = pipe.ask(q)
+            cost = calltrace.cost_summary(trace.calls)
             out = r.answer
             if r.warnings:
                 out += "\n\n\u26a0 " + "\n\u26a0 ".join(r.warnings)
@@ -196,6 +199,11 @@ def main(argv=None):
                 out += "\n\nSources:\n" + "\n".join("  " + s for s in r.sources())
             if a.verbose:
                 out += f"\n\n({r.llm_calls} LLM calls; " + ", ".join(f"{k} {v:.1f}s" for k, v in r.seconds.items()) + ")"
+                if cost:
+                    out += (f"\n(tokens in {cost['in']} (cache hit {cost['cache_hit']}), out {cost['out']}; "
+                            + (f"cost ${cost['usd']:.5f} for {cost['priced_calls']}/{cost['chat_calls']} calls"
+                               f"{' at PEAK rates' if cost['peak'] else ''}" if cost["priced_calls"] else "no price known for this model")
+                            + ")")
             return out
     if a.cmd == "ask":
         print(answer(a.question))
