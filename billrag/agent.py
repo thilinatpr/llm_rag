@@ -3,6 +3,7 @@ import difflib
 import json
 import re
 
+from . import meta
 from .store import normalize_ref
 
 SYSTEM = """You are an expert assistant that helps people scrutinize and understand bills of the Parliament of Sri Lanka.
@@ -27,13 +28,25 @@ Answer rules:
 - If the tools do not contain the answer, say so plainly. Never invent clauses, numbers, or section references.
 - Be concise and structured: a short answer first, then supporting detail. You explain; you do not give legal advice."""
 
+def _meta_line(store, key):
+    m = meta.meta(store, key)
+    if not m:
+        return []
+    tags = ", ".join(json.loads(m["tags"])) if m.get("tags") else "none"
+    amends = f"; amends: {m['amends']}" if m.get("amends") else ""
+    return [f"Type: {m['bill_type']} ({m['stage']}){amends}; newest instance of its title: {'yes' if m['is_latest'] else 'no'}; tags: {tags}"]
+
+
 TOOLS = [
     {"name": "find_bills",
      "description": "Find WHICH bills are about a topic, purpose, body or Act (searches bill-level text: titles, long titles, "
                     "auto-generated summaries, outlines). Returns one entry per bill. Use for 'which law ...' questions.",
      "parameters": {"type": "object", "properties": {
          "query": {"type": "string"}, "year": {"type": "integer", "description": "Only bills from this year"},
-         "top_k": {"type": "integer", "description": "Bills to return (default 6, max 12)"}},
+         "bill_type": {"type": "string", "enum": ["appropriation", "incorporation", "amendment", "new"], "description": "Only this kind of bill"},
+         "tag": {"type": "string", "description": "Only bills with this topic tag (e.g. 'taxation', 'criminal law')"},
+         "latest_only": {"type": "boolean", "description": "Only the newest instance of a recurring title (e.g. this year's Appropriation Bill)"},
+"top_k": {"type": "integer", "description": "Bills to return (default 6, max 12)"}},
          "required": ["query"]}},
     {"name": "search_bills",
      "description": "Hybrid (keyword + semantic) search over bill CLAUSES and schedules. Returns cited passages. Use specific wording; "
@@ -42,6 +55,9 @@ TOOLS = [
          "query": {"type": "string"},
          "year": {"type": "integer", "description": "Only bills from this year"},
          "bill": {"type": "string", "description": "Restrict to one bill, e.g. '077/2026'"},
+         "bill_type": {"type": "string", "enum": ["appropriation", "incorporation", "amendment", "new"], "description": "Only this kind of bill"},
+         "tag": {"type": "string", "description": "Only bills with this topic tag (e.g. 'taxation', 'criminal law')"},
+         "latest_only": {"type": "boolean", "description": "Only the newest instance of a recurring title (e.g. this year's Appropriation Bill)"},
          "top_k": {"type": "integer", "description": "Passages to return (default 8, max 15)"}},
          "required": ["query"]}},
     {"name": "list_bills",
@@ -99,8 +115,11 @@ class Agent:
             raise ValueError(f"No bill matches {ref!r}; use 'NNN/YYYY' or list_bills")
         raise ValueError("Ambiguous; specify one of: " + ", ".join(f"{h['key']} ({h['title']})" for h in hits))
 
-    def tool_find_bills(self, query, year=None, top_k=6):
-        res = self.retriever.search(query, k=min(int(top_k or 6), 12), year=year, kinds=("overview",))
+    def tool_find_bills(self, query, year=None, top_k=6, bill_type=None, tag=None, latest_only=False):
+        keys = meta.keys_where(self.store, bill_type=bill_type, tag=tag, latest_only=latest_only)
+        if keys is not None and not keys:
+            return "No bills match those filters."
+        res = self.retriever.search(query, k=min(int(top_k or 6), 12), year=year, keys=keys, kinds=("overview",))
         out = []
         for c in res:
             b = self.store.bill(c["bill_key"])
@@ -111,8 +130,10 @@ class Agent:
                        + (f"\n  Other versions: {', '.join(vers)}" if vers else ""))
         return "\n\n".join(out) or "No matching bills."
 
-    def tool_search_bills(self, query, year=None, bill=None, top_k=8):
-        keys = [self.resolve(bill)] if bill else None
+    def tool_search_bills(self, query, year=None, bill=None, top_k=8, bill_type=None, tag=None, latest_only=False):
+        keys = [self.resolve(bill)] if bill else meta.keys_where(self.store, bill_type=bill_type, tag=tag, latest_only=latest_only)
+        if keys is not None and not keys:
+            return "No bills match those filters."
         res = self.retriever.search(query, k=min(int(top_k or 8), 15), year=year, keys=keys, kinds=("section", "schedule"))
         return "\n\n".join(fmt_passage(c) for c in res) or "No matching passages."
 
@@ -127,6 +148,7 @@ class Agent:
         vers = [v for v in self.store.versions(b["title_norm"], b["date"]) if v["key"] != key]
         lines = [f"{key} | {b['title']} | {b['kind']} | {b['date'][:10]} | {b['n_pages']} pages, {b['n_sections']} sections",
                  f"Long title: {b['long_title']}",
+                 *_meta_line(self.store, key),
                  f"Presented by: {b['presented_by']} on {b['presented_on']}; Gazette: {b['gazette_date']}"]
         if b.get("summary"):
             lines.append(f"Summary (auto-generated; verify against the clauses): {b['summary']}")
@@ -143,7 +165,9 @@ class Agent:
         s = self.store.section_text(key, section)
         if not s:
             raise ValueError(f"{key} has no section {section}")
-        return f"[{key} §{section}, p.{s['page']}]{' ' + s['part'] if s['part'] else ''}\n{s['text']}"
+        refs = meta.refs_from(self.store, key, section)
+        note = f"\n(This section refers to: {', '.join('§' + str(n) for n in refs)}; use get_section to read them.)" if refs else ""
+        return f"[{key} §{section}, p.{s['page']}]{' ' + s['part'] if s['part'] else ''}\n{s['text']}{note}"
 
     def tool_diff_bills(self, bill_a, bill_b, section=None):
         a, b = self.resolve(bill_a), self.resolve(bill_b)

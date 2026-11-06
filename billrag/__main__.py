@@ -17,7 +17,14 @@ def main(argv=None):
     p = sub.add_parser("ingest-si", help="link the official Sinhala text (Unicode PDFs, 2025+) to the English sections")
     p.add_argument("--since-year", type=int, default=2025)
     sub.add_parser("glossary", help="mine English <-> official Sinhala titles and defined terms from the linked sections")
+    sub.add_parser("meta", help="(re)build bill metadata: families, newest instance, bill type, section cross-references")
+    p = sub.add_parser("tag", help="LLM topic tags per bill (newest first, resumable); run `meta` first")
+    p.add_argument("--since-year", type=int, default=2024)
+    p.add_argument("--limit", type=int, default=0)
     p = sub.add_parser("search", help="retrieval only (no LLM / API key needed)")
+    p.add_argument("--type", dest="bill_type", choices=["appropriation", "incorporation", "amendment", "new"])
+    p.add_argument("--tag")
+    p.add_argument("--latest", action="store_true", help="only the newest instance of a recurring title")
     p.add_argument("query")
     p.add_argument("-k", type=int, default=6)
     p.add_argument("--year", type=int)
@@ -78,6 +85,15 @@ def main(argv=None):
         from . import glossary
         print(glossary.build(store))
         return 0
+    if a.cmd == "meta":
+        from . import meta
+        print(meta.build(store))
+        return 0
+    if a.cmd == "tag":
+        from . import meta
+        from .llm import make_llm
+        print({"tagged": meta.tag_bills(store, make_llm(s), a.since_year, effort=s.grade_effort, limit=a.limit)})
+        return 0
     if a.cmd == "stats":
         print(store.stats())
         return 0
@@ -99,7 +115,8 @@ def main(argv=None):
         return 0
     if a.cmd == "search":
         r = Retriever(store, embedder, s.vectors_path, None, s.rerank, make_reranker(s))
-        keys = [normalize_ref(a.bill)] if a.bill else None
+        from . import meta
+        keys = [normalize_ref(a.bill)] if a.bill else meta.keys_where(store, bill_type=a.bill_type, tag=a.tag, latest_only=a.latest)
         for c in r.search(a.query, a.k, a.year, keys):
             print(fmt_passage(c, 500), "\n")
         return 0

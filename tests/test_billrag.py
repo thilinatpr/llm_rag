@@ -1821,3 +1821,55 @@ def test_answer_mode_from_the_page_sets_only_the_answer_effort(tmp_path, monkeyp
 def test_tests_never_upload_chat_logs_to_r2():
     from billrag import chatlog
     assert chatlog._r2() is None and not os.environ.get("R2_BUCKET")
+
+
+# ---- bill metadata (billrag/meta.py): families, newest instance, bill type, cross-references
+def _meta_store(tmp_path):
+    from billrag.store import Store
+    s = Store(tmp_path / "m.sqlite")
+    rows = [("010/2025", 2025, "2025-01-05T00:00:00.000Z", "Appropriation", "appropriation", "Bill"),
+            ("069/2026", 2026, "2026-09-01T00:00:00.000Z", "Appropriation", "appropriation", "Bill"),
+            ("070/2026", 2026, "2026-09-22T00:00:00.000Z", "Customs (Amendment) - GS", "customs amendment", "GS"),
+            ("078/2026", 2026, "2026-10-06T00:00:00.000Z", "Customs (Amendment) - Bill", "customs amendment", "Bill")]
+    for key, y, d, title, tn, kind in rows:
+        s.replace_bill({"key": key, "bill_no": 1, "year": y, "date": d, "title": title, "title_norm": tn, "kind": kind,
+                        "long_title": None, "presented_by": None, "presented_on": None, "gazette_date": None,
+                        "printed_no": None, "n_pages": 1, "n_sections": 2, "pdf_path": None, "summary": None},
+                       [{"kind": "section", "section_no": 1, "text": "1. Short title.", "ctx": "short title"},
+                        {"kind": "section", "section_no": 2, "text": "2. A penalty under section 1 and sections 2 and 1 applies.",
+                         "ctx": "penalty"}])
+    s.commit()
+    return s
+
+
+def test_meta_families_latest_type_and_refs(tmp_path):
+    from billrag import meta
+    s = _meta_store(tmp_path)
+    out = meta.build(s)
+    assert out["bills"] == 4
+    assert meta.meta(s, "010/2025")["is_latest"] == 0 and meta.meta(s, "069/2026")["is_latest"] == 1
+    assert meta.meta(s, "010/2025")["bill_type"] == "appropriation"
+    gs, bill = meta.meta(s, "070/2026"), meta.meta(s, "078/2026")
+    assert gs["family"] == bill["family"] and gs["stage"] == "gazette" and bill["stage"] == "bill"
+    assert bill["bill_type"] == "amendment" and bill["amends"] == "customs"
+    assert meta.keys_where(s, bill_type="appropriation", latest_only=True) == ["069/2026"]
+    assert meta.keys_where(s) is None
+    assert meta.latest_family_keys(s, "appropriation") == ["069/2026"]
+    assert meta.refs_from(s, "069/2026", 2) == [1]          # "section 1", "sections 2 and 1": own section 2 is ignored
+    assert meta.refs_in("sections 4 and 5, 7", 4, {4, 5, 7}) == {5, 7}
+
+
+def test_meta_tags_survive_rebuild(tmp_path):
+    from billrag import meta
+    s = _meta_store(tmp_path)
+    meta.build(s)
+    s.db.execute("UPDATE bill_meta SET tags=? WHERE bill_key='069/2026'", ('["public finance"]',))
+    meta.build(s)
+    assert meta.keys_where(s, tag="public finance") == ["069/2026"]
+
+
+def test_meta_missing_tables_are_tolerated(tmp_path):
+    from billrag import meta
+    from billrag.store import Store
+    s = Store(tmp_path / "old.sqlite")
+    assert meta.keys_where(s, latest_only=True) is None and meta.meta(s, "x") is None and meta.refs_from(s, "x", 1) == []

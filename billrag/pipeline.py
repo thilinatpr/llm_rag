@@ -14,7 +14,7 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 
-from . import calltrace, glossary as gloss, parse_si, resolve, translate
+from . import calltrace, glossary as gloss, meta, parse_si, resolve, translate
 from .store import normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
@@ -178,7 +178,7 @@ STRICT = "\n\nReply with the JSON object ONLY - no analysis, no explanation, no 
 class Pipeline:
     def __init__(self, store, retriever, llm, k_clauses=14, k_bills=4, extra_rounds=1, keep_max=8,
                  evidence_chars=14000, on_event=None, grade_effort=None, answer_effort=None, answer_llm=None,
-                 translate_mode="script", translator=None, direct_local=True, official_chars=2500):
+                 translate_mode="script", translator=None, direct_local=True, official_chars=2500, prefer_latest=True):
         self.store, self.retriever, self.llm = store, retriever, llm
         self.k_clauses, self.k_bills, self.extra_rounds = k_clauses, k_bills, extra_rounds
         self.keep_max, self.evidence_chars = keep_max, evidence_chars
@@ -189,6 +189,7 @@ class Pipeline:
         self.translator = translator or translate.Translator(llm, grade_effort)  # may use a dedicated translation model
         self.direct_local = direct_local  # Sinhala question + official Sinhala text -> answer in Sinhala in one step
         self.official_chars = official_chars
+        self.prefer_latest = prefer_latest  # no year in the question -> newest instance of a recurring title
         self._last_cut = False  # did the last _llm reply hit max_tokens
         self._glossary = None  # loaded on first non-English question
         self.history = []
@@ -262,7 +263,30 @@ class Pipeline:
             if c["id"] not in seen_ids:
                 seen_ids.add(c["id"])
                 fresh.append(c)
+        if self.prefer_latest and not keys and not re.search(r"\b(19|20)\d{2}\b", query):
+            fresh = self.newest_instance(query, fresh, seen_ids)
         return fresh
+
+    def newest_instance(self, query, cands, seen_ids):
+        """Titles recur ("Appropriation", "Finance (Amendment)"); when the question gives no year and the hits come from an
+        older instance, swap them for the same search inside the newest instance (billrag.meta)."""
+        old, groups = set(), {}
+        for c in cands:
+            m = meta.meta(self.store, c["bill_key"])
+            if m and not m["is_latest"]:
+                old.add(c["id"]); groups[m["title_norm"]] = m
+        if not old:
+            return cands
+        out = [c for c in cands if c["id"] not in old]
+        for tn in groups:
+            keys = meta.latest_family_keys(self.store, tn)
+            added = [c for c in self.retriever.search(query, k=3, keys=keys, kinds=CLAUSE_KINDS + ("overview",))
+                     if c["id"] not in seen_ids]
+            for c in added:
+                seen_ids.add(c["id"])
+            out += added
+            self.on_event("newest_instance", {"title": tn, "keys": keys, "dropped": len(old), "added": len(added)})
+        return out
 
     def evaluate(self, question, cands, res):
         """Grade candidates; returns (scores by candidate index, enough, missing, queries)."""

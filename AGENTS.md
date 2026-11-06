@@ -25,6 +25,7 @@ billrag/agent.py          (`--mode agent`) tool-calling loop: search_bills, list
 billrag/llm.py            Anthropic + OpenAI-compatible chat adapters, OpenAI/sentence-transformers embedders
 billrag/enrich.py         optional: dense vectors (`embed`) and LLM bill summaries (`summarize`)
 billrag/config.py         all settings come from BILLRAG_* env vars (documented at the top of the file)
+billrag/meta.py           bill metadata outside `chunks`: families, newest instance, bill type, tags, section cross-references (`meta`, `tag`)
 billrag/resolve.py        question grounding before retrieval: greetings, abbreviation (PTSA) -> bill title matching, "closest bills"
 billrag/chatlog.py        one JSON record per chat turn -> R2 `chatlogs/` + local JSONL; `build_id()` = hash of the running code
 billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/ask/stream, /api/search, /api/stats, /healthz); secret-gated
@@ -595,6 +596,21 @@ Mined deterministically (no model) from the linked section pairs; lives outside 
   018/2026 §16: grader variance).
 - **Production:** the container restores `index.sqlite` from R2, so the glossary only goes live after `upload_r2.py --include-index`
   (old code ignores the table; the code without the table just has no hints).
+
+## Bill metadata (`billrag/meta.py`, tables `bill_meta`, `section_refs`)
+
+Side tables like the glossary: `chunks`, `fingerprint()` and `vectors.npz` are untouched, old code ignores them, and code without
+them degrades to no metadata (every read tolerates missing tables). `python -m billrag meta` (~seconds, deterministic; `ingest` runs it
+too) fills `family` (GS + Bill versions of one title within 300 days), `stage`, `bill_type` (appropriation | incorporation | amendment |
+new), `amends`, `is_latest` (newest instance of a recurring title; all "Appropriation ..." titles count as one) and `section_refs`
+(11,361 "section N" pointers inside a bill). `python -m billrag tag --since-year 2024` adds LLM topic tags (fixed taxonomy
+`meta.TAGS`, resumable, survive a rebuild); NOT run yet. Filters: `billrag search --type/--tag/--latest`, agent tools `find_bills` /
+`search_bills` (`bill_type`, `tag`, `latest_only`), `get_section` lists the sections it refers to. `Pipeline(prefer_latest=True)`:
+a question with no year and no bill number whose hits come from an older instance of a recurring title is searched again inside the
+newest instance (event `newest_instance`). Fixes "appropriation bill" answering about 568/2025 instead of 069/2026 + 080/2026.
+Measured 2026-11-06 (deepseek-flash, thinking off, 24 recent questions): strict 0.79 -> 0.83, cited gold 0.88 -> 0.96 (noise level).
+**Production:** the container restores `index.sqlite` from R2, so metadata goes live only after `upload_r2.py --include-index`
+and a deploy. Not done: following `section_refs` inside the pipeline (the hostage penalty needs it), using tags in ranking.
 
 ## Product priority: recent bills
 
