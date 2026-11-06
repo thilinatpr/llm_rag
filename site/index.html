@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>citizenlk.com</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Abhaya+Libre:wght@700;800&family=Yaldevi:wght@400;500&family=Catamaran:wght@500&display=swap">
+<style>
+/* Layout: one centred column on a lime-washed wall. Wordmark, one ask box, two services. A petal border is the only ornament. */
+:root{
+  --lime:#F4F2EE; --ink:#1C1511; --muted:#6E6157; --line:#DAD3CA; --box:#FFFFFF;
+  --sindoor:#A3241B; --ochre:#E0A93A;
+  --f-display:"Abhaya Libre","Noto Serif Sinhala",Georgia,serif;
+  --f-body:"Yaldevi","Noto Sans Sinhala","Segoe UI",system-ui,sans-serif;
+  --f-ta:"Catamaran","Noto Sans Tamil",sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --lime:#15100D; --ink:#F1E6D6; --muted:#B3A391; --line:#3A2D24; --box:#211913; --sindoor:#E0675A; --ochre:#E8B550; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --lime:#15100D; --ink:#F1E6D6; --muted:#B3A391; --line:#3A2D24; --box:#211913; --sindoor:#E0675A; --ochre:#E8B550; color-scheme:dark}
+
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--lime);color:var(--ink);font:400 1rem/1.6 var(--f-body);display:flex;flex-direction:column}
+a{color:inherit}
+a:focus-visible{outline:2px solid var(--ochre);outline-offset:3px;border-radius:4px}
+
+.petals{height:14px;flex:none;background:radial-gradient(circle at 50% 0,var(--sindoor) 0 7px,transparent 7.5px) 0 0/20px 14px repeat-x}
+
+main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:28px;
+  padding-block:48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1{margin:0;font:800 clamp(3.4rem,11vw,6.2rem)/1 var(--f-display);letter-spacing:-.01em}
+h1 b{color:var(--sindoor);font-weight:800}
+.tri{margin:-14px 0 0;color:var(--muted);font-size:1rem;display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.tri .ta{font-family:var(--f-ta)}
+
+.ask{width:min(100%,560px);display:flex;align-items:center;gap:12px;padding:15px 22px;border:1px solid var(--line);border-radius:999px;
+  background:var(--box);text-decoration:none;color:var(--muted);text-align:left;transition:box-shadow .2s,border-color .2s}
+.ask:hover{border-color:var(--ochre);box-shadow:0 2px 10px -2px color-mix(in srgb,var(--ink) 18%,transparent)}
+.ask svg{flex:none;color:var(--sindoor)}
+.ask span{flex:1;min-width:0}
+
+.links{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.links a,.links span{padding:9px 18px;border-radius:6px;background:color-mix(in srgb,var(--ink) 6%,var(--lime));font-size:.94rem;text-decoration:none}
+.links a:hover{outline:1px solid var(--line)}
+.links span{color:var(--muted)}
+
+footer{flex:none;border-top:1px solid var(--line);font-size:.84rem;color:var(--muted)}
+footer div{display:flex;justify-content:space-between;gap:8px 24px;flex-wrap:wrap;padding-block:16px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+</style>
+</head>
+<body>
+
+<div class="petals" aria-hidden="true"></div>
+
+<main>
+  <h1>citizen<b>lk</b></h1>
+  <p class="tri"><span lang="si">පුරවැසි</span><span aria-hidden="true">·</span><span class="ta" lang="ta">குடிமக்கள்</span><span aria-hidden="true">·</span><span>Citizen</span></p>
+
+  <a class="ask" href="https://gov-rag-llm.patprathnayaka.workers.dev" target="_blank" rel="noopener">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+    <span>Ask about any bill in Parliament</span>
+  </a>
+
+  <div class="links">
+    <a href="https://gov-rag-llm.patprathnayaka.workers.dev" target="_blank" rel="noopener">Bill Assistant</a>
+    <span>Procurement Rules · soon</span>
+  </div>
+</main>
+
+<footer>
+  <div>
+    <span>Sri Lanka</span>
+    <span>Answers cite the official text · Not legal advice · Not a government service</span>
+  </div>
+</footer>
+</body>
+</html>
