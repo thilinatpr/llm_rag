@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Procurement Rules - citizenlk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Abhaya+Libre:wght@700;800&family=Yaldevi:wght@400;500&family=Catamaran:wght@500&display=swap">
+<style>
+  /* citizenlk look: see DESIGN.md (tokens, type, petal border) */
+  :root { color-scheme: light dark;
+    --lime:#F4F2EE; --ink:#1C1511; --muted:#6E6157; --line:#DAD3CA; --box:#FFFFFF; --sindoor:#A3241B; --ochre:#E0A93A; --err:#B3261E;
+    --f-display:"Abhaya Libre","Noto Serif Sinhala",Georgia,serif;
+    --f-body:"Yaldevi","Noto Sans Sinhala","Noto Sans Tamil","Segoe UI",system-ui,sans-serif;
+    --gl:max(16px,env(safe-area-inset-left,0px)); --gr:max(16px,env(safe-area-inset-right,0px));
+    --padl:max(var(--gl),calc((100% - 700px) / 2)); --padr:max(var(--gr),calc((100% - 700px) / 2)); }
+  @media (prefers-color-scheme: dark) { :root {
+    --lime:#15100D; --ink:#F1E6D6; --muted:#B3A391; --line:#3A2D24; --box:#211913; --sindoor:#E0675A; --ochre:#E8B550; --err:#FF8A80; } }
+  * { box-sizing: border-box; }
+  html, body { height:100%; }
+  body { margin:0; font:400 1rem/1.65 var(--f-body); background:var(--lime); color:var(--ink); display:flex; flex-direction:column; }
+  a { color:inherit; }
+  :focus-visible { outline:2px solid var(--ochre); outline-offset:3px; border-radius:4px; }
+  button, select, input { font:inherit; color:inherit; }
+  .petals { height:14px; flex:none; background:radial-gradient(circle at 50% 0,var(--sindoor) 0 7px,transparent 7.5px) 0 0/20px 14px repeat-x; }
+  header { flex:none; display:flex; align-items:center; justify-content:space-between; gap:8px 16px; flex-wrap:wrap;
+    padding:12px var(--gr) 12px var(--gl); border-bottom:1px solid var(--line); }
+  .left { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  .mark { font:800 1.35rem/1 var(--f-display); text-decoration:none; letter-spacing:-.01em; }
+  .mark b { color:var(--sindoor); font-weight:800; }
+  .name { color:var(--muted); font-size:.95rem; }
+  .hint { color:var(--muted); font-size:.85rem; }
+  .right { display:flex; align-items:center; gap:8px 14px; flex-wrap:wrap; font-size:.88rem; color:var(--muted); }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:999px; padding:2px; background:var(--box); }
+  .seg button { border:0; background:transparent; padding:4px 12px; border-radius:999px; cursor:pointer; color:var(--muted); }
+  .seg button[aria-pressed="true"] { background:var(--ink); color:var(--lime); }
+  .link { background:none; border:0; padding:0; cursor:pointer; color:var(--muted); text-decoration:underline; text-underline-offset:3px; }
+  .link:hover { color:var(--ink); }
+  .opt { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+  #log { flex:1; min-height:0; overflow-y:auto; padding:28px var(--padr) 12px var(--padl); display:flex; flex-direction:column; gap:24px; }
+  .msg { overflow-wrap:anywhere; white-space:pre-wrap; }
+  .me { align-self:flex-end; max-width:85%; background:color-mix(in srgb,var(--ink) 6%,var(--lime)); padding:10px 16px; border-radius:14px 14px 4px 14px; }
+  .bot { align-self:stretch; min-width:0; }
+  .err { color:var(--err); }
+  .cite { font-size:.84em; color:var(--sindoor); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .start { text-align:center; display:flex; flex-direction:column; align-items:center; gap:18px; padding:8vh 0 0; white-space:normal; }
+  .start h2 { font:800 clamp(2rem,6vw,2.8rem)/1.05 var(--f-display); margin:0; }
+  .start p { margin:0; color:var(--muted); max-width:34em; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+  .chip { padding:8px 16px; border:0; border-radius:6px; background:color-mix(in srgb,var(--ink) 6%,var(--lime)); cursor:pointer; font-size:.92rem; text-align:left; }
+  .chip:hover { outline:1px solid var(--line); }
+  form { flex:none; padding:12px var(--padr) 6px var(--padl); }
+  .pill { display:flex; align-items:center; gap:10px; padding:6px 6px 6px 20px; border:1px solid var(--line); border-radius:999px; background:var(--box); transition:border-color .2s, box-shadow .2s; }
+  .pill:hover, .pill:focus-within { border-color:var(--ochre); box-shadow:0 2px 10px -2px color-mix(in srgb,var(--ink) 18%,transparent); }
+  .pill svg { flex:none; color:var(--sindoor); }
+  input[type=text] { flex:1; min-width:0; border:0; background:transparent; padding:9px 0; outline:none; }
+  input[type=text]::placeholder { color:var(--muted); }
+  #send { flex:none; border:0; border-radius:999px; padding:9px 20px; background:var(--ink); color:var(--lime); cursor:pointer; font-weight:500; }
+  #send:hover { background:var(--sindoor); color:#fff; }
+  #send:disabled { opacity:.5; cursor:default; }
+  .note { flex:none; text-align:center; font-size:.78rem; color:var(--muted); margin:0; padding:0 var(--gr) calc(14px + env(safe-area-inset-bottom,0px)) var(--gl); }
+  .md { white-space:normal; }
+  .md p { margin:0 0 .6em; } .md > :last-child { margin-bottom:0; }
+  .md ul, .md ol { margin:0 0 .6em; padding-left:1.4em; } .md li { margin:.15em 0; }
+  .md h3, .md h4 { font:700 1.15rem/1.25 var(--f-display); margin:.4em 0 .3em; }
+  .md code { font:.9em ui-monospace,monospace; background:var(--line); padding:0 .25em; border-radius:4px; }
+  .md table { border-collapse:collapse; margin:0 0 .6em; font-size:.92rem; display:block; overflow-x:auto; } .md td, .md th { border:1px solid var(--line); padding:3px 6px; text-align:left; }
+  .md hr { border:0; border-top:1px solid var(--line); margin:.6em 0; }
+  .step { color:var(--muted); }
+  .draft::after { content:" \25cf"; color:var(--sindoor); animation:blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+  @media (prefers-reduced-motion: reduce) { .draft::after { animation:none; } }
+</style></head>
+<body>
+<div class="petals" aria-hidden="true"></div>
+<header>
+  <div class="left"><a class="mark" href="/">citizen<b>lk</b></a><span class="name">Procurement Rules</span><small id="status" class="hint" title="Server status"></small></div>
+  <div class="right">
+    <button class="link" id="new" type="button">New chat</button>
+    <button class="link" id="out" type="button" title="Sign out">Sign out</button>
+  </div>
+</header>
+<div id="log"></div>
+<form id="f"><div class="pill">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+  <input type="text" id="q" placeholder="Ask in English" aria-label="Your question" autocomplete="off" autofocus>
+  <button id="send">Ask</button></div></form>
+<p class="note">Answers cite the official text · Some Treasury circulars are unofficial translations · Not legal advice · Not a government service</p>
+<script>
+const log = document.getElementById('log'), q = document.getElementById('q'),
+      btn = document.getElementById('send');
+document.getElementById('out').onclick = async () => {
+  try { await fetch('/logout', {method: 'POST'}); } catch (e) {}
+  location.href = '/login';
+};
+const EXAMPLES = ['What is the authority limit of a Ministry Procurement Committee for a works contract?',
+  'How long is the standstill period?', 'How many quotations are needed for shopping?'];
+function showStart() {
+  log.textContent = '';
+  const d = document.createElement('div'); d.className = 'start';
+  d.innerHTML = '<h2>Ask about procurement rules</h2><p>The 2024 Procurement Guidelines and Manual, NPC supplements and circulars, and the Financial Regulations. Every answer names the clause it comes from.</p>';
+  const chips = document.createElement('div'); chips.className = 'chips';
+  EXAMPLES.forEach((t) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'chip'; b.textContent = t;
+    b.onclick = () => { q.value = t; document.getElementById('f').requestSubmit(); }; chips.appendChild(b); });
+  d.appendChild(chips); log.appendChild(d);
+}
+showStart();
+document.getElementById('new').onclick = () => { showStart(); q.focus(); };
+function add(text, cls) {
+  const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
+  log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
+}
+// --- md:start --- Minimal, safe Markdown for model answers: everything is HTML-escaped first, then only a few
+// constructs become tags (paragraphs, -/*/1. lists, #-headings, tables, **bold**, *italic*, `code`). Leftover * marks are dropped.
+function renderMarkdown(src) {
+  const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const inline = (t) => {
+    const codes = [];
+    t = esc(t).replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
+    t = t.replace(/(\[(?:PG|PM|SUP|CG|CON|NPCC|PFC|PFMA|FRA?|LCC|ESM)[^\]\n]*\]|\u3010[^\u3011\n]*\u3011)/g, '<span class="cite">$1</span>')
+         .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>')
+         .replace(/__(?=\S)([\s\S]*?\S)__/g, '<strong>$1</strong>')
+         .replace(/(^|[^\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])/g, '$1<em>$2</em>')
+         .replace(/\*+/g, '');
+    return t.replace(/\u0000(\d+)\u0000/g, (_, i) => '<code>' + codes[+i] + '</code>');
+  };
+  const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+  const out = []; let para = [], list = null;
+  const flushPara = () => { if (para.length) out.push('<p>' + para.map(inline).join('<br>') + '</p>'); para = []; };
+  const flushList = () => { if (list) out.push('<' + list.tag + '>' + list.items.map((i) => '<li>' + inline(i) + '</li>').join('') + '</' + list.tag + '>'); list = null; };
+  const flush = () => { flushPara(); flushList(); };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i], t = line.trim(); let m;
+    if (!t) { flush(); continue; }
+    if (/^([-*_])(\s*\1){2,}$/.test(t)) { flush(); out.push('<hr>'); continue; }
+    if ((m = t.match(/^#{1,6}\s+(.*?)\s*#*$/))) { flush(); out.push('<h4>' + inline(m[1]) + '</h4>'); continue; }
+    if (t.startsWith('|') && i + 1 < lines.length && /^\|?\s*:?-{2,}/.test(lines[i + 1].trim())) {
+      flush(); const head = cells(t); i++;
+      const rows = []; while (i + 1 < lines.length && lines[i + 1].trim().startsWith('|')) rows.push(cells(lines[++i]));
+      out.push('<table><tr>' + head.map((c) => '<th>' + inline(c) + '</th>').join('') + '</tr>' +
+               rows.map((r) => '<tr>' + r.map((c) => '<td>' + inline(c) + '</td>').join('') + '</tr>').join('') + '</table>');
+      continue;
+    }
+    const ul = t.match(/^[-*+\u2022]\s+(.*)$/), ol = t.match(/^\d+[.)]\s+(.*)$/);
+    if (ul || ol) {
+      flushPara(); const tag = ul ? 'ul' : 'ol';
+      if (!list || list.tag !== tag) { flushList(); list = {tag, items: []}; }
+      list.items.push((ul || ol)[1]); continue;
+    }
+    if (list && /^\s+/.test(line)) { list.items[list.items.length - 1] += ' ' + t; continue; }
+    flushList(); para.push(t);
+  }
+  flush();
+  return out.join('');
+}
+// --- md:end ---
+const statusEl = document.getElementById('status');
+const setStatus = (t) => { statusEl.textContent = t; };
+// The page is static and loads instantly; this wakes the server (it sleeps when idle) while you read and type.
+(async function warm() {
+  setStatus('\u25cf waking server...');
+  for (let i = 0; i < 100; i++) {
+    try { const r = await fetch('/healthz', {cache: 'no-store'}); if (r.ok) { setStatus('\u25cf ready'); return; } } catch (e) {}
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  setStatus('\u25cf server not responding');
+})();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A dropped connection (TypeError) usually means the container was asleep and is starting; wait until it answers, then retry once.
+async function waitUntilUp(note) {
+  for (let i = 0; i < 60; i++) {
+    note.textContent = 'The server is waking up (this can take a minute or two)... ' + (i * 3) + 's';
+    try { const r = await fetch('/healthz', {cache: 'no-store'}); if (r.ok) return true; } catch (e) {}
+    await sleep(3000);
+  }
+  return false;
+}
+async function post(path, body, note) {
+  const send = () => fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  let r;
+  try { r = await send(); }
+  catch (e) {
+    if (!(await waitUntilUp(note))) throw new Error('The server did not come back after 3 minutes. Try again shortly.');
+    note.textContent = 'Server is up. Asking again...';
+    r = await send();
+  }
+  let j = {};
+  try { j = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(`${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
+  return j;
+}
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = q.value.trim(); if (!text) return;
+  q.value = ''; btn.disabled = true;
+  const st = log.querySelector('.start'); if (st) log.textContent = '';
+  add(text, 'me');
+  const wait = add('Reading the rules...', 'bot');
+  wait.classList.add('step');
+  try {
+    const j = await post('/api/ask', {question: text}, wait);
+    wait.classList.remove('step');
+    wait.innerHTML = renderMarkdown(j.answer); wait.classList.add('md');
+    if ((j.warnings || []).some((w) => w.includes('citations'))) {
+      const n = document.createElement('p'); n.className = 'step';
+      n.textContent = 'Check this answer against the source: one or more of its citations could not be verified.';
+      wait.appendChild(n);
+    }
+  } catch (err) { wait.classList.remove('step', 'md'); wait.textContent = 'Error: ' + err.message; wait.classList.add('err'); }
+  btn.disabled = false; q.focus(); log.scrollTop = log.scrollHeight;
+});
+</script></body></html>

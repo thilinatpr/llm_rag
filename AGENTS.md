@@ -77,7 +77,12 @@ One subdomain per service, each its own Worker (custom domains in that Worker's 
 |---|---|---|---|
 | `citizenlk.com`, `www.` (redirect) | `citizenlk-home` | `workers/home/wrangler.toml` | static `site/`, no login, no container |
 | `bills.citizenlk.com` | `gov-rag-llm` | `wrangler.toml` | Bill Assistant |
+| `procurement.citizenlk.com` | `citizenlk-procurement` | `workers/procurement/wrangler.toml` | Procurement Rules: `procurement/serve.py` in its own `lite` container |
 Deploy the homepage with `npx wrangler deploy -c workers/home/wrangler.toml`. Sessions are host-only cookies: each service has its own sign-in.
+Procurement Rules: `python -m procurement build`, then `npx wrangler deploy -c workers/procurement/wrangler.toml` from the main checkout
+(the index is baked into the image from `data/procurement/index.sqlite`). The container has no Cloudflare or R2 credentials: chat is DeepSeek,
+reranking calls the Worker's `/internal/rerank` (AI binding, `X-Proxy-Secret`). Without the reranker, 3 of 38 test questions missed the passage
+that answers them. Its logs are one JSON line per question in the container logs, not R2. Its allowlist and KV namespace are separate from Bill Assistant's.
 
 ```
 browser -> Worker `gov-rag-llm` (src/worker.js + auth.js)
