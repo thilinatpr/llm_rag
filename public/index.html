@@ -210,7 +210,7 @@ function renderCoverage() {
     const name = document.createElement('span'); name.textContent = b.title + ' \u00b7 ' + b.key;
     const when = document.createElement('span'); when.className = 'when'; when.textContent = fmtDate(b.date, false);
     btn.append(name, when);
-    btn.onclick = () => { q.value = 'Summarise the ' + b.title + ' bill ' + b.key; document.getElementById('f').requestSubmit(); };
+    btn.onclick = () => { q.value = 'Summarise ' + (/^the\s/i.test(b.title) ? '' : 'the ') + b.title + ' bill ' + b.key; document.getElementById('f').requestSubmit(); };
     li.appendChild(btn); ul.appendChild(li);
   });
   box.appendChild(ul); box.hidden = false;

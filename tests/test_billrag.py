@@ -2307,3 +2307,46 @@ def test_web_app_computes_coverage_once(tmp_path):
     first = app.coverage()
     st.db.execute("DELETE FROM bills")                          # a later change in the index is not re-read: computed once per process
     assert app.coverage() is first and first["bills"] == 1
+
+
+# ---------------------------------------------------------------- no "GS" jargon for users or the answering model
+def test_version_tag_uses_plain_words():
+    from billrag.pipeline import version_tag
+    gs = {"title": "The Goodness Foundation (Incorporation) - GS", "bill_kind": "GS", "date": "2026-10-16T00:00:00Z"}
+    bill = {"title": "Trusts (Amendment) - Bill", "bill_kind": "Bill", "date": "2026-10-21T00:00:00Z"}
+    act = {"title": "Appropriation", "bill_kind": "Other", "date": "2026-10-07T00:00:00Z"}
+    assert version_tag(gs) == "The Goodness Foundation (Incorporation) (Gazette text, 2026-10-16)"
+    assert version_tag(bill) == "Trusts (Amendment) (Bill, 2026-10-21)"
+    assert version_tag(act) == "Appropriation (2026-10-07)"
+
+
+def test_gazette_text_is_never_called_gs_in_sources_or_prompts(tmp_path):
+    class AllRelevant(ScriptLLM):
+        def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+            user = messages[-1]["content"]
+            if "CANDIDATES:" in user:
+                self.calls.append(user)
+                n = len(re.findall(r"^\[\d+\] ", user.split("CANDIDATES:")[1], re.M))
+                return Reply(json.dumps({"scores": [{"i": i, "s": 3} for i in range(1, n + 1)], "enough": True, "missing": "", "queries": []}))
+            return super().chat(system, messages, tools, max_tokens, effort)
+
+    st, llm = make_store(tmp_path), AllRelevant()
+    r = Pipeline(st, Retriever(st), llm).ask("How many days does the amendment allow?")
+    assert any(e.key == "081/2026" for e in r.evidence)               # the Gazette text (kind GS) was used
+    shown = "\n".join(r.sources() + llm.calls)
+    assert "Gazette text" in shown and "(GS" not in shown and "- GS" not in shown
+    assert any("(Gazette text, 2026-10-14)" in s for s in r.sources())
+
+
+def test_shown_text_rewrites_only_the_stored_overview_header():
+    from billrag.pipeline import shown_text
+    head = "Bill 084/2026 — The Goodness Foundation (Incorporation) - GS (GS, 2026-10-16). Summary (auto-generated): x - GS (GS, 2026-01-01)"
+    out = shown_text({"kind": "overview", "text": head})
+    assert out.startswith("Bill 084/2026 — The Goodness Foundation (Incorporation) (Gazette text, 2026-10-16). Summary")
+    assert out.endswith("x - GS (GS, 2026-01-01)")                      # only the header, once
+    assert shown_text({"kind": "overview", "text": "Bill 086/2026 — Trusts (Amendment) - Bill (Bill, 2026-10-21). S"}) \
+        == "Bill 086/2026 — Trusts (Amendment) (Bill, 2026-10-21). S"
+    assert shown_text({"kind": "overview", "text": "Bill 080/2026 — Appropriation (Other, 2026-10-07). S"}) \
+        == "Bill 080/2026 — Appropriation (2026-10-07). S"
+    clause = {"kind": "section", "text": "see — X - GS (GS, 2026-10-16) in the Act"}
+    assert shown_text(clause) == clause["text"]                          # clause text is never touched
