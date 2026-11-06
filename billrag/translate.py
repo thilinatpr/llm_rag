@@ -45,20 +45,33 @@ def detect(text):
 
 MODES = ("off", "script", "ai")
 
-DETECT_AND_TRANSLATE = ("You prepare questions about Sri Lankan bills for an English-only search engine. Identify the language of "
-                        "the user's question (romanised Sinhala/Tamil counts as Sinhala/Tamil). If it is not English, translate it "
-                        "into clear English. " + NO_ADD + " Use the English name of an Act or body when you know it. Reply with ONLY JSON: "
+DETECT_AND_TRANSLATE = ("You prepare questions about Sri Lankan bills for an English-only search engine. \"language\" is the "
+                        "language the user wants the answer in: the language of the question (romanised Sinhala/Tamil counts as "
+                        "Sinhala/Tamil), unless the user asks for the answer in another language (e.g. \"in Sinhala\", \"sinhalen\"); "
+                        "then that language. \"english\" is the question in clear English, without that request for a language. "
+                        + NO_ADD + " Use the English name of an Act or body when you know it. Reply with ONLY JSON: "
                         '{"language": "<English name of the language>", "english": "<the question in English>"}')
+
+
+def context_block(context):
+    """The previous turn, compact (its standalone English question + the bill titles it was about, no bill numbers: a number
+    in the translated question would restrict retrieval to that bill). Lets a short follow-up ("who manages it?") be read in
+    context without sending the whole conversation."""
+    if not context:
+        return ""
+    return ("\n\nPREVIOUS QUESTION in this conversation, only to understand what a short follow-up refers to (do not translate "
+            "it and do not add anything from it that the user did not ask): " + context)
 
 
 def language_name(code):
     return SCRIPTS[code][0] if code in SCRIPTS else code.title()
 
 
-def detect_ai(llm, text, effort=None):
+def detect_ai(llm, text, effort=None, context=""):
     """One model call -> (language code, English question). ('en', text) for English; None if the reply is unusable."""
+    content = text + context_block(context)
     for _ in range(2):  # reasoning models sometimes answer in prose: retry once, then give up
-        raw = llm.chat(DETECT_AND_TRANSLATE, [{"role": "user", "content": text}], max_tokens=500, effort=effort).text
+        raw = llm.chat(DETECT_AND_TRANSLATE, [{"role": "user", "content": content}], max_tokens=500, effort=effort).text
         dec = json.JSONDecoder()
         for m in re.finditer(r"\{", raw or ""):
             try:
@@ -259,21 +272,27 @@ class Translator:
         """(llm, effort) to try in order: the translation chat model (no reasoning effort) then the main model."""
         return ([(self.model_llm, None)] if self.model_llm else []) + [(self.llm, self.effort)]
 
-    def detect_ai(self, text):
-        for llm, effort in self._chats():
+    def detect_ai(self, text, context=""):
+        """Language detection + translation for anything not in Sinhala/Tamil script, mostly English and romanised Sinhala.
+        The main chat model goes first: on romanised Sinhala it is right where the translation model is not (2026-11-06,
+        "Kawuda inne manage karanna" = "who manages it": gpt-oss "Who is managing?" 6/6, Llama 3.3 "How to manage debt" 3/3).
+        The translation model (chosen for Sinhala-script text) is the fallback."""
+        for llm, effort in self._chats()[::-1]:
             self.calls += 1
             try:
-                got = detect_ai(llm, text, effort)
+                got = detect_ai(llm, text, effort, context)
             except Exception:  # noqa: BLE001 - a translation-model outage must not break the chat
                 got = None
             if got:
                 return got
         return None
 
-    def to_english(self, text, code, hints=()):
-        """hints: [(local phrase, official English name)] from the glossary for phrases in the question (chat models only)."""
+    def to_english(self, text, code, hints=(), context=""):
+        """hints: [(local phrase, official English name)] from the glossary for phrases in the question (chat models only).
+        context: the previous turn (see context_block), chat models only."""
         prompt = text + ("\n\nOFFICIAL ENGLISH NAMES of phrases in this question (use them exactly; reference only, do not "
                          "translate this list):\n" + "\n".join(f"- {loc} = {en}" for loc, en in hints) if hints else "")
+        prompt += context_block(context)
         if self.mt:
             self.calls += 1
             try:

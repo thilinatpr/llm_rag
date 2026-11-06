@@ -281,7 +281,7 @@ Worker-side errors (`upstream_failed`, with path, ms, error) go to Workers Logs 
 | Symptom | Cause / fix |
 |---|---|
 | "Failed to fetch" on a question | The container was asleep (cold start ~1-3 min incl. the 260 MB index download). The page now shows a "waking up" status and retries; the Worker returns a JSON 502 if the container does not answer. Check `upstream_failed` in Workers Logs and the rollout status. |
-| Page loads but answers look like the old behaviour | A rollout is still replacing the old instance; compare `build` in the logs (above). |
+| Page loads but answers look like the old behaviour | The container that is already serving a conversation keeps the OLD image after a deploy, even when the rollout says `completed` (it counts a fresh instance; seen 2026-11-06: rollout v16 completed 05:14, old build answered 05:16 and 05:17; after the 03:37 deploy the old build answered at 03:40 and the new one only after a 19-min gap). The new code serves once that container sleeps (15 min without questions). Compare `build` in the logs. The new page falls back to `/api/ask` meanwhile. |
 | Login code never arrives | `CF_EMAIL_TOKEN` secret missing/expired; sender domain not onboarded under Email -> Email Sending; address not in `ALLOWED_EMAILS`; 60 s resend cooldown; check the send response in Workers Logs. |
 | `/api/*` returns 403 | The request did not carry `X-Proxy-Secret`: `PROXY_SECRET` differs between Worker and container (re-`put` it, restart the container). |
 | `/api/*` returns 500 "Server is not configured" | `PROXY_SECRET` is not set on the Worker. |
@@ -447,6 +447,20 @@ pure MT model called via `/ai/run`: `M2M.translate_keeping_cites` translates lin
 punctuation-only pieces out of the model; `ai` language detection then still uses a chat model. Any failure (error, reasoning text,
 wrong script, changed citations) falls back to the main chat model (one firmer retry on the last model), and the warning lists each
 attempt's reason. `drop_invented_refs` removes any `NNN/YYYY` the translation added (a bill number restricts retrieval to that bill).
+
+**Follow-ups and romanised Sinhala (2026-11-06).** Live, "Kawuda inne manage karanna" ("who manages it?", after a question on the
+cricket bill) became "How should debts be managed?" and was answered from the debt-management bills. Two causes, two fixes:
+- The question was translated alone, before `condense` saw the conversation. Now the translate-in calls (`to_english`, `detect_ai`)
+  get a compact pointer to the previous turn (`Pipeline.context()`: its standalone English question + up to 3 bill **titles**, no
+  bill numbers, see `translate.context_block`), and `condense` also gets "BILLS THE LAST ANSWER WAS ABOUT: title (NNN/YYYY)" and the
+  user's own wording. `Pipeline.last_turn` holds it; the full history is not sent.
+- Llama 3.3 does not know romanised Sinhala ("Kawuda" = who): "How to manage debt" 3/3 without context, "How to manage them" /
+  "What is meant by management" with it. gpt-oss: "Who is managing?" 6/6, 0.7-2.7 s. So `Translator.detect_ai` (everything not in
+  Sinhala/Tamil script) now tries the main chat model first and the translation model second; Sinhala-script translate-in and all
+  translate-out stay on the translation model. `language` in that JSON now means the language the user wants the answer in: gpt-oss
+  first returned English for "Explain about 2026 cricket bill in sinhala" (2/3) and answered in English; with the prompt change 16/16
+  logged questions were labelled right. Replayed conversation (2 turns x 2 runs): both turns direct Sinhala, the follow-up searched
+  "Who is in charge of managing the Sri Lanka Cricket Bill" and answered Board of Directors / Chief Executive Officer.
 
 **Measured 2026-11-05** on the first live Sinhala question ("which criteria define a terrorist act in this new bill") and its
 712-char English answer, translated back to Sinhala and Tamil (n=1 question, 3 runs for the question; read the outputs, not just ok):

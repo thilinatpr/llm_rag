@@ -1821,3 +1821,57 @@ def test_answer_mode_from_the_page_sets_only_the_answer_effort(tmp_path, monkeyp
 def test_tests_never_upload_chat_logs_to_r2():
     from billrag import chatlog
     assert chatlog._r2() is None and not os.environ.get("R2_BUCKET")
+
+
+# ---------------------------------------------------------------- follow-ups: compact previous-turn context
+def test_follow_up_translation_and_condense_get_the_previous_turn_compactly(tmp_path):
+    st = make_store(tmp_path)
+
+    class Rec(TranslatingLLM):
+        def __init__(self):
+            super().__init__()
+            self.prompts = []
+
+        def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+            self.prompts.append((system, messages[-1]["content"]))
+            return super().chat(system, messages, tools, max_tokens, effort)
+
+    llm = Rec()
+    p = Pipeline(st, Retriever(st), llm)
+    p.ask("How many days does the amendment allow?")
+    assert p.last_turn["bills"] and p.last_turn["bills"][0][0] in ("086/2026", "085/2026")
+    title = p.last_turn["bills"][0][1]
+    llm.prompts.clear()
+    p.ask(SI_Q)  # a Sinhala follow-up
+    to_en = [u for s, u in llm.prompts if s.startswith("Translate the user's question")][0]
+    assert "PREVIOUS QUESTION" in to_en and title in to_en
+    assert not re.search(r"\d{3}/\d{4}", to_en.split("PREVIOUS QUESTION")[1])  # no bill number for the translator
+    cond = [u for s, u in llm.prompts if s == "You rewrite questions."][0]
+    assert "BILLS THE LAST ANSWER WAS ABOUT" in cond and p.last_turn["bills"][0][0] in cond
+    assert "IN THE USER'S OWN WORDS" in cond and SI_Q in cond
+
+
+def test_first_question_has_no_previous_turn_context(tmp_path):
+    st = make_store(tmp_path)
+    p = Pipeline(st, Retriever(st), TranslatingLLM())
+    assert p.context() == "" and translate.context_block("") == ""
+
+
+def test_detect_ai_tries_the_main_model_before_the_translation_model():
+    order = []
+
+    class M:
+        def __init__(self, name, reply):
+            self.name, self.reply = name, reply
+
+        def chat(self, system, messages, **kw):
+            order.append((self.name, messages[-1]["content"]))
+            return Reply(self.reply)
+
+    t = translate.Translator(M("main", '{"language": "Sinhala", "english": "Who is managing?"}'), "low",
+                             model_llm=M("translation", '{"language": "Sinhala", "english": "How to manage debt"}'))
+    assert t.detect_ai("Kawuda inne manage karanna", context="Explain the cricket bill") == ("si", "Who is managing?")
+    assert [n for n, _ in order] == ["main"] and "PREVIOUS QUESTION" in order[0][1]
+    order.clear()
+    t.llm = M("main", "no json at all")  # main model unusable -> the translation model still answers
+    assert t.detect_ai("Kawuda inne manage karanna") == ("si", "How to manage debt") and order[-1][0] == "translation"
