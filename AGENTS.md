@@ -84,7 +84,7 @@ Deploy the homepage with `npx wrangler deploy -c workers/home/wrangler.toml`. Se
 Procurement Rules: `python -m procurement build`, then `npx wrangler deploy -c workers/procurement/wrangler.toml` from the main checkout
 (the index is baked into the image from `data/procurement/index.sqlite`). The container has no Cloudflare or R2 credentials: chat is DeepSeek,
 reranking calls the Worker's `/internal/rerank` (AI binding, `X-Proxy-Secret`). Without the reranker, 3 of 38 test questions missed the passage
-that answers them. Its logs are one JSON line per question in the container logs, not R2. Its allowlist and KV namespace are separate from Bill Assistant's.
+that answers them. Its Worker writes one JSON record per question to R2 `procurement-logs/YYYY-MM-DD/` (`LOGS` binding, no container credentials; read with `scripts/read_chatlogs.py --prefix procurement-logs`; its per-step tables will be empty, the records are just question, answer, sources, warnings, ms) and the container also prints a line to its logs. Written 2026-11-06, NOT deployed. Its allowlist and KV namespace are separate from Bill Assistant's.
 
 ```
 browser -> Worker `gov-rag-llm` (src/worker.js + auth.js)
