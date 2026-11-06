@@ -34,6 +34,18 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
       with a different model than the one answering.
 - [ ] Grader drops (`kept_gold` < `cand_gold`) and boilerplate retrieval misses (identical "qualified auditor" / rules clauses in
       many incorporation bills): when several bills match a boilerplate question, show the candidate bills instead of guessing.
+- [ ] **Open-ended: bill-wise cached corpus** (investigation 2026-11-06, GitHub issue "Investigate a bill-wise cached corpus ..."; code in
+      `scripts/experiments/whole_bill/`). Put the WHOLE bill first in the answer prompt and the question LAST so DeepSeek's context cache
+      makes follow-ups cheap (99% hits from question 2: ~$0.0002 vs ~$0.0034, 2-3 s) and complete (sees cross-references itself).
+      With the right bill given: strict 0.96, cited gold 1.00, 0 warnings (72 recent items). The blocker is choosing the bill:
+      retrieval-only top-1 82% (top-2 96%); hybrid (retrieve+grade picks, whole bill answers) strict 0.90 vs pipeline 0.93, no gain,
+      slower on cache misses. Open: bill-focused chat mode (bill fixed by number/title or first answer), Sinhala prefix (official text
+      makes it ~3x longer), cache TTL under real traffic, fallback to the normal pipeline for multi-bill questions.
+- [ ] **List-recent-bills answer straight from the index** (no model call): questions like "what are the new 2026 bills?" currently get a
+      partial, honest "this is not a complete list" sample. A complete newest-first list (title, date, number; filter by year/type/tag)
+      from `bills` + `bill_meta` is deterministic, free and works in Sinhala via the translate-out step.
+- [ ] Backup chat provider (DeepSeek outage currently means no answers): fall back to Workers AI at request time (`chatconfig.js`,
+      `llm.py`), log which provider answered.
 - [ ] **One-command refresh for newly published bills** (the users' main use case): scrape -> `ingest` -> `summarize
       --since-year <current-1>` -> incremental `embed` -> `upload_r2.py --include-index`, ideally on a schedule. Each
       step is already resumable/incremental; they just aren't chained. Check how the scraper detects new/changed bills
