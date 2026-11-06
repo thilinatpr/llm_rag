@@ -274,12 +274,12 @@ dense search; ~100 MB right after warm-up; one shared `Retriever` serves all con
 `embed_all(..., dtype="float16")` writes it directly. Top-20 overlap with float32 was 99.8% on 400 test queries (top-1 identical).
 
 ## Deployed vs main (keep this honest)
-"Merged" is not "live". Live since 2026-11-05 17:35 UTC: build `055766b0` = `main` at `5b2cc47` (merge of PR #15: official
-Sinhala text for 2025+ bills), Worker version `0c092e80`, container app version 10 (image `sha256:598eec80...`), R2
-`bills/index.sqlite` with `local_sections` (143 bills / 3,456 sections; uploaded 17:32 UTC; the previous index is kept as
-`bills/index.pre-si.sqlite`, delete it once this has run for a while). Previous: build `af86776e` (`fca8f3a`), container v9
-(`sha256:f647ba62...`); before that `4cfb4b63` (v8). Rollback: redeploy `fca8f3a` (the old code ignores the new tables, so the
-index need not be restored). Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
+"Merged" is not "live". Live since 2026-11-06 01:43 UTC: build `e66dc009` = `main` at `1feaf92` (merge of PR #17: one-step
+Sinhala answer from the official text, garble check, `fix_quotes`, "this new bill" focus, cut-off detection, new log fields; plus
+docs PR #16), Worker version `835fa3df`, container app version 11 (image `sha256:dcd97cfc...`). Same R2 index as v10 (with
+`local_sections`; `bills/index.pre-si.sqlite` is still kept). Not yet confirmed from a chat log (no question asked since the
+rollout): look for `build: e66dc009` and the new `path` field. Previous: build `055766b0` (`5b2cc47`), Worker `0c092e80`, container
+v10 (`sha256:598eec80...`); before that `af86776e` (`fca8f3a`, v9). Rollback: redeploy `5b2cc47` (no index change needed). Anything merged to `main` later is NOT live until someone runs `wrangler deploy`. Check
 `git log origin/main` against the `build` seen in the latest chat log before telling the owner a change is live.
 
 ## Rules
