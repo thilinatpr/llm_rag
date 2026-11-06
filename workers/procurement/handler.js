@@ -23,21 +23,46 @@ async function rerank(request, env) {
   return json({ response: result.response });
 }
 
+// One R2 object per answered question: procurement-logs/YYYY-MM-DD/<HHMMSSmmm>-<id>.json. Written by the Worker through its
+// LOGS binding, so the container needs no storage credentials. Best-effort and after the reply (waitUntil): logging never
+// breaks or delays an answer. Records hold users' questions: private.
+export async function logAsk(env, ctx, { question, response, ms, status }) {
+  if (!env.LOGS) return;
+  const work = (async () => {
+    let body = null;
+    try { body = await response.json(); } catch { /* not JSON: log the status only */ }
+    const now = new Date();
+    const rec = { ts: now.toISOString(), question, status, ms, answer: body?.answer ?? null, sources: body?.sources ?? [],
+                  warnings: body?.warnings ?? [], error: body?.error ?? null };
+    const key = `procurement-logs/${now.toISOString().slice(0, 10)}/${now.toISOString().slice(11, 23).replace(/[:.]/g, "")}-${crypto.randomUUID().slice(0, 8)}.json`;
+    await env.LOGS.put(key, JSON.stringify(rec), { httpMetadata: { contentType: "application/json" } });
+  })().catch((e) => console.error(JSON.stringify({ event: "log_failed", error: String((e && e.message) || e) })));
+  ctx?.waitUntil ? ctx.waitUntil(work) : await work;
+}
+
 // startContainer(env) returns an object with fetch(request): the container's stub.
 export function createProcurementHandler(getStub) {
-  const upstream = async (request, env) => {
+  const upstream = async (request, env, ctx) => {
     const headers = new Headers(request.headers);
     headers.delete("Cookie");
     headers.set("X-Proxy-Secret", env.PROXY_SECRET);
     const started = Date.now();
+    const path = new URL(request.url).pathname;
+    const isAsk = request.method === "POST" && path === "/api/ask";
+    let question = "";
+    if (isAsk) question = String((await request.clone().json().catch(() => ({}))).question ?? "").slice(0, 1000);
+    let res;
     try {
-      return await getStub(env).fetch(new Request(request, { headers }));
+      res = await getStub(env).fetch(new Request(request, { headers }));
     } catch (e) {
-      const path = new URL(request.url).pathname;
       console.error(JSON.stringify({ event: "upstream_failed", path, ms: Date.now() - started, error: String((e && e.message) || e) }));
-      return json({ error: "The app server is not responding. If it was asleep, it is starting; try again in a minute." }, 502);
+      res = json({ error: "The app server is not responding. If it was asleep, it is starting; try again in a minute." }, 502);
     }
+    if (isAsk) await logAsk(env, ctx, { question, response: res.clone(), ms: Date.now() - started, status: res.status });
+    return res;
   };
-  const gated = createHandler({ upstream });
-  return async (request, env) => (new URL(request.url).pathname === "/internal/rerank" ? rerank(request, env) : gated(request, env));
+  return async (request, env, ctx) => {
+    if (new URL(request.url).pathname === "/internal/rerank") return rerank(request, env);
+    return createHandler({ upstream: (req, e) => upstream(req, e, ctx) })(request, env);
+  };
 }

@@ -82,3 +82,20 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
 - [ ] Compare translation models on real Sinhala/Tamil questions (Gemma 3 12B vs M2M100 vs gpt-oss) using the warning reasons in the chat logs.
 - [ ] Evaluate the translation layer: a small Sinhala/Tamil question set, back-translation check, which model translates best.
 - [ ] Conversation memory limits (the agent keeps full history; trim or summarise for long chats).
+
+## Procurement Rules (procurement.citizenlk.com)
+- [ ] **Owner's machine (needs `data/procurement/` PDFs):** `python -m procurement build`, then run the 38-question test set and
+      compare with and without the heading chain (`Under: ...`) and clause pointers (`Referred to by [..]`). Keep them only if
+      strict/cited results do not drop; add the four 2026-11-06 payment questions (project accountant, IPC) to the set.
+- [ ] Rebuild and deploy the container so the heading chain and pointers go live (`npx wrangler deploy -c workers/procurement/wrangler.toml`
+      from `main`; the Worker-only deploy of 2026-11-06 did not rebuild the image). Needs the owner's go-ahead.
+- [ ] Coverage gap: the index has nothing on a project accountant's authority over payments / certified IPCs (4 questions on
+      2026-11-06 all answered "not in the passages"). Find which documents cover contract administration and payment
+      certification (contract conditions, SBD, FIDIC-style general conditions, provincial council rules) and add them.
+- [ ] Follow-up questions: each question is standalone ("It's not conclusive" could not be answered). Condense follow-ups into a
+      standalone question as Bill Assistant does, or pass the last turn.
+- [ ] `read_chatlogs.py --prefix procurement-logs` counts these records as searches (no `type` field): add `type: "ask"` in
+      `workers/procurement/handler.js` `logAsk`.
+- [ ] Authority/scope tags per clause (who it applies to: PPC, MPC, provincial council, project; value band) so retrieval can filter.
+      Largest piece, least certain: only after the chain and pointers are measured.
+- [ ] Confirm the log records show the live Worker (`6b352ccd`): done, 4 records seen 2026-11-06. Update "Deployed vs main" when next deployed.
