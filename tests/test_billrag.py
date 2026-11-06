@@ -1873,3 +1873,16 @@ def test_meta_missing_tables_are_tolerated(tmp_path):
     from billrag.store import Store
     s = Store(tmp_path / "old.sqlite")
     assert meta.keys_where(s, latest_only=True) is None and meta.meta(s, "x") is None and meta.refs_from(s, "x", 1) == []
+
+
+def test_pipeline_follows_section_refs(tmp_path):
+    from billrag import meta
+    from billrag.pipeline import Evidence, Pipeline
+    s = _meta_store(tmp_path)
+    meta.build(s)
+    p = Pipeline(s, None, None)
+    ch = s.chunks_by_ids([r[0] for r in s.db.execute("SELECT id FROM chunks WHERE bill_key='069/2026' AND section_no=2")])
+    ev = [Evidence(next(iter(ch.values())), 3)]
+    got = p.follow_section_refs(ev)
+    assert [(e.key, e.section) for e in got] == [("069/2026", 1)] and got[0].score == 2
+    assert p.follow_section_refs(ev + got) == []          # already in the evidence: nothing added
