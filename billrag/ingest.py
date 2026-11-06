@@ -138,5 +138,7 @@ def ingest_si(data_dir: Path, db_path: Path, since_year=2025, lo=0.4, hi=2.5):
             store.commit()
             print(f"  {n}/{len(keys)}", file=sys.stderr)
     store.commit()
+    from . import glossary  # the glossary is mined from the linked sections: rebuild it with them
+    print(f"  glossary: {glossary.build(store)}", file=sys.stderr)
     for r in store.local_stats("si"):
         print(f"  {r['n']:4d} bills  {r['status']}" + (f"  ({r['kept']} sections linked)" if r["kept"] else ""), file=sys.stderr)

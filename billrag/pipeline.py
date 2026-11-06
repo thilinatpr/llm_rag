@@ -14,7 +14,7 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 
-from . import parse_si, resolve, translate
+from . import glossary as gloss, parse_si, resolve, translate
 from .store import normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
@@ -140,6 +140,8 @@ class Result:
     lang: str = "en"  # language of the user's question; the answer is in the same language when translation worked
     answer_en: str = ""  # the verified English answer (set only for translated results)
     official: list = field(default_factory=list)  # [(bill, section)] whose official local-language text informed the answer
+    glossary_hints: list = field(default_factory=list)  # "local = English" names given to the question -> English step
+    glossary_terms: list = field(default_factory=list)  # English terms whose official local form the answer prompt got
     added_sections: list = field(default_factory=list)  # sections added to bill-level-only evidence (bill_sections)
     focus: dict = None  # {"title", "bills", "score"}: the bill an unnamed "this new bill" was taken to mean
     quote_fixes: list = field(default_factory=list)  # [(quoted, official)] misspelt quotations replaced by the official text
@@ -188,6 +190,7 @@ class Pipeline:
         self.direct_local = direct_local  # Sinhala question + official Sinhala text -> answer in Sinhala in one step
         self.official_chars = official_chars
         self._last_cut = False  # did the last _llm reply hit max_tokens
+        self._glossary = None  # loaded on first non-English question
         self.history = []
 
     # ------------------------------------------------------------ steps
@@ -282,7 +285,7 @@ class Pipeline:
             out.append(e)
         return out
 
-    def summarise(self, question, evidence, enough, missing, res, local=None, focus=None):
+    def summarise(self, question, evidence, enough, missing, res, local=None, focus=None, extra=""):
         """local: (lang code, {(bill, section): official text}) -> write the answer directly in that language."""
         if not evidence:
             return "I could not find anything in the indexed bills that answers this question."
@@ -302,7 +305,7 @@ class Pipeline:
                                    "Answer what the evidence supports and state clearly what is missing.")
         if focus:
             note += FOCUS_NOTE.format(title=focus["title"], keys=", ".join(focus["bills"]))
-        user = f"QUESTION: {question}\n\nEVIDENCE:\n\n" + "\n\n".join(blocks) + note
+        user = f"QUESTION: {question}\n\nEVIDENCE:\n\n" + "\n\n".join(blocks) + note + extra
         system = ANSWER_SYSTEM + (LOCAL_NOTE.format(lang=lang, LANG=lang.upper()) if code else "")
         return self._llm(system, user, 4000 if code else 1800, res, self.answer_effort, llm=self.answer_llm)
 
@@ -313,10 +316,11 @@ class Pipeline:
         if not refs:
             return None, "no official text"
         official = {(k, n): t for k, n, t in refs}
+        terms = gloss.terms_block(self.glossary_terms(evidence, code, res), translate.language_name(code))
         q = f"{user_question}\n(English rendering used for search: {question})"
         reasons = []
         for _attempt in range(2):  # one retry: a direct answer is ~15 s, the translate-out fallback 30-100 s and worse
-            out = self.summarise(q, evidence, enough, missing, res, local=(code, official), focus=focus)
+            out = self.summarise(q, evidence, enough, missing, res, local=(code, official), focus=focus, extra=terms)
             out = out.replace("\u200b", "")  # stray zero-width spaces (seen live); ZWJ U+200D is part of Sinhala conjuncts
             why = ("unusable output" if out == LEAK_FALLBACK else "cut off at the output limit" if self._last_cut
                    else translate.check_script(out, code))
@@ -397,11 +401,15 @@ class Pipeline:
         """Translation layer around `_ask`: any language -> English -> pipeline -> answer in the question's language."""
         tr = self.translator
         mode, lang, q_en, t = self.translate_mode, "en", question, time.time()
+        glossary_hints = []
         tr.calls = 0
         if mode != "off":
             lang = translate.detect(question)  # Sinhala / Tamil by script: free
             if lang != "en":
-                q_en = tr.to_english(question, lang)
+                hints = self.glossary(lang).in_question(question) if lang == "si" else []
+                q_en = tr.to_english(question, lang, [(loc, en) for loc, en, _k in hints])
+                q_en = self.keep_titles(q_en, hints)
+                glossary_hints = [f"{loc} = {en}" for loc, en, _k in hints]
             elif mode == "ai":  # any other language (or romanised Sinhala/Tamil): one call detects and translates
                 got = tr.detect_ai(question)
                 if got is None:
@@ -423,6 +431,7 @@ class Pipeline:
                 "Sorry, I could not translate that question into English to search the bills. Please try again or ask in English."))
         res = self._ask(q_en, local=(lang, question))
         res.question, res.lang = question, lang
+        res.glossary_hints = glossary_hints
         res.seconds["translate_in"] = t_in
         if res.path == "direct":  # written in the user's language from the official text: nothing to translate
             res.llm_calls += tr.calls
@@ -430,7 +439,9 @@ class Pipeline:
         res.answer_en, res.path = res.answer, "translated"
         t = time.time()
         refs = self.official_texts(res.evidence, lang)
-        out, reasons = tr.from_english(res.answer_en, lang, [(f"{k} \u00a7{n}", t) for k, n, t in refs])
+        terms = self.glossary_terms(res.evidence, lang, res)
+        out, reasons = tr.from_english(res.answer_en, lang, [(f"{k} \u00a7{n}", t) for k, n, t in refs],
+                                       gloss.terms_block(terms, translate.language_name(lang)))
         res.official = [(k, n) for k, n, _ in refs]
         res.seconds["translate_out"] = time.time() - t
         res.llm_calls += tr.calls
@@ -441,6 +452,29 @@ class Pipeline:
             res.warnings.append(f"could not translate the answer into {name} reliably ({'; '.join(reasons) or 'no output'}); "
                                 "showing English")
         return res
+
+    def glossary(self, lang):
+        if self._glossary is None:
+            self._glossary = gloss.Glossary(self.store, lang)
+        return self._glossary
+
+    @staticmethod
+    def keep_titles(q_en, hints):
+        """If the translation dropped or renamed a bill the question names, add its official English title."""
+        if not q_en:
+            return q_en
+        for _loc, en, kind in hints:
+            if kind == "title" and en.lower() not in q_en.lower():
+                q_en = f"{q_en.rstrip()} ({en})"
+        return q_en
+
+    def glossary_terms(self, evidence, lang, res):
+        """[(en, local)] official terms for English terms in the evidence (Sinhala only); recorded on the result."""
+        if lang != "si" or not evidence:
+            return []
+        terms = self.glossary(lang).for_english("\n".join(e.chunk["text"] for e in evidence))
+        res.glossary_terms = [en for en, _ in terms]
+        return terms
 
     def official_texts(self, evidence, lang):
         """[(bill, section, text)]: the bill's own text in `lang` for the evidence sections (Sinhala only so far; parse_si).

@@ -1399,3 +1399,81 @@ def test_unverified_sinhala_quotes_lose_their_quotation_marks():
     assert "“Immigration Act”" in out and "“ක්‍රිකට්" not in out                # English quote untouched
     assert sum(1 for _, o in fixes if o is None) == 2 and translate.cites(out) == translate.cites(ans)
     assert translate.fix_quotes(ans, [ref])[0] == ans                            # without code: nothing is unquoted
+
+
+# ---------------------------------------------------------------- glossary (titles + defined terms, no model)
+from billrag import glossary  # noqa: E402
+
+
+def test_title_and_term_pairs_from_parallel_sections():
+    assert glossary.title_pair("This Act may be cited as the Protection of the State from Terrorism Act, No. of 2026.",
+                               "මේ පනත 2026 අංක දරන ත්‍රස්තවාදයෙන් රාජ්‍යය ආරක්ෂා කිරීමේ පනත යනුවෙන් හඳුන්වනු ලැබේ.") == \
+        ("Protection of the State from Terrorism Act", "ත්‍රස්තවාදයෙන් රාජ්‍යය ආරක්ෂා කිරීමේ පනත")
+    assert glossary.title_pair("this act may be cited as the appropriation act, no.... of 2025.",
+                               "මේ පනත 2025 අංක ........ දරන විසර්ජන පනත යනු‍වෙ න් හදුන්වනු ලැබේ.") == ("Appropriation Act", "විසර්ජන පනත")
+    en = ('In this Act, unless the context otherwise requires- “bank” means a licensed bank; “written law” includes any Act; '
+          'the Trusts Ordinance (hereinafter referred to as the “principal enactment”) is amended')
+    si = ('පද සම්බන්ධයෙන් අන්‍යාර්ථයක් අවශ්‍ය වුවහොත් මිස, “බැංකුව” යන්නෙන් බලපත්‍රලාභී බැංකුවක් අදහස් වේ; “ලිඛිත\nනීතිය” යන්නට '
+          'ඕනෑම පනතක් ඇතුළත් වේ; (මෙහි මින් මතු “ප්‍රධාන ප්‍රඥප්තිය” යනුවෙන් සඳහන් කරනු ලබන) භාර ආඥාපනත')
+    assert glossary.term_pairs(en, si) == [("defined", "bank", "බැංකුව"), ("defined", "written law", "ලිඛිත නීතිය"),
+                                           ("referred", "principal enactment", "ප්‍රධාන ප්‍රඥප්තිය")]
+    assert glossary.term_pairs("“bank” means x; “person” means y", "“බැංකුව” යන්නෙන් x") == []  # unequal counts: no guessing
+
+
+def test_double_ya_artefact_fixed_only_when_the_clean_bills_say_so():
+    clean = {"අමාත්‍යවරයා", "රාජ්‍යය"}
+    assert glossary.fix_double_ya("අමාත්‍යයවරයා විසින්", clean) == "අමාත්‍යවරයා විසින්"
+    assert glossary.fix_double_ya("රාජ්‍යය", clean) == "රාජ්‍යය"              # a real ්‍යය stays
+    assert glossary.fix_double_ya("ජාත්‍යයන්තර", clean) == "ජාත්‍යයන්තර"      # no evidence either way: unchanged
+
+
+def _glossary_store(tmp_path):
+    st = make_store(tmp_path)
+    st.replace_local("086/2026", "si", "ok", [(2, None, 2, "දින දහය වෙනුවට දින පහළොව ආදේශ කිරීම")], "x.pdf", 2)
+    st.replace_glossary("si", [("title", "Trusts (Amendment) Act", "භාර (සංශෝධන) පනත", 2, "[]", None),
+                               ("defined", "fifteen days", "දින පහළොව", 3, "[]", None),
+                               ("defined", "bank", "බැංකුව", 9, "[]", None)])
+    st.commit()
+    return st
+
+
+def test_glossary_lookups_for_questions_and_evidence(tmp_path):
+    g = glossary.Glossary(_glossary_store(tmp_path))
+    assert g.in_question("භාර (සංශෝධන) පනත් කෙටුම්පතේ දින පහළොව ගැන කියන්න") == [
+        ("භාර (සංශෝධන)", "Trusts (Amendment)", "title"), ("දින පහළොව", "fifteen days", "defined")]
+    assert g.in_question("බැංකුව") == []                                       # one-word terms are too generic for hints
+    assert g.for_english("The Bill replaces ten days with Fifteen Days.") == [("fifteen days", "දින පහළොව")]
+    assert g.for_english("a bank account") == [("bank", "බැංකුව")]  # one word, but in 9 bills
+    assert "- fifteen days = දින පහළොව" in glossary.terms_block(g.for_english("fifteen days")) and "[" not in \
+        glossary.terms_block(g.for_english("fifteen days"))
+
+
+class HintLLM(DirectLLM):
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+        if system.startswith("Translate the user's question"):
+            self.to_en_prompt = messages[-1]["content"]
+            self.calls.append("TO_EN")
+            return Reply("How many days does the amendment allow?")  # the bill's name got lost in translation
+        return super().chat(system, messages, tools, max_tokens, effort)
+
+
+def test_glossary_hints_reach_translate_in_and_terms_reach_the_answer(tmp_path):
+    st, llm = _glossary_store(tmp_path), HintLLM()
+    q = "භාර (සංශෝධන) පනත් කෙටුම්පත දින කීයක් ලබා දෙයිද?"
+    r = Pipeline(st, Retriever(st), llm).ask(q)
+    assert "භාර (සංශෝධන) = Trusts (Amendment)" in llm.to_en_prompt
+    assert r.queries[0].endswith("(Trusts (Amendment))")  # the dropped title is put back for retrieval
+    assert r.glossary_hints == ["භාර (සංශෝධන) = Trusts (Amendment)"] and r.path == "direct"
+    assert "OFFICIAL SINHALA TERMS" in llm.direct_prompt and "fifteen days = දින පහළොව" in llm.direct_prompt
+    assert r.glossary_terms == ["fifteen days"]
+
+
+def test_glossary_build_on_a_tiny_index(tmp_path):
+    st = make_store(tmp_path)
+    st.replace_local("086/2026", "si", "ok", [(1, None, 1, "මේ පනත 2026 අංක දරන භාර (සංශෝධන) පනත යනුවෙන් හඳුන්වනු ලැබේ.")], "x", 2)
+    st.commit()
+    fp = st.fingerprint()
+    stats = glossary.build(st)
+    assert stats["title"] == 1 and [(r["kind"], r["en"], r["local"]) for r in st.glossary()] == [
+        ("title", "Trusts (Amendment) Act", "භාර (සංශෝධන) පනත")]
+    assert st.fingerprint() == fp  # the glossary lives outside chunks: vectors.npz stays valid

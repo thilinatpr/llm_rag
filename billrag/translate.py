@@ -270,7 +270,10 @@ class Translator:
                 return got
         return None
 
-    def to_english(self, text, code):
+    def to_english(self, text, code, hints=()):
+        """hints: [(local phrase, official English name)] from the glossary for phrases in the question (chat models only)."""
+        prompt = text + ("\n\nOFFICIAL ENGLISH NAMES of phrases in this question (use them exactly; reference only, do not "
+                         "translate this list):\n" + "\n".join(f"- {loc} = {en}" for loc, en in hints) if hints else "")
         if self.mt:
             self.calls += 1
             try:
@@ -282,14 +285,14 @@ class Translator:
         for llm, effort in self._chats():
             self.calls += 1
             try:
-                out = _chat(llm, TO_EN, text, 400, effort).strip('"')
+                out = _chat(llm, TO_EN, prompt, 400, effort).strip('"')
             except Exception:  # noqa: BLE001
                 continue
             if out and not LEAKED.match(out) and detect(out) == "en":
                 return drop_invented_refs(text, out)
         return None
 
-    def from_english(self, answer, code, official=()):
+    def from_english(self, answer, code, official=(), terms=""):
         """-> (translation or None, reasons for every failed attempt).
 
         official: [(label, text)] the bill's own text in the target language for the sections the answer relies on (see
@@ -306,7 +309,7 @@ class Translator:
                 return out, reasons
             reasons.append(f"{self.mt.model}: {why}")
         system = FROM_EN.format(lang=language_name(code)) + (OFFICIAL_NOTE.format(lang=language_name(code)) if official else "")
-        answer_in = answer + official_block(official, code)
+        answer_in = answer + official_block(official, code) + terms  # terms: glossary.terms_block(...)
         for i, (llm, effort) in enumerate(self._chats()):
             for prompt in ((answer_in, answer_in + RETRY) if i == len(self._chats()) - 1 else (answer_in,)):  # one firmer retry on the last model
                 self.calls += 1
