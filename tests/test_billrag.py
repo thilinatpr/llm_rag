@@ -1999,7 +1999,8 @@ def test_gate_limits_queues_in_order_and_rejects():
             __import__("time").sleep(0.01)
     with pytest.raises(Busy):  # third waiter: the queue (2) is full
         g.acquire()
-    assert g.counts() == {"running": 2, "queued": 2, "max_concurrent": 2, "max_queue": 2, "rejected": 1}
+    c = g.counts()
+    assert (c["running"], c["queued"], c["max_concurrent"], c["max_queue"], c["rejected"]) == (2, 2, 2, 2, 1)
     g.release()
     g.release()
     for t in ts:
@@ -2148,3 +2149,51 @@ def test_calltrace_is_per_thread_and_follows_copied_context():
     [t.start() for t in ts]
     [t.join(5) for t in ts]
     assert seen["a"] == [("a", "a"), ("a", "a-sub")] and seen["b"] == [("b", "b"), ("b", "b-sub")]
+
+
+def test_gate_public_lane_cannot_take_member_capacity():
+    from billrag.gate import Busy, Gate
+    g = Gate(slots=3, max_queue=5, max_wait=5, public_slots=1, public_queue=1)
+    g.acquire(lane="public")                      # the one public slot
+    waited = []
+    t = threading.Thread(target=lambda: waited.append(g.acquire(lane="public")))  # next public: queues
+    t.start()
+    for _ in range(100):
+        if g.counts()["public_queued"] == 1:
+            break
+        __import__("time").sleep(0.01)
+    with pytest.raises(Busy):                     # public queue (1) is full
+        g.acquire(lane="public")
+    g.acquire(lane="member")
+    g.acquire(lane="member")                      # members still get the other two slots
+    c = g.counts()
+    assert c["running"] == 3 and c["public_running"] == 1 and c["public_queued"] == 1
+    g.release("member")                           # a free slot, but the public lane is at its own cap: it keeps waiting
+    __import__("time").sleep(0.2)
+    assert g.counts()["public_queued"] == 1 and not waited
+    g.release("public")                           # now the queued public request may start
+    t.join(5)
+    assert waited and g.counts()["public_running"] == 1
+
+
+def test_web_public_header_sets_the_lane_and_anon_chats_are_evicted_first(monkeypatch):
+    from http.server import ThreadingHTTPServer
+    from urllib.request import Request, urlopen
+    from billrag import web
+    monkeypatch.setenv("BILLRAG_CHATLOG", "0")
+    monkeypatch.setattr(web, "MAX_SESSIONS", 2)
+    seen = []
+    app = _concurrent_app(lambda q, **kw: ("ok", {}))
+    real_ask = app.ask
+    app.ask = lambda s, q, **kw: (seen.append(kw.get("lane")), real_ask(s, q, **kw))[1]
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), web.make_handler(app))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/api/ask"
+    try:
+        for lane, sid in ((None, "member1"), ("public", "anon:a"), ("member", "anon:b-spoof-no"), (None, "member2")):
+            hdr = {"Content-Type": "application/json", **({"X-Lane": lane} if lane else {})}
+            urlopen(Request(url, json.dumps({"session": sid, "question": "x"}).encode(), hdr), timeout=10).read()
+    finally:
+        srv.shutdown()
+    assert seen == [None, "public", None, None]          # only the exact value "public" counts
+    assert list(app.sessions) == ["member1", "member2"]   # the anonymous chat went first

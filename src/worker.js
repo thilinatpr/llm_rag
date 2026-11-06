@@ -4,11 +4,15 @@ import { getContainer } from "@cloudflare/containers";
 import { createHandler } from "./auth.js";
 
 export { BillragContainer } from "./container.js";
+export { QuotaCounter } from "./quota-do.js";
 
 // Signed-in requests are forwarded to the container with the shared secret; the browser's session cookie is not.
-async function upstream(request, env) {
+// opts.lane = "public" marks an anonymous visitor (public.js). A client-sent X-Lane is always dropped: only this Worker sets it.
+async function upstream(request, env, opts = {}) {
   const headers = new Headers(request.headers);
   headers.delete("Cookie");
+  headers.delete("X-Lane");
+  if (opts.lane) headers.set("X-Lane", opts.lane);
   headers.set("X-Proxy-Secret", env.PROXY_SECRET);
   const started = Date.now();
   try {

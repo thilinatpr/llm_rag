@@ -65,6 +65,8 @@
   .md code { font:.9em ui-monospace,monospace; background:var(--line); padding:0 .25em; border-radius:4px; }
   .md table { border-collapse:collapse; margin:0 0 .6em; font-size:.92rem; display:block; overflow-x:auto; } .md td, .md th { border:1px solid var(--line); padding:3px 6px; text-align:left; }
   .md hr { border:0; border-top:1px solid var(--line); margin:.6em 0; }
+  .gate { flex:none; text-align:center; color:var(--muted); font-size:.92rem; padding:0 var(--gr) 10px var(--gl); }
+  .gate p { margin:0 0 8px; } .gate .err { color:var(--sindoor); }
   .step { color:var(--muted); }
   .draft::after { content:" \25cf"; color:var(--sindoor); animation:blink 1s steps(2) infinite; }
   @keyframes blink { 50% { opacity:0; } }
@@ -73,18 +75,19 @@
 <body>
 <div class="petals" aria-hidden="true"></div>
 <header>
-  <div class="left"><a class="mark" href="/">citizen<b>lk</b></a><span class="name">Bill Assistant</span><small id="status" class="hint" title="Server status"></small></div>
+  <div class="left"><a class="mark" href="/">citizen<b>lk</b></a><span class="name">Bill Assistant</span><small id="status" class="hint" title="Server status"></small><small id="quota" class="hint"></small></div>
   <div class="right">
     <span class="seg" role="group" aria-label="Answer speed" title="Fast: starts answering in seconds. Thorough: more careful, slower.">
       <button type="button" id="speed-thorough" data-v="thorough" aria-pressed="true">Thorough</button>
       <button type="button" id="speed-fast" data-v="fast" aria-pressed="false">Fast</button>
     </span>
-    <label class="opt"><input type="checkbox" id="searchOnly"> Find clauses only</label>
+    <label class="opt" id="searchOpt"><input type="checkbox" id="searchOnly"> Find clauses only</label>
     <button class="link" id="new" type="button">New chat</button>
     <button class="link" id="out" type="button" title="Sign out">Sign out</button>
   </div>
 </header>
 <div id="log"></div>
+<div id="gate" class="gate" hidden><p id="gateMsg"></p><div id="ts"></div></div>
 <form id="f"><div class="pill">
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
   <input type="text" id="q" placeholder="Ask in Sinhala, Tamil or English" aria-label="Your question" autocomplete="off" autofocus>
@@ -177,14 +180,14 @@ function renderMarkdown(src) {
 const statusEl = document.getElementById('status');
 const setStatus = (t) => { statusEl.textContent = t; };
 // The page is static and loads instantly; this wakes the server (it sleeps when idle) while you read and type.
-(async function warm() {
+async function warm() {
   setStatus('\u25cf waking server...');
   for (let i = 0; i < 100; i++) {
     try { const r = await fetch('/healthz', {cache: 'no-store'}); if (r.ok) { setStatus('\u25cf ready'); return; } } catch (e) {}
     await new Promise((r) => setTimeout(r, 3000));
   }
   setStatus('\u25cf server not responding');
-})();
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // A dropped connection (TypeError) usually means the container was asleep and is starting; wait until it answers, then retry once.
 async function waitUntilUp(note) {
@@ -206,7 +209,8 @@ async function post(path, body, note) {
   }
   let j = {};
   try { j = await r.json(); } catch (e) {}
-  if (!r.ok) throw new Error(`${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
+  noteQuota(r);
+  if (!r.ok) throw failure(j, r);
   return j;
 }
 // Streamed answer (/api/ask/stream, server-sent events): step names while it searches and checks, the answer as it is
@@ -228,8 +232,9 @@ async function askStream(body, el) {
   if (r.status === 404) return null;
   if (!r.ok || !(r.headers.get('Content-Type') || '').includes('text/event-stream')) {
     let j = {}; try { j = await r.json(); } catch (e) {}
-    throw new Error(`${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
+    throw failure(j, r);
   }
+  noteQuota(r);
   const reader = r.body.getReader(), dec = new TextDecoder();
   let buf = '', draft = '', final = null, queued = false, closed = false;
   // `closed`: a draft repaint queued before the end must not overwrite the final answer the caller puts in afterwards
@@ -259,6 +264,66 @@ async function askStream(body, el) {
   if (final === null) throw new Error('The connection closed before the answer was complete. Try again.');
   return final;
 }
+// --- public lane (src/public.js): visitors who are not signed in verify once (Cloudflare Turnstile), then get a daily allowance ---
+const LANG = (navigator.language || 'en').slice(0, 2);
+const T = {
+  en: {left: (n) => n + ' free questions left today', checking: 'Checking that you are a person...', failed: 'The check failed. Reload the page and try again.',
+    signin: 'Sign in', cookie: "You have used today's free questions. Please come back tomorrow, or sign in.",
+    ip: 'Too many questions from your network today. Please come back tomorrow.', global: "Today's free questions for everyone are used up. Please come back tomorrow.",
+    issue: 'Too many new visits from your network today. Please come back tomorrow.', long: 'Please keep your question under 600 characters.'},
+  si: {left: (n) => 'අද ඉතිරි නොමිලේ ප්‍රශ්න ' + n, checking: 'ඔබ පුද්ගලයෙකු බව පරීක්ෂා කරමින්...', failed: 'පරීක්ෂාව අසාර්ථකයි. පිටුව නැවත පූරණය කර නැවත උත්සාහ කරන්න.',
+    signin: 'පිවිසෙන්න', cookie: 'අදට ලබා දී ඇති නොමිලේ ප්‍රශ්න අවසන්. කරුණාකර හෙට නැවත එන්න.',
+    ip: 'ඔබේ ජාලයෙන් අද ප්‍රශ්න වැඩියි. කරුණාකර හෙට නැවත එන්න.', global: 'අද දිනට සැමට ලබා දෙන නොමිලේ ප්‍රශ්න අවසන්. කරුණාකර හෙට නැවත එන්න.',
+    issue: 'ඔබේ ජාලයෙන් අද පැමිණීම් වැඩියි. කරුණාකර හෙට නැවත එන්න.', long: 'කරුණාකර ඔබේ ප්‍රශ්නය අකුරු 600ට අඩු කරන්න.'},
+  ta: {left: (n) => 'இன்று மீதமுள்ள இலவசக் கேள்விகள்: ' + n, checking: 'நீங்கள் மனிதர் என்பதைச் சரிபார்க்கிறோம்...', failed: 'சரிபார்ப்பு தோல்வியடைந்தது. பக்கத்தை மீண்டும் ஏற்றி முயற்சிக்கவும்.',
+    signin: 'உள்நுழை', cookie: 'இன்றைய இலவசக் கேள்விகள் முடிந்துவிட்டன. நாளை மீண்டும் வாருங்கள்.',
+    ip: 'உங்கள் நெட்வொர்க்கிலிருந்து இன்று அதிகமான கேள்விகள். நாளை மீண்டும் வாருங்கள்.', global: 'இன்று அனைவருக்குமான இலவசக் கேள்விகள் முடிந்துவிட்டன. நாளை மீண்டும் வாருங்கள்.',
+    issue: 'உங்கள் நெட்வொர்க்கிலிருந்து இன்று அதிகமான வருகைகள். நாளை மீண்டும் வாருங்கள்.', long: 'உங்கள் கேள்வியை 600 எழுத்துகளுக்குள் வைத்திருங்கள்.'},
+};
+const tr = (k, ...a) => { const v = (T[LANG] || T.en)[k] || T.en[k]; return typeof v === 'function' ? v(...a) : v; };
+const state = {anon: false};
+const gate = document.getElementById('gate'), gateMsg = document.getElementById('gateMsg'), quotaEl = document.getElementById('quota');
+function noteQuota(r) {
+  const left = r && r.headers && r.headers.get('X-Quota-Left');
+  if (state.anon && left !== null && left !== undefined) quotaEl.textContent = '· ' + tr('left', left);
+}
+// Error from a failed API reply; an anonymous visitor's quota/verification reasons get the localized text.
+function failure(j, r) {
+  const e = new Error(state.anon && tr(j.reason) && typeof tr(j.reason) === 'string' ? tr(j.reason) : `${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
+  e.reason = j.reason;
+  if (j.reason === 'verify' && state.anon) location.reload();   // the cookie expired: verify again
+  return e;
+}
+function setAsking(on) { q.disabled = !on; btn.disabled = !on; }
+function showAnon(left) {
+  state.anon = true;
+  document.getElementById('searchOpt').hidden = true;
+  const out = document.getElementById('out'); out.textContent = tr('signin'); out.title = ''; out.onclick = () => { location.href = '/login'; };
+  quotaEl.textContent = '· ' + tr('left', left);
+}
+function verify(sitekey) {
+  state.anon = true; setAsking(false);
+  gate.hidden = false; gateMsg.textContent = tr('checking'); gateMsg.className = '';
+  const fail = () => { gateMsg.textContent = tr('failed'); gateMsg.className = 'err'; };
+  const s = document.createElement('script');
+  s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'; s.async = true; s.onerror = fail;
+  s.onload = () => window.turnstile.render('#ts', {sitekey, callback: async (token) => {
+    try {
+      const r = await fetch('/public/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({token})});
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { gateMsg.textContent = (j.reason && typeof tr(j.reason) === 'string' && tr(j.reason)) || tr('failed'); gateMsg.className = 'err'; return; }
+      gate.hidden = true; showAnon(j.left); setAsking(true); q.focus(); warm();
+    } catch (e) { fail(); }
+  }, 'error-callback': fail, 'expired-callback': fail});
+  document.head.appendChild(s);
+}
+(async function boot() {
+  let me = {};
+  try { me = await (await fetch('/public/me', {cache: 'no-store'})).json(); } catch (e) {}
+  if (me.enabled && me.user === 'none') return verify(me.sitekey);   // not signed in, no cookie yet
+  if (me.enabled && me.user === 'anon') showAnon(me.left);
+  warm();
+})();
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = q.value.trim(); if (!text) return;

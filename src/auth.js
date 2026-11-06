@@ -9,6 +9,9 @@
 // Mail goes out through the Cloudflare Email Service REST API, so recipients need no Cloudflare-side verification;
 // ALLOWED_EMAILS is the only allowlist.
 
+import { getCookie, hex, json, readJson, safeEqual } from "./util.js";
+import { anonApi, publicMe, publicOn, publicStart, verifyTurnstile } from "./public.js";
+
 const OTP_TTL = 300; // seconds a code is valid
 const RESEND_COOLDOWN = 60; // seconds between code requests per address
 const MAX_ATTEMPTS = 5;
@@ -16,7 +19,6 @@ const SESSION_TTL = 7 * 24 * 3600;
 const COOKIE = "session";
 
 const enc = new TextEncoder();
-const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 
 export const normalizeEmail = (e) => String(e || "").trim().toLowerCase();
 export const isEmail = (e) => /^[^\s@]{1,64}@[^\s@]{1,255}$/.test(e) && !/[\r\n<>]/.test(e);
@@ -34,13 +36,6 @@ export function newCode() {
 
 async function digest(env, email, code) {
   return hex(await crypto.subtle.digest("SHA-256", enc.encode(`${env.OTP_PEPPER}|${email}|${code}`)));
-}
-
-function safeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let d = 0;
-  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return d === 0;
 }
 
 export function buildMessage(from, to, code) {
@@ -72,27 +67,8 @@ export async function sendMailViaCloudflare(env, to, code) {
   }
 }
 
-const json = (obj, status = 200, headers = {}) =>
-  new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", ...headers } });
-
-function getCookie(request, name) {
-  for (const part of (request.headers.get("Cookie") || "").split(";")) {
-    const [k, ...v] = part.trim().split("=");
-    if (k === name) return v.join("=");
-  }
-  return null;
-}
-
 const sessionCookie = (value, maxAge) =>
   `${COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
-
-async function readJson(request) {
-  try {
-    return await request.json();
-  } catch {
-    return {};
-  }
-}
 
 async function requestCode(env, request, sendMail) {
   const email = normalizeEmail((await readJson(request)).email);
@@ -216,7 +192,8 @@ $('f2').onsubmit = async (e) => { e.preventDefault();
 </script></body></html>`;
 
 // upstream(request, env): optional, forwards signed-in requests (e.g. to a container). Used when env.BILLRAG is bound.
-export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null } = {}) {
+// verify(env, token, ip, host) checks a Turnstile token; now() is the clock (both replaceable in tests).
+export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null, verify = verifyTurnstile, now = () => Date.now() } = {}) {
   return async function fetch(request, env) {
     const url = new URL(request.url);
     const { pathname } = url;
@@ -230,7 +207,17 @@ export function createHandler({ sendMail = sendMailViaCloudflare, upstream = nul
       return json({ ok: true }, 200, { "Set-Cookie": sessionCookie("", 0) });
     }
 
-    if (!(await currentUser(env, request))) {
+    const user = await currentUser(env, request);
+    // Public (anonymous) lane: see public.js. Off unless PUBLIC_CHAT = "on" and everything it needs is configured.
+    if (pathname === "/public/me" && request.method === "GET") return publicMe(env, request, !!user, now());
+    if (pathname === "/public/start" && request.method === "POST")
+      return user ? json({ ok: true, user: "member" }) : publicStart(env, request, verify, now());
+    if (!user) {
+      if (upstream && publicOn(env)) {
+        if (pathname === "/api/ask" || pathname === "/api/ask/stream" || pathname === "/healthz")
+          return anonApi(env, request, pathname, upstream, now());
+        if (request.method === "GET" && !pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
+      }
       if (request.method === "GET" && (request.headers.get("Accept") || "").includes("text/html"))
         return Response.redirect(new URL("/login", url).toString(), 302);
       return json({ error: "Not signed in." }, 401);
