@@ -121,6 +121,7 @@ def summarize(rows):
             out["cand_gold"] = sum(r["cand_gold"] for r in pr) / len(pr)
             out["kept_gold"] = sum(r["kept_gold"] for r in pr) / len(pr)
             out["avg_llm_calls"] = sum(r["llm_calls"] for r in pr) / len(pr)
+            out["warned"] = sum(bool(r.get("warnings")) for r in pr) / len(pr)  # answers with an unsupported citation etc.
         return out
     return {"all": agg(rows), "clause": agg([r for r in rows if r["level"] == "clause"]),
             "bill": agg([r for r in rows if r["level"] == "bill"])}
@@ -128,7 +129,7 @@ def summarize(rows):
 
 def format_report(summary, label):
     keys = ["n", "strict", "cited_gold", "correct", "avg_seconds"] + \
-           [k for k in ("cand_gold", "kept_gold", "avg_llm_calls") if k in summary["all"]]
+           [k for k in ("cand_gold", "kept_gold", "warned", "avg_llm_calls") if k in summary["all"]]
     lines = [f"== {label}", f"{'':8}" + "".join(f"{k:>20}" for k in keys)]
     for name in ("all", "clause", "bill"):
         s = summary[name]

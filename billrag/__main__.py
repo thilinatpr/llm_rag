@@ -1,5 +1,6 @@
 """CLI: python -m billrag {ingest,stats,search,ask,chat,serve,embed,summarize}"""
 import argparse
+import os
 import sys
 import time
 
@@ -134,7 +135,14 @@ def main(argv=None):
                 if a.mode == "pipeline" else (lambda: Agent(store, retriever, llm)))
         items = [ae.expand_gold(store, i) for i in ae.select([i for i in load_items(a.file) if i["source"]["year"] >= a.since_year], a.limit)]
         t0 = time.time()
-        rows = ae.run(items, make, llm, a.workers)
+        judge = llm
+        if os.environ.get("BILLRAG_JUDGE_MODEL"):  # an independent judge: BILLRAG_JUDGE_{MODEL,BASE_URL,API_KEY,PROVIDER}
+            import dataclasses
+            e = os.environ.get
+            judge = make_llm(dataclasses.replace(
+                s, chat_model=e("BILLRAG_JUDGE_MODEL"), chat_provider=e("BILLRAG_JUDGE_PROVIDER", "openai"),
+                chat_base_url=e("BILLRAG_JUDGE_BASE_URL") or None, chat_api_key=e("BILLRAG_JUDGE_API_KEY") or None))
+        rows = ae.run(items, make, judge, a.workers)
         summ = ae.summarize(rows)
         label = a.label or f"{a.mode} | {a.since_year}+ | n={len(items)}"
         print(ae.format_report(summ, label)); print(f"(wall {time.time() - t0:.0f}s)")
