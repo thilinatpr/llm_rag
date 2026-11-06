@@ -4,7 +4,7 @@ Guidance for AI agents (and humans) working in this repo. See `TODO.md` for open
 
 ## What this repo is
 
-Visual design for citizenlk.com pages is in `DESIGN.md`; the homepage is `site/index.html` (static, not deployed yet); the chat page
+Visual design for citizenlk.com pages is in `DESIGN.md`; the homepage is `site/index.html` (static, Worker `citizenlk-home`); the chat page
 (`public/index.html`) and sign-in page (`LOGIN_PAGE` in `src/auth.js`) follow it.
 
 `billrag`: an agentic, hybrid-retrieval chat engine over Sri Lankan parliamentary bills from
@@ -68,7 +68,16 @@ python -m pytest tests -q                                           # must pass 
 
 ## Production: architecture, Cloudflare, deploying, logs
 
-**Live site:** https://gov-rag-llm.patprathnayaka.workers.dev (login required; only addresses in `ALLOWED_EMAILS` can sign in).
+**Live site:** https://bills.citizenlk.com (login required; only addresses in `ALLOWED_EMAILS` can sign in). The old address
+https://gov-rag-llm.patprathnayaka.workers.dev stays on until the custom domain has been proven.
+
+### citizenlk.com layout
+One subdomain per service, each its own Worker (custom domains in that Worker's Wrangler config), all in this repo:
+| address | Worker | config | notes |
+|---|---|---|---|
+| `citizenlk.com`, `www.` (redirect) | `citizenlk-home` | `workers/home/wrangler.toml` | static `site/`, no login, no container |
+| `bills.citizenlk.com` | `gov-rag-llm` | `wrangler.toml` | Bill Assistant |
+Deploy the homepage with `npx wrangler deploy -c workers/home/wrangler.toml`. Sessions are host-only cookies: each service has its own sign-in.
 
 ```
 browser -> Worker `gov-rag-llm` (src/worker.js + auth.js)
