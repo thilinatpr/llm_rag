@@ -205,6 +205,9 @@ A project hook does the reminding: `.claude/settings.json` runs `.claude/hooks/r
 successful `wrangler deploy` (not `--dry-run`) it hands Claude the commit, build id, Worker version and image and the steps:
 wait for the rollout, update that paragraph on a branch fresh from `main`, PR, merge with a merge commit. The hook itself never
 pushes or merges. It is silent for every other command.
+A second hook, `.claude/hooks/session_start.py` (SessionStart), fetches `origin/main` and tells Claude at the start of every
+session: whether `main`'s code differs from the live build recorded below (and which merged commits are therefore not live),
+whether the current branch was already merged (restart it from `origin/main`), and which test tools are missing.
 **Rollback:** check out the previous deployed commit and repeat steps 1-5; the old image digest stays in
 `registry.cloudflare.com`, and `wrangler deployments list` shows earlier Worker versions.
 
