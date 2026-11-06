@@ -660,7 +660,7 @@ def test_web_ui_endpoints(tmp_path):
         assert post("/api/search", {"query": "x", "k": 99}) == (200, {"results": ["hit:x:15"]})
         assert post("/api/ask", {"question": " "})[0] == 400
         code, body = post("/api/ask", {"question": "boom"})
-        assert code == 500 and "no key" in body["error"]
+        assert code == 500 and body["error"] == "Sorry, the answer could not be produced. Please try again."  # raw error stays in the log
     finally:
         srv.shutdown()
 
@@ -1782,7 +1782,7 @@ def test_web_stream_endpoint_sends_events_then_the_final_answer():
     try:
         assert events("q") == [("status", {"step": "retrieve0"}), ("token", {"text": "dra"}), ("token", {"text": "ft"}),
                                ("done", {"answer": "final answer"})]
-        assert events("boom") == [("error", {"error": "RuntimeError: model down"})]
+        assert events("boom") == [("error", {"error": "Sorry, the answer could not be produced. Please try again."})]
     finally:
         srv.shutdown()
 

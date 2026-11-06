@@ -328,6 +328,7 @@ Worker-side errors (`upstream_failed`, with path, ms, error) go to Workers Logs 
 | Login code never arrives | `CF_EMAIL_TOKEN` secret missing/expired; sender domain not onboarded under Email -> Email Sending; address not in `ALLOWED_EMAILS`; 60 s resend cooldown; check the send response in Workers Logs. |
 | `/api/*` returns 403 | The request did not carry `X-Proxy-Secret`: `PROXY_SECRET` differs between Worker and container (re-`put` it, restart the container). |
 | `/api/*` returns 500 "Server is not configured" | `PROXY_SECRET` is not set on the Worker. |
+| Users see "temporarily unavailable" / "busy" | `billrag/errors.py` hides provider errors (402 Insufficient Balance, 401/403 key problems -> unavailable; 429/timeouts -> busy; HTTP 503, the public lane refunds the question). The real error is in the chat log `error` field / container stdout: top up DeepSeek, or check the key. Written 2026-11-06, NOT deployed. |
 | Answer is only "analysis: ..." or "!!!!" | Model glitch. `Pipeline._llm` strips a "final" section, retries once, else returns a fallback + warning. If it recurs, look at the log record. |
 | "I could not find anything" for a normal question | Check `queries`/`evidence` in the log: wrong expansion of an abbreviation, a bill not in the index, or a retrieval miss. Greetings and unknown abbreviations are handled before retrieval (`resolve.py`). |
 | `VectorsError` at startup | `vectors.npz` does not match `index.sqlite` (re-ingested without re-embedding). Re-run `embed`, `upload_r2.py --include-index`. |

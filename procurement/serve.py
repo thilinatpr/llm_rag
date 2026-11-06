@@ -99,7 +99,9 @@ def make_handler(app):
                 self.send(200, app.ask(question))
             except Exception as e:
                 print(json.dumps({"event": "error", "error": f"{type(e).__name__}: {e}"}), flush=True)
-                self.send(500, {"error": "The answer could not be produced. Please try again."})
+                from billrag import errors
+                status, msg = errors.public(e)
+                self.send(status, {"error": msg})
 
     return Handler
 

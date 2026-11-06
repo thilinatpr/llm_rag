@@ -432,3 +432,44 @@ def test_pointed_at_clause_is_added_once_with_its_source(tmp_path, monkeypatch):
     assert "Referred to by [PG2024 §1.1]" in ref["note"]
     assert "[PG2024 §1.2]" not in labels  # "set out in 1.2 below" has no keyword, so it is not followed
     assert pa.verify("Committees are appointed by the CAO [PG2024 §2.1].", units) == []
+
+
+def test_provider_errors_are_shown_in_plain_words():
+    from billrag import errors
+
+    class APIStatusError(Exception):
+        def __init__(self, msg, status_code):
+            super().__init__(msg); self.status_code = status_code
+    for exc in (APIStatusError("Error code: 402 - Insufficient Balance (request_id: 3afa2bc0)", 402),
+                APIStatusError("Error code: 401 - Authentication Fails", 401), RuntimeError("Insufficient Balance"),
+                RuntimeError("Incorrect API key provided: sk-abc")):
+        assert errors.public(exc) == (503, errors.UNAVAILABLE)
+    assert errors.public(APIStatusError("Error code: 429 - rate limit", 429)) == (503, errors.BUSY)
+    assert errors.public(TimeoutError("timed out")) == (503, errors.BUSY)
+    assert errors.public(ValueError("boom")) == (500, errors.FAILED)
+    for status, msg in map(errors.public, (RuntimeError("Insufficient Balance request_id: x"), KeyError("k"))):
+        assert "request_id" not in msg and "Error" not in msg and "Insufficient" not in msg
+
+
+def test_server_hides_the_provider_error(tmp_path, monkeypatch):
+    import json, threading, urllib.request, urllib.error
+    from http.server import ThreadingHTTPServer
+    from procurement import serve
+
+    class Boom:
+        def ask(self, *a, **k): raise RuntimeError("Error code: 402 - Insufficient Balance (request_id: 3afa2bc0)")
+    app = serve.App(None, None, "s" * 20)
+    monkeypatch.setattr(app, "ask", lambda q: (_ for _ in ()).throw(RuntimeError("Error code: 402 - Insufficient Balance")))
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), serve.make_handler(app))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{srv.server_port}/api/ask", data=b'{"question":"q"}', method="POST",
+                                     headers={"X-Proxy-Secret": "s" * 20})
+        try:
+            urllib.request.urlopen(req)
+            assert False, "expected an HTTP error"
+        except urllib.error.HTTPError as e:
+            body = json.loads(e.read())
+            assert e.code == 503 and body["error"] == "The assistant is temporarily unavailable. Please try again later."
+    finally:
+        srv.shutdown()

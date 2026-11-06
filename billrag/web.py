@@ -27,7 +27,7 @@ from collections import OrderedDict
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import calltrace
+from . import calltrace, errors
 from .chatlog import Timer, build_id, log_turn
 from .gate import Busy, Gate
 from .resources import Usage, snapshot
@@ -308,8 +308,10 @@ def make_handler(app):
                 self._send(404, json.dumps({"error": "not found"}))
             except Busy as e:
                 self._send(503, json.dumps({"error": str(e), "busy": True}))
-            except Exception as e:  # surface config problems (missing API key, stale vectors) in the UI
-                self._send(500, json.dumps({"error": f"{type(e).__name__}: {e}"}))
+            except Exception as e:  # the real error is in the chat log; the browser gets plain words (errors.public)
+                print(f"request failed: {type(e).__name__}: {e}", file=sys.stderr)
+                status, msg = errors.public(e)
+                self._send(status, json.dumps({"error": msg}))
 
         def _stream(self, sid, question, mode=None, lane_kw=None):
             """Server-sent events over this response; the connection closes at the end (HTTP/1.0 handler)."""
@@ -339,7 +341,8 @@ def make_handler(app):
             except Busy as e:
                 send("error", {"error": str(e), "busy": True})
             except Exception as e:  # headers are sent already: report the error as an event
-                send("error", {"error": f"{type(e).__name__}: {e}"})
+                print(f"stream failed: {type(e).__name__}: {e}", file=sys.stderr)
+                send("error", {"error": errors.public(e)[1]})
 
         def log_message(self, *a):
             pass
