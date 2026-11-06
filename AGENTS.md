@@ -34,7 +34,8 @@ billrag/resolve.py        question grounding before retrieval: greetings, abbrev
 billrag/chatlog.py        one JSON record per chat turn -> R2 `chatlogs/` + local JSONL; `build_id()` = hash of the running code
 billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/ask/stream, /api/search, /api/stats, /healthz); secret-gated
 billrag/resources.py      CPU/memory: `snapshot()` for /api/stats, `Usage` per request -> log field `usage` (stdlib, /proc + cgroup)
-billrag/gate.py           admission control for `serve`: N questions at once + bounded FIFO queue (503 when full)
+billrag/gate.py           admission control for `serve`: N questions at once + bounded FIFO queue (503 when full); separate `public` lane
+src/public.js, quota.js, quota-do.js, util.js   public (anonymous) lane: Turnstile + signed cookie + daily quotas (Durable Object `QuotaCounter`)
 billrag/calltrace.py      one record per model / Workers AI call (step, model, seconds, tokens, cache hits, USD, retries) -> log fields `calls`, `cost`
 public/index.html         the chat page (static asset, served by the Worker behind the login; also used by local `serve`)
 src/worker.js             Worker entrypoint: login gate (auth.js) + forwards /api/* and /healthz to the container
@@ -370,6 +371,29 @@ lock). `calltrace` is a ContextVar, so each turn logs only its own calls; thread
 `contextvars.copy_context()`. Log fields `queue_wait_s`, `concurrent`; `usage.cpu_s` is process-wide, so it includes other running
 turns when `concurrent` > 1. `/api/stats` has `running`, `queued`, `max_concurrent`, `max_queue`, `rejected`. Written 2026-11-06 and
 covered by offline tests only: NOT load-tested against the real container, NOT deployed. `procurement/serve.py` still has its one-question lock.
+
+### Public lane (anonymous visitors; `src/public.js`, `quota.js`, `quota-do.js`; written 2026-11-06, OFF)
+`PUBLIC_CHAT = "off"` in `wrangler.toml`; nothing changes until it is `"on"` AND `TURNSTILE_SECRET` (Worker secret, set 2026-11-06), the
+`TURNSTILE_SITEKEY` var (public), `OTP_PEPPER`, `PROXY_SECRET`, the `QUOTA` Durable Object and the container binding all exist (`publicOn`; any
+piece missing = login only, fails closed). Turnstile widget "citizenlk Bill Assistant" (managed mode, hostname `bills.citizenlk.com`) lives in the
+Cloudflare account. Flow: page asks `GET /public/me` -> not signed in and no cookie -> Turnstile -> `POST /public/start {token}` -> signed `anon`
+cookie (HMAC, 30 days; only an id) -> `/api/ask`, `/api/ask/stream`, `/healthz` allowed, everything else under `/api` stays members only.
+- **Quota is counted on the server, never trusted from the browser or an IP alone** (many Sri Lankan users share mobile IPs): per question three
+  counters in one Durable Object must all have room, reset at midnight Sri Lanka time (UTC+5:30): cookie `PUBLIC_DAILY_PER_COOKIE` (10), IP
+  `PUBLIC_DAILY_PER_IP` (300, a flood backstop only), whole lane `PUBLIC_DAILY_GLOBAL` (500, the cost ceiling). New cookies: `PUBLIC_COOKIES_PER_IP`
+  (50 a day per IP, failed tokens count). A refused question does not use the visitor's allowance; a container 5xx gives the count back.
+  Re-solving Turnstile with a valid cookie keeps the same cookie (no reset). Reply 429 + `Retry-After` + `reason` (cookie|ip|global|issue).
+- **The Worker rebuilds the request body** (session = `anon:<cookie id>`, question trimmed, <= 600 chars, `answer` fast|thorough) and marks it
+  `X-Lane: public` (a client-sent X-Lane is dropped). Without that rewrite every visitor would share the session "default".
+- **Container:** the `public` gate lane gets `BILLRAG_PUBLIC_SLOTS` (1) of the slots and its own `BILLRAG_PUBLIC_QUEUE` (3) queue, so public
+  traffic cannot take members' capacity; `anon:` chats are evicted first when sessions exceed `MAX_SESSIONS`. Log field `lane`.
+- **Page:** `public/index.html` shows "N free questions left today" (header `X-Quota-Left`), hides "Find clauses only", turns "Sign out" into
+  "Sign in", and has English/Sinhala/Tamil messages (`T`). The Sinhala and Tamil texts were written by the assistant and NOT reviewed by a speaker.
+- **Cost:** about $0.0005-0.003 per answer (`cost` in the log), so the global cap bounds the public spend to a few dollars a day.
+- **Tested** offline only (test/public.test.mjs with an in-memory counter, billrag gate/lane tests, a Playwright run of the page with a stubbed
+  Worker and stubbed Turnstile). NOT tested: the real Turnstile widget and siteverify call, the Durable Object's SQLite in workerd, the
+  migration `v2`, real mobile networks. To turn on: deploy, set `PUBLIC_CHAT = "on"`, redeploy, try it from a phone, read `lane: public` logs.
+  Abuse not covered: an attacker with many IPs and solved challenges can use up the global cap for a day (availability, not cost).
 
 ### Small-memory hosting facts
 Index: 42,696 chunks x 768 dims; `index.sqlite` 201 MB, `vectors.npz` 61 MB as float16 (114 MB float32). Server RSS ~124 MB after a

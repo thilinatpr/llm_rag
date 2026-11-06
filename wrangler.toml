@@ -28,9 +28,18 @@ max_instances = 1
 name = "BILLRAG"
 class_name = "BillragContainer"
 
+# Daily counters for the public lane (src/quota-do.js, src/public.js).
+[[durable_objects.bindings]]
+name = "QUOTA"
+class_name = "QuotaCounter"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["BillragContainer"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["QuotaCounter"]
 
 # Keep Worker logs (incl. upstream_failed errors) so problems can be read after the fact.
 [observability]
@@ -58,5 +67,14 @@ TRANSLATE = "ai"
 # output, the chat model is tried instead (see the warning in the chat log). Llama 3.3 gave the correct Sinhala legal terms
 # where gpt-oss did not, but is slower on long answers (~37 s vs ~7 s); see AGENTS.md "Translation model".
 TRANSLATE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+# Public (anonymous) questions behind a Cloudflare Turnstile check, with daily quotas: see src/public.js and AGENTS.md "Public lane".
+# OFF until set to "on". Needs the TURNSTILE_SECRET Worker secret (exists) and the site key below (public, not a secret).
+PUBLIC_CHAT = "off"
+TURNSTILE_SITEKEY = "0x4AAAAAAF2W2gpEdNI7gfcY"
+# Daily allowances (reset at midnight in Sri Lanka). Per visitor / per IP (backstop: mobile users share IPs) / whole public lane.
+PUBLIC_DAILY_PER_COOKIE = "10"
+PUBLIC_DAILY_PER_IP = "300"
+PUBLIC_DAILY_GLOBAL = "500"
+PUBLIC_COOKIES_PER_IP = "50"
 # Optional, ignored when the container is bound: proxy signed-in requests to another server instead.
 # ORIGIN = "https://billrag.example.com"

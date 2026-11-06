@@ -14,6 +14,8 @@ POST /api/search  {"query": str, "k": int}          -> {"results": [str]} (retri
 Concurrency (billrag/gate.py): up to BILLRAG_MAX_CONCURRENT (default 4) questions run at once; up to BILLRAG_MAX_QUEUE (10) wait
 in arrival order (a streamed reply gets `queue` {position} events), each at most BILLRAG_QUEUE_WAIT seconds (90). Beyond that the
 reply is HTTP 503 + Retry-After (a streamed one: an `error` event). One conversation runs one question at a time.
+Anonymous visitors arrive with `X-Lane: public` (set by the Worker only): they get BILLRAG_PUBLIC_SLOTS (1) of the slots and a
+BILLRAG_PUBLIC_QUEUE (3) long queue of their own, so they cannot crowd out signed-in users.
 """
 import hmac
 import json
@@ -62,7 +64,8 @@ class App:
             if getattr(self, "_gate", None) is None:
                 env = os.environ.get
                 self._gate = Gate(int(env("BILLRAG_MAX_CONCURRENT") or 4), int(env("BILLRAG_MAX_QUEUE") or 10),
-                                  float(env("BILLRAG_QUEUE_WAIT") or 90))
+                                  float(env("BILLRAG_QUEUE_WAIT") or 90), int(env("BILLRAG_PUBLIC_SLOTS") or 1),
+                                  int(env("BILLRAG_PUBLIC_QUEUE") or 3))
                 self._slocks = {}
 
     def _session_lock(self, session):
@@ -161,9 +164,10 @@ class App:
             return out, meta
         return answer
 
-    def ask(self, session, question, emit=None, mode=None):
+    def ask(self, session, question, emit=None, mode=None, lane="member"):
         """emit(kind, data), optional: progress events for a streamed reply (see /api/ask/stream).
-        mode: one of ANSWER_MODES (the page's Answer choice) or None for the server default."""
+        mode: one of ANSWER_MODES (the page's Answer choice) or None for the server default.
+        lane: "member" (signed in) or "public" (anonymous, marked by the Worker): see gate.py."""
         self._ensure()
         slock = self._session_lock(session)
         # one question per conversation at a time: a follow-up sent early waits for the previous answer (its history)
@@ -171,13 +175,16 @@ class App:
             raise Busy("The previous question in this chat is still being answered. Please wait for it.")
         try:
             on_wait = (lambda pos: emit("queue", pos)) if emit else None
-            waited, concurrent = self._gate.acquire(on_wait)
+            waited, concurrent = self._gate.acquire(on_wait, lane)
             try:
                 with self.lock:
                     if session not in self.sessions:
                         self.sessions[session] = self._new_responder()
                         while len(self.sessions) > MAX_SESSIONS:
-                            old, _ = self.sessions.popitem(last=False)
+                            # anonymous chats ("anon:<id>", named by the Worker) are evicted first, so public traffic
+                            # cannot push a signed-in user's conversation out
+                            old = next((k for k in self.sessions if k.startswith("anon:")), None) or next(iter(self.sessions))
+                            del self.sessions[old]
                             self._slocks.pop(old, None)
                     self.sessions.move_to_end(session)
                     responder = self.sessions[session]
@@ -197,9 +204,9 @@ class App:
                         log_turn(type="ask", session=session, turn=turn, question=question, answer=text, error=err,
                                  seconds=round(time.time() - tm.t, 2), usage=use.fields(), calls=trace.calls or None,
                                  cost=calltrace.cost_summary(trace.calls), queue_wait_s=round(waited, 2),
-                                 concurrent=concurrent, **meta)
+                                 concurrent=concurrent, lane=lane, **meta)
             finally:
-                self._gate.release()
+                self._gate.release(lane)
         finally:
             slock.release()
 
@@ -248,6 +255,10 @@ def make_handler(app):
             else:
                 self._send(404, json.dumps({"error": "not found"}))
 
+        def _lane_kw(self):
+            """Only the Worker (which holds the proxy secret) can set X-Lane; it marks anonymous visitors."""
+            return {"lane": "public"} if self.headers.get("X-Lane") == "public" else {}
+
         def do_POST(self):
             if not self._allowed():
                 return
@@ -264,21 +275,24 @@ def make_handler(app):
                     q = str(body.get("question", "")).strip()
                     if not q:
                         return self._send(400, json.dumps({"error": "empty question"}))
-                    return self._stream(str(body.get("session") or "default")[:64], q, answer_mode(body))
+                    return self._stream(str(body.get("session") or "default")[:64], q, answer_mode(body), self._lane_kw())
                 if self.path == "/api/ask":
                     q = str(body.get("question", "")).strip()
                     if not q:
                         return self._send(400, json.dumps({"error": "empty question"}))
                     sid = str(body.get("session") or "default")[:64]
                     mode = answer_mode(body)
-                    return self._send(200, json.dumps({"answer": app.ask(sid, q, mode=mode) if mode else app.ask(sid, q)}))
+                    kw = self._lane_kw()
+                    if mode:
+                        kw["mode"] = mode
+                    return self._send(200, json.dumps({"answer": app.ask(sid, q, **kw)}))
                 self._send(404, json.dumps({"error": "not found"}))
             except Busy as e:
                 self._send(503, json.dumps({"error": str(e), "busy": True}))
             except Exception as e:  # surface config problems (missing API key, stale vectors) in the UI
                 self._send(500, json.dumps({"error": f"{type(e).__name__}: {e}"}))
 
-        def _stream(self, sid, question, mode=None):
+        def _stream(self, sid, question, mode=None, lane_kw=None):
             """Server-sent events over this response; the connection closes at the end (HTTP/1.0 handler)."""
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -299,7 +313,10 @@ def make_handler(app):
             try:
                 emit = (lambda k, d: send(k, {"step": d} if k == "status" else {"text": d} if k == "token"
                                             else {"position": d} if k == "queue" else {}))
-                send("done", {"answer": app.ask(sid, question, emit=emit, mode=mode) if mode else app.ask(sid, question, emit=emit)})
+                kw = dict(lane_kw or {})
+                if mode:
+                    kw["mode"] = mode
+                send("done", {"answer": app.ask(sid, question, emit=emit, **kw)})
             except Busy as e:
                 send("error", {"error": str(e), "busy": True})
             except Exception as e:  # headers are sent already: report the error as an event
