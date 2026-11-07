@@ -2615,3 +2615,15 @@ def test_only_new_ingest_keeps_existing_chunk_ids(tmp_path, monkeypatch):
     ing.ingest(tmp_path, db, only_new=True)
     assert [p.name for p in seen] == ["002_2026_ENGLISH.pdf"]
     assert [r[0] for r in Store(db).db.execute("SELECT id FROM chunks")] == old
+
+
+def test_a_partial_scrape_cannot_replace_the_full_csv_in_r2(tmp_path):
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("scrape_bills", ROOT_FOR_SCRIPTS / "scripts/scrape_bills.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.csv_path(Path("d"), "bills", 0) == Path("d/bills.csv")
+    assert mod.csv_path(Path("d"), "bills", 2025) == Path("d/bills.since-2025.csv")
+    upload = (ROOT_FOR_SCRIPTS / "scripts/upload_r2.py").read_text(encoding="utf-8")
+    assert '("bills.json", "bills.csv")' in upload and "rglob(\"*.csv\")" not in upload  # upload_r2 sends only these by name

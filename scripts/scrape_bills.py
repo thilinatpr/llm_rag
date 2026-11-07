@@ -96,6 +96,11 @@ def pdf_path(out, bill, lang):
     return out / "pdfs" / year / f"{safe(no)}_{lang}.pdf"
 
 
+def csv_path(out, name, since_year):
+    """The CSV lists only the years scraped. A partial list gets its own name, so upload_r2.py (which sends bills.csv) cannot replace the full one in R2."""
+    return out / (f"{name}.since-{since_year}.csv" if since_year else f"{name}.csv")
+
+
 def download(url_file, dest):
     if dest.exists() and dest.stat().st_size > 0:
         return "skipped"
@@ -160,7 +165,7 @@ def main():
                 if done % 100 == 0:
                     print(f"  {done}/{len(jobs)}", file=sys.stderr)
 
-    with (out / f"{src['file']}.csv").open("w", newline="", encoding="utf-8") as fh:
+    with csv_path(out, src["file"], args.since_year).open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["bill_no", "date", "title", "language", "original_file",
                     "remote_file", "local_path", "status"])
