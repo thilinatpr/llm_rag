@@ -1,6 +1,7 @@
 # The admin panel. Deploy: npx wrangler deploy -c workers/admin/wrangler.toml
 # Secrets (npx wrangler secret put NAME -c workers/admin/wrangler.toml):
-#   OTP_PEPPER (its own random value), CF_EMAIL_TOKEN (login mail), DEEPSEEK_API_KEY ("Check now" on the credit)
+#   OTP_PEPPER (its own random value), CF_EMAIL_TOKEN (login mail), DEEPSEEK_API_KEY ("Check now" on the credit),
+#   GITHUB_DISPATCH_TOKEN (fine-grained token for GITHUB_REPO only, permission Actions: read and write: the Build and Publish buttons)
 name = "citizenlk-admin"
 main = "worker.js"
 compatibility_date = "2026-11-01"
@@ -47,7 +48,8 @@ binding = "CF_VERSION_METADATA"
 enabled = true
 
 [triggers]
-crons = ["23 * * * *"]
+# Hourly: log rollups. Daily 02:40 UTC (08:10 Sri Lanka): new bills on documents.gov.lk (src/refresh.js CHECK_CRON; test/refresh.test.mjs checks they match).
+crons = ["23 * * * *", "40 2 * * *"]
 
 [vars]
 # Who can sign in, which is who can use the panel. Empty = nobody.
@@ -57,3 +59,6 @@ CF_ACCOUNT_ID = "e81ea992523c4e14d3d1a89f10732576"
 # Must match wrangler.toml at the repo root (test/admin.test.mjs checks): "Check now" runs the same credit check as Bill Assistant's cron.
 ALERT_EMAIL = "thilinatpr@gmail.com"
 BALANCE_ALERT_USD = "5"
+# The Build / Publish buttons start .github/workflows/refresh-index.yml here (src/refresh.js). Without the secret they say so.
+GITHUB_REPO = "thilinatpr/llm_rag"
+GITHUB_REF = "main"

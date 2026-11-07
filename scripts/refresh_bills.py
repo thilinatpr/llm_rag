@@ -53,6 +53,21 @@ def new_documents(work, known):
     return out
 
 
+def listing_keys(work, since_year):
+    """Keys of every listed bill (from since_year) and Act the index could hold, whether or not a PDF was found: what the admin panel's daily check sees."""
+    from billrag.acts import act_key
+    out = set()
+    path = work / "bills" / "bills.json"
+    for b in json.loads(path.read_text(encoding="utf-8")) if path.exists() else []:
+        if int((b.get("date") or "0")[:4] or 0) >= since_year:
+            out.add(bill_key(b["billNo"], b["billSubNo"]))
+    path = work / "acts" / "acts.json"
+    for a in json.loads(path.read_text(encoding="utf-8")) if path.exists() else []:
+        if a.get("actNo") and int(a.get("actSubNo") or 0) >= max(ACTS_SINCE, since_year):
+            out.add(act_key(a["actNo"], a["actSubNo"]))
+    return out
+
+
 def snapshot(db_path):
     db = sqlite3.connect(str(db_path))
     try:
@@ -95,7 +110,21 @@ def main(argv=None):
     ap.add_argument("--min-mrr", type=float, default=0.80)
     ap.add_argument("--force", action="store_true", help="go on even if nothing is new (to retry missing summaries)")
     ap.add_argument("--action-id", help="documents.gov.lk Next-Action id, if the site redeployed (see AGENTS.md)")
+    ap.add_argument("--report", help="write the outcome here as JSON (state nothing_new | built | published | failed, new documents, MRR, problems): "
+                    "the GitHub workflow sends it to the admin panel (scripts/refresh_r2.py)")
     a = ap.parse_args(argv)
+    report = {"state": "failed", "min_mrr": a.min_mrr}
+    try:
+        return run_refresh(a, report)
+    except Exception as e:  # a crash, not a failed check: say so in the report, then let it show
+        report["error"] = f"{type(e).__name__}: {e}"
+        raise
+    finally:
+        if a.report:
+            Path(a.report).write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def run_refresh(a, report):
 
     work, bills_dir = Path(a.work), Path(a.work) / "bills"
     bills_dir.mkdir(parents=True, exist_ok=True)
@@ -115,9 +144,11 @@ def main(argv=None):
         run("scripts/scrape_bills.py", "--source", "acts", "--out", str(work / "acts"), "--since-year", str(max(a.since_year, ACTS_SINCE)),
             "--langs", "ENGLISH", "SINHALA", *extra, step="scrape Acts")
         new = new_documents(work, before["keys"])
+        report.update(new_bills=new["bills"], new_acts=new["acts"])
         print(f"\nNew: {len(new['bills'])} bills {sorted(new['bills'])}, {len(new['acts'])} Acts {sorted(new['acts'])}", file=sys.stderr)
         if not new["bills"] and not new["acts"] and not a.force:
             print("Nothing new. The live index is unchanged.", file=sys.stderr)
+            report.update(state="nothing_new", unindexed=sorted(listing_keys(work, a.since_year) - before["keys"]))
             return 0
         run("-m", "billrag", "ingest", "--only-new", "--since-year", str(a.since_year), step="parse new bills")
         if new["bills"]:
@@ -132,11 +163,15 @@ def main(argv=None):
         after = snapshot(bills_dir / "index.sqlite")
         problems = check_nothing_lost(before, after)
         unparsed = sorted((set(new["bills"]) | set(new["acts"])) - after["keys"])
+        report.update(unparsed=unparsed, unindexed=sorted(listing_keys(work, a.since_year) - after["keys"]),
+                      chunks_added=len(after["chunks"]) - len(before["chunks"]), problems=list(problems))
         if unparsed:  # a PDF the parser cannot read: report it, but it must not hold back the others
             print(f"\nNOT indexed (parser found no sections): {unparsed}", file=sys.stderr)
         added = {**new["bills"], **new["acts"]}
         added = {k: t for k, t in added.items() if k in after["keys"]}
         no_summary = sorted(set(added) - after["summaries"])
+        report.update(new_bills={k: t for k, t in new["bills"].items() if k in after["keys"]},
+                      new_acts={k: t for k, t in new["acts"].items() if k in after["keys"]}, no_summary=no_summary)
         if no_summary:
             print(f"\nNo summary yet (searchable, but less well): {no_summary}", file=sys.stderr)
 
@@ -153,20 +188,25 @@ def main(argv=None):
         items = [with_act_gold(retriever.store, i) for i in load_items(ROOT / "evals/retrieval_eval.jsonl") if i["source"]["year"] >= 2025]
         summary = evaluate(retriever, items, 10, ("overview",), ("section", "schedule"))[0]
         mrr = summary["all"]["mrr"] if "all" in summary else summary.get("mrr")
+        report.update(mrr=round(mrr, 3), eval_items=len(items))
         print(f"\nRetrieval on {len(items)} recent questions: MRR {mrr:.3f} (floor {a.min_mrr})", file=sys.stderr)
         if mrr < a.min_mrr:
             problems.append(f"retrieval MRR {mrr:.3f} is below {a.min_mrr}")
+        report["problems"] = list(problems)
         if problems:
             raise Stop("checks failed:\n  " + "\n  ".join(problems))
         print(f"\nChecks passed: {len(added)} new documents, {len(after['chunks']) - len(before['chunks'])} new chunks.", file=sys.stderr)
         if not a.publish:
             print(f"Not published (no --publish). The built index is in {bills_dir}.", file=sys.stderr)
+            report["state"] = "built"
             return 0
         run("scripts/upload_r2.py", "--bucket", a.bucket, "--data", str(bills_dir), "--include-index", step="publish to R2")
         print("Published. A running container picks it up when it next starts.", file=sys.stderr)
+        report["state"] = "published"
         return 0
     except Stop as e:
         print(f"\nSTOPPED, nothing was published: {e}", file=sys.stderr)
+        report.update(state="failed", error=str(e))
         return 1
 
 
