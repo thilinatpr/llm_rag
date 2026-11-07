@@ -101,3 +101,11 @@ test("tokens and cost go into the log, not to the browser", async () => {
   assert.equal(puts[0].calls[0].in, 100);
   assert.equal(puts[0].cost.usd, 0.0001);
 });
+
+test("the privacy page is open without a session and is Procurement's own", async () => {
+  const t = setup();
+  const r = await t.handle(new Request("https://procurement.citizenlk.com/privacy"), t.env);
+  assert.equal(r.status, 200);
+  assert.match(await r.text(), /Procurement Rules/);
+  assert.equal(t.forwarded.length, 0);
+});

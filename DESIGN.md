@@ -19,8 +19,11 @@ Applied to the live app on 2026-11-06: the chat page `public/index.html` ("Bill 
    ornament only: the lotus-petal (palapethi) border at the top of the page.
 6. **Languages are not advertised.** No public page, placeholder or example says which languages the assistant answers in, and nothing
    names a language where a user could read it as a promise. A person who writes in Sinhala or Tamil is simply answered; the
-   capability stays quiet. (The citizen/පුරවැසි/குடிமக்கள் name line is branding, not a claim.) Notices that appear only inside a
-   Sinhala or Tamil answer, and quota messages chosen by the browser's language, are fine.
+   capability stays quiet. (The citizen/පුරවැසි/குடிமக்கள் name line on the homepage is branding, not a claim.)
+7. **Service pages are English only** (owner's decision 2026-11-07): the chat pages, sign-in and privacy pages have no Sinhala or Tamil text, including visitor
+   messages. This covers the page, not the answers: a person who writes in Sinhala or Tamil is still answered in it, and notices inside such an answer stay.
+8. **The privacy page is the exception to principle 2:** it names the companies that receive questions, because that is its purpose. Change it when what is
+   logged or who receives it changes (`src/privacy.js`).
 
 ## Colour tokens
 

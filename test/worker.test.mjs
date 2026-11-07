@@ -166,3 +166,29 @@ test("chat provider: DeepSeek gets Workers AI as its backup, never the other way
   assert.equal(chatEnv(base).vars.BILLRAG_FALLBACK_MODEL, undefined);
   assert.equal(chatEnv({ CF_ACCOUNT_ID: "acc", CHAT_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "k" }).vars.BILLRAG_FALLBACK_MODEL, undefined);
 });
+
+test("privacy page: open without signing in, on GET only, per service, and the contact is optional and escaped", async () => {
+  const { privacyPage } = await import("../src/privacy.js");
+  const env = { AUTH: { get: async () => null, put: async () => {}, delete: async () => {} }, ALLOWED_EMAILS: "", ASSETS: { fetch: async () => new Response("page") } };
+  const h = createHandler({ privacy: "bills" });
+  const r = await h(new Request("https://bills.test/privacy"), env);
+  assert.equal(r.status, 200);
+  const text = await r.text();
+  for (const fact of ["DeepSeek", "Cloudflare", "Google Fonts", "Turnstile", "no fixed deletion date", "30 days", "Bill Assistant"]) assert.ok(text.includes(fact), fact);
+  assert.ok(!text.includes("mailto:"));
+  assert.notEqual((await h(new Request("https://bills.test/privacy", { method: "POST" }), env)).status, 200);
+  assert.notEqual((await createHandler({})(new Request("https://bills.test/privacy"), env)).status, 200); // a Worker that did not ask for one
+  const proc = privacyPage("procurement");
+  assert.ok(proc.includes("Procurement Rules") && !proc.includes("Turnstile") && !proc.includes("free questions"));
+  assert.ok(privacyPage("bills", 'a"<b>@x.lk').includes("a&quot;&lt;b&gt;@x.lk"));
+});
+
+test("service pages have no Sinhala or Tamil text, and link to the privacy page", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { LOGIN_PAGE } = await import("../src/auth.js");
+  const { privacyPage } = await import("../src/privacy.js");
+  const pages = { chat: readFileSync("public/index.html", "utf-8"), procurement: readFileSync("workers/procurement/public/index.html", "utf-8"), login: LOGIN_PAGE,
+    bills: privacyPage("bills"), proc: privacyPage("procurement") };
+  for (const [name, html] of Object.entries(pages)) assert.ok(!/[඀-෿஀-௿]/.test(html), name);
+  for (const name of ["chat", "procurement", "login"]) assert.ok(pages[name].includes('href="/privacy"'), name);
+});

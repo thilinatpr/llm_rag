@@ -42,6 +42,7 @@ src/public.js, quota.js, quota-do.js, util.js   public (anonymous) lane: Turnsti
 billrag/calltrace.py      one record per model / Workers AI call (step, model, seconds, tokens, cache hits, USD, retries) -> log fields `calls`, `cost`
 public/index.html         the chat page (static asset, served by the Worker behind the login; also used by local `serve`)
 src/worker.js             Worker entrypoint: login gate (auth.js) + forwards /api/* and /healthz to the container
+src/privacy.js            the /privacy page of each service, open without sign-in; keep it true when logging or providers change
 src/auth.js               email one-time-code login (KV codes/sessions, Cloudflare Email Service REST sender), routing
 src/container.js          `BillragContainer` (Durable Object): starts the Python container, passes env/secrets to it
 Dockerfile, docker/entrypoint.sh, requirements-serve.txt   the container image (restores the index from R2, then serves)
@@ -454,8 +455,8 @@ cookie (HMAC, 30 days; only an id) -> `/api/ask`, `/api/ask/stream`, `/healthz` 
   `X-Lane: public` (a client-sent X-Lane is dropped). Without that rewrite every visitor would share the session "default".
 - **Container:** the `public` gate lane gets `BILLRAG_PUBLIC_SLOTS` (2) of the slots and its own `BILLRAG_PUBLIC_QUEUE` (6) queue, so public
   traffic cannot take members' capacity; `anon:` chats are evicted first when sessions exceed `MAX_SESSIONS`. Log field `lane`.
-- **Page:** `public/index.html` shows "N free questions left today" (header `X-Quota-Left`), hides "Find clauses only", turns "Sign out" into
-  "Sign in", and has English/Sinhala/Tamil messages (`T`). The Sinhala and Tamil texts were written by the assistant and NOT reviewed by a speaker.
+- **Page:** `public/index.html` shows "N free questions left today" (header `X-Quota-Left`), hides "Find clauses only" and turns "Sign out" into
+  "Sign in". All page text is English (DESIGN.md principle 7).
 - **Cost:** about $0.0005-0.003 per answer (`cost` in the log), so the global cap bounds the public spend to a few dollars a day.
 - **Tested** offline (test/public.test.mjs with an in-memory counter, billrag gate/lane tests, a Playwright run of the page with a stubbed
   Worker and stubbed Turnstile). Verified live only by the owner's report that it works on their phone (2026-11-06; the real Turnstile

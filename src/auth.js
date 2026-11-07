@@ -11,6 +11,7 @@
 
 import { getCookie, hex, json, readJson, safeEqual } from "./util.js";
 import { anonApi, publicMe, publicOn, publicStart, verifyTurnstile } from "./public.js";
+import { privacyPage } from "./privacy.js";
 
 const PAUSE_KEY = "admin:public-paused"; // set by the admin panel (admin.js, citizenlk-admin Worker)
 const OTP_TTL = 300; // seconds a code is valid
@@ -149,8 +150,6 @@ export const LOGIN_PAGE = `<!doctype html>
   h1 { margin: 0; font: 800 clamp(3rem, 10vw, 5rem)/1 var(--f-display); letter-spacing: -.01em; }
   h1 b { color: var(--sindoor); font-weight: 800; }
   .sub { margin: -8px 0 0; color: var(--muted); }
-  .tri { margin: -12px 0 0; color: var(--muted); font-size: .95rem; }
-  .tri .ta { font-family: var(--f-ta); }
   form { width: min(100%, 560px); display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 20px; border: 1px solid var(--line);
     border-radius: 999px; background: var(--box); transition: border-color .2s, box-shadow .2s; }
   form:hover, form:focus-within { border-color: var(--ochre); box-shadow: 0 2px 10px -2px color-mix(in srgb, var(--ink) 18%, transparent); }
@@ -171,7 +170,6 @@ export const LOGIN_PAGE = `<!doctype html>
 <div class="petals" aria-hidden="true"></div>
 <main>
   <h1>citizen<b>lk</b></h1>
-  <p class="tri"><span lang="si">පුරවැසි</span> · <span class="ta" lang="ta">குடிமக்கள்</span> · Citizen</p>
   <p class="sub">Sign in to the Bill Assistant</p>
   <form id="f1"><input id="email" type="email" placeholder="you@example.com" aria-label="Email address" autocomplete="email" required autofocus>
     <button>Email me a code</button></form>
@@ -179,7 +177,7 @@ export const LOGIN_PAGE = `<!doctype html>
     <button>Sign in</button></form>
   <p id="msg" aria-live="polite">Access is by invitation for now.</p>
 </main>
-<footer><span>Sri Lanka</span><span>Not legal advice · Not a government service</span></footer>
+<footer><span>Sri Lanka</span><span>Not legal advice · Not a government service · <a href="/privacy" style="color:inherit">Privacy</a></span></footer>
 <script>
 const $ = (id) => document.getElementById(id), msg = (t, e) => { $('msg').textContent = t; $('msg').className = e ? 'err' : ''; };
 async function post(path, body) {
@@ -198,13 +196,15 @@ $('f2').onsubmit = async (e) => { e.preventDefault();
 // verify(env, token, ip, host) checks a Turnstile token; now() is the clock (both replaceable in tests).
 // app(request, env, user): handles everything but the login routes, with user = null when signed out (the admin Worker's panel).
 // loginTitle replaces the line under the wordmark on the sign-in page.
-export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null, verify = verifyTurnstile, now = () => Date.now(), app = null, loginTitle = null } = {}) {
+export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null, verify = verifyTurnstile, now = () => Date.now(), app = null, privacy = null, loginTitle = null } = {}) {
   return async function fetch(request, realEnv) {
     let env = realEnv;
     const url = new URL(request.url);
     const { pathname } = url;
     if (pathname === "/login" && request.method === "GET")
       return new Response(loginTitle ? LOGIN_PAGE.replace("Sign in to the Bill Assistant", loginTitle) : LOGIN_PAGE, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+    if (privacy && pathname === "/privacy" && request.method === "GET") // readable before signing in or starting a chat
+      return new Response(privacyPage(privacy, env.PRIVACY_CONTACT), { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
     if (pathname === "/login/request" && request.method === "POST") return requestCode(env, request, sendMail);
     if (pathname === "/login/verify" && request.method === "POST") return verifyCode(env, request);
     if (pathname === "/logout" && request.method === "POST") {
