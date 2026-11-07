@@ -4,6 +4,7 @@ import { getContainer } from "@cloudflare/containers";
 import { createHandler } from "./auth.js";
 import { checkBalance } from "./balance.js";
 import { reportSettings } from "./public.js";
+import { noindex } from "./seo.js";
 
 export { BillragContainer } from "./container.js";
 export { QuotaCounter } from "./quota-do.js";
@@ -31,6 +32,6 @@ async function upstream(request, env, opts = {}) {
 }
 
 export default {
-  fetch: createHandler({ upstream, privacy: "bills" }),
+  fetch: noindex(createHandler({ upstream, privacy: "bills" })),
   scheduled: (_event, env, ctx) => ctx.waitUntil(Promise.all([checkBalance(env), reportSettings(env)])), // hourly: see [triggers] in wrangler.toml
 };
