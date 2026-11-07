@@ -22,7 +22,7 @@ from upload_r2 import INDEX_FILES, INDEX_TRANSFER, client  # noqa: E402
 STATUS = "refresh/status.json"
 SKIPPED = "refresh/skipped.json"
 STAGING = "refresh/staging/"
-KEEP = ("new_bills", "new_acts", "mrr", "min_mrr", "eval_items", "chunks_added", "problems", "unparsed", "no_summary", "error")
+KEEP = ("new_bills", "new_acts", "mrr", "min_mrr", "eval_items", "chunks_added", "problems", "unparsed", "no_summary", "base_acts_missing", "base_acts_added", "error")
 
 
 def now():

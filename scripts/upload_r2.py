@@ -90,6 +90,21 @@ def check_pair(root: Path):
         raise PublishError("vectors.npz was not built from this index.sqlite: run `python -m billrag embed`. Nothing was changed.")
 
 
+def check_base_acts(root: Path):
+    """Refuse an index in which a bill or Act amends an Act that the index does not hold (billrag/baseacts.py). Not part of check_pair: fetch_index
+    uses that to restore what is live, which must keep working. Waive one on purpose in evals/base_acts_waived.json."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from billrag import baseacts
+    from billrag.store import Store
+    store = Store(root / "index.sqlite")
+    try:
+        msg = baseacts.problem(baseacts.check(store))
+    finally:
+        store.db.close()
+    if msg:
+        raise PublishError(f"{msg}. Nothing was changed.")
+
+
 MANIFEST = "indexed-keys.json"
 
 
@@ -154,6 +169,7 @@ def publish_index(s3, bucket, prefix, root: Path, stamp=None):
     scripts/fetch_index.py, which fetches again."""
     stamp = stamp or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     check_pair(root)
+    check_base_acts(root)
     live = {n: f"{prefix}/{n}" for n in INDEX_FILES}
     staging = {n: f"{prefix}/.staging/{stamp}/{n}" for n in INDEX_FILES}
     backup = {n: f"backups/{prefix}/{stamp}/{n}" for n in INDEX_FILES}

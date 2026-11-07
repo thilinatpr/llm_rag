@@ -10,6 +10,10 @@ chunks keep their ids, so their vectors stay valid) -> link Sinhala text and bil
 `upload_r2.py --include-index` backs up the live pair and swaps it safely. A running container keeps its index: it restores the new one when it next starts
 (it sleeps after 15 idle minutes). Every step can be re-run; summaries cost about 1 model call per new document.
 
+Base Acts: every Act that an indexed bill or Act amends (named in its long title) must be in the index (billrag/baseacts.py). The ones documents.gov.lk
+has are fetched here; the others stop the publish and appear in the report (`base_acts_missing`, and the admin panel) until someone adds the text
+(`python -m billrag add-base-act`) or records why not in evals/base_acts_waived.json. The first run after this was added needs --force (it fetches ~36 Acts).
+
 Checks before publishing: nothing that was in the index is lost, every new document can be found by its own title, retrieval on the recent eval
 questions stays above --min-mrr (measured 0.87-0.88; needs Workers AI). Chat model: the BILLRAG_CHAT_* settings, or deepseek-flash if only DEEPSEEK_API_KEY is set.
 """
@@ -24,7 +28,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from billrag.store import bill_key  # noqa: E402
+from billrag import baseacts  # noqa: E402
+from billrag.store import Store, bill_key  # noqa: E402
 
 ACTS_SINCE = 2024  # acts.ACT_SINCE: older Acts are not indexed
 
@@ -66,6 +71,32 @@ def listing_keys(work, since_year):
         if a.get("actNo") and int(a.get("actSubNo") or 0) >= max(ACTS_SINCE, since_year):
             out.add(act_key(a["actNo"], a["actSubNo"]))
     return out
+
+
+def base_acts(run, work, bills_dir):
+    """Fetch and index the base Acts (the law an indexed bill or Act amends) that documents.gov.lk has and the index lacks. Returns their ids.
+    What it cannot fetch is reported by the check after the build (baseacts.check) and stops the publish until someone finds the text or waives it."""
+    res = base_check(work, bills_dir)
+    ids = sorted(res["fetchable"])
+    if ids:
+        print(f"\nBase Acts to fetch: {ids}", file=sys.stderr)
+        keys = ",".join(ids)
+        run("scripts/scrape_bills.py", "--source", "acts", "--out", str(work / "acts"), "--keys", keys, "--langs", "ENGLISH", step="fetch base Acts")
+        run("-m", "billrag", "ingest-acts", "--keys", keys, "--only-new", step="parse base Acts")
+    return ids
+
+
+def base_check(work, bills_dir):
+    """Module level on purpose: run_refresh imports its own `Store` later, which would make the name local to it."""
+    return baseacts.check(Store(bills_dir / "index.sqlite"), baseacts.load_listing(work / "acts" / "acts.json"))
+
+
+def unresolved_base_acts(work, bills_dir):
+    """baseacts.check after the fetch: a base Act the listing offers but the index still lacks failed to download or parse, so it counts as missing."""
+    res = base_check(work, bills_dir)
+    res["unresolved"].update({k: {**v, "why": "documents.gov.lk lists it, but fetching or reading its PDF failed"} for k, v in res["fetchable"].items()})
+    res["fetchable"] = {}
+    return res
 
 
 def snapshot(db_path):
@@ -148,12 +179,14 @@ def run_refresh(a, report):
         print(f"\nNew: {len(new['bills'])} bills {sorted(new['bills'])}, {len(new['acts'])} Acts {sorted(new['acts'])}", file=sys.stderr)
         if not new["bills"] and not new["acts"] and not a.force:
             print("Nothing new. The live index is unchanged.", file=sys.stderr)
+            report.update(base_acts_missing={k: {"name": v["name"], "cited_by": v["cited_by"], "why": v["why"]} for k, v in base_check(work, bills_dir)["unresolved"].items()})  # only reported: nothing is published
             report.update(state="nothing_new", unindexed=sorted(listing_keys(work, a.since_year) - before["keys"]))
             return 0
         run("-m", "billrag", "ingest", "--only-new", "--since-year", str(a.since_year), step="parse new bills")
         if new["bills"]:
             run("-m", "billrag", "ingest-si", "--since-year", str(a.since_year), "--keys", ",".join(new["bills"]), step="link official Sinhala text")
         run("-m", "billrag", "ingest-acts", "--only-new", "--since-year", str(max(a.since_year, ACTS_SINCE)), step="parse new Acts, link bills to Acts")
+        base_added = base_acts(run, work, bills_dir)  # every Act that an indexed bill or Act amends must be in the index too
         if new["acts"] or new["bills"]:
             run("-m", "billrag", "link-acts", step="recompute bill -> Act links")
         run("-m", "billrag", "summarize", "--since-year", str(a.since_year), step="summarise what has no summary")
@@ -163,6 +196,11 @@ def run_refresh(a, report):
         after = snapshot(bills_dir / "index.sqlite")
         problems = check_nothing_lost(before, after)
         unparsed = sorted((set(new["bills"]) | set(new["acts"])) - after["keys"])
+        base = unresolved_base_acts(work, bills_dir)  # after the fetch: what is still missing
+        if base["unresolved"]:
+            problems.append(baseacts.problem(base))
+        report.update(base_acts_missing={k: {"name": v["name"], "cited_by": v["cited_by"], "why": v["why"]} for k, v in base["unresolved"].items()},
+                      base_acts_added=sorted(set(base_added) - set(base["unresolved"])))
         report.update(unparsed=unparsed, unindexed=sorted(listing_keys(work, a.since_year) - after["keys"]),
                       chunks_added=len(after["chunks"]) - len(before["chunks"]), problems=list(problems))
         if unparsed:  # a PDF the parser cannot read: report it, but it must not hold back the others
