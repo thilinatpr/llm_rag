@@ -10,6 +10,10 @@ bill_meta   family      key of the earliest bill of the same title within 300 da
             latest_family  family of the newest instance of this title ("Appropriation" recurs every year)
             tags        JSON list of topic tags (from `tag`, survives a rebuild)
 section_refs  bill_key, section_no -> ref_no: section text that points at another section of the same bill
+amended_sections  bill_key, section_no -> action (amended | repealed | replaced | inserted), target ("section 8", "section 52A",
+            "CHAPTER XVIIA", "First Schedule"), act (None = the principal enactment): what each clause of an amending bill or
+            Act changes, read from the clause's opening words. Clauses that change nothing (short title, commencement,
+            transitional provisions, "Sinhala text to prevail") get no row, so "every clause" = rows + the rest, never guessed.
 """
 import json
 import re
@@ -31,6 +35,9 @@ CREATE TABLE IF NOT EXISTS bill_meta(
 CREATE INDEX IF NOT EXISTS bill_meta_title ON bill_meta(title_norm, is_latest);
 CREATE TABLE IF NOT EXISTS section_refs(
   bill_key TEXT NOT NULL, section_no INT NOT NULL, ref_no INT NOT NULL, PRIMARY KEY(bill_key, section_no, ref_no));
+CREATE TABLE IF NOT EXISTS amended_sections(
+  bill_key TEXT NOT NULL, section_no INT NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, act TEXT,
+  PRIMARY KEY(bill_key, section_no));
 """
 
 STAGE = {"gs": "gazette", "bill": "bill", "act": "act"}
@@ -93,9 +100,129 @@ def build(store: Store) -> dict:
     db.execute("DELETE FROM bill_meta")
     db.executemany("INSERT INTO bill_meta VALUES(?,?,?,?,?,?,?,?,?)", rows)
     n_refs = build_refs(store)
+    n_amend = build_amended(store, {r[0] for r in rows})  # all: some amending instruments have no "(Amendment)" in the title
     db.commit()
     return {"bills": len(rows), "families": len({r[2] for r in rows}), "latest": sum(r[6] for r in rows),
-            "section_refs": n_refs}
+            "section_refs": n_refs, "amended_sections": n_amend}
+
+
+# ---- what each clause of an amending instrument changes. Only the clause's OPENING words are read: a clause like "the
+# Commissioner-General shall write off interest under section 157 of the principal enactment" mentions a section without
+# amending it, and must not be listed.
+# 8, 52A, 155FF, "16 A", "97a", "6 b" (a letter after a space only when "of"/"to"/a list follows, so the "o" of "8 of" is not one)
+_NUM = r"\d{1,3}(?:[A-Z]{1,3}\b|[a-z]{1,2}\b|\s[A-Za-z]{1,2}(?=\s+(?:of|to|and|or)\b|\s*,))?"
+_NUMS = rf"{_NUM}(?:\s*(?:,|and|to|-|–)\s*{_NUM})*"
+_SEC = r"(?:[Ss]e\s?c\s?t\s?i\s?o\s?ns?|Articles?)"  # "Se ction", "Secti on": a word split by the PDF; Articles of the Constitution
+_UNIT = (rf"(?:{_SEC}\s+{_NUMS}|(?:the\s+)?(?:[A-Z][a-z]+\s+)?Schedules?(?:\s+[IVX]+\b)?|(?:the\s+)?(?:Part|PART|Chapter|CHAPTER)\s+[IVXLC]+[A-Z]?|"
+         r"(?:the\s+)?(?:Preamble|long\s+title))"
+         r"(?:\s*\([^)]{0,80}\))?")  # "Chapter LXVI (sections 801 to 833 B both inclusive)"
+_OF = r"\s+(?:to|of)\s+(?:the\s+)?(?P<act>principal\s+enactment|.{3,250}?)\s+(?:is|are)\s+(?:hereby\s+)?(?:further\s+)?"
+AMEND_OPEN = re.compile(rf"^(?:The\s+)?(?P<unit>{_UNIT}){_OF}(?P<verb>amended|repealed)", re.S)
+INSERT_OPEN = re.compile(r"^The\s+following\s+(?:new\s+)?(?P<what>sections?|Articles?|Chapters?|CHAPTERS?|Parts?|PARTS?|Schedules?|"
+                         r"headings?|divisions?|sub-?sections?|paragraphs?|definitions?)(?:\s*\([^)]{0,80}\))?\s+"
+                         r"(?:is|are)\s+(?:hereby\s+)?inserted\b(?P<rest>.{0,400})", re.S)
+# "The principal enactment is hereby amended by the substitution for the words ...", "In the principal enactment ... there shall
+# be substituted", "The sections of the principal enactment specified in Column I of the Schedule hereto are hereby amended"
+WHOLE_OPEN = re.compile(r"^(?:The\s+(?P<a>principal\s+enactment|[^.]{3,120}?(?:Act|Ordinance|Code|Law),?\s+No\.\s*\d+\s+of\s+\d{4}"
+                        r"(?:\s*\([^)]{0,120}\))?)\s+is\s+(?:hereby\s+)?amended|"
+                        r"(?:\(1\)\s*)?In\s+the\s+(?P<b>principal\s+enactment)\b.{0,200}?\bshall\s+be\s+substituted)", re.S)
+LISTED_OPEN = re.compile(r"^The\s+sections\s+of\s+the\s+principal\s+enactment\s+specified\s+in\s+.{0,80}?Schedule.{0,40}?"
+                         r"(?:is|are)\s+(?:hereby\s+)?amended", re.S)
+EFFECT_AS = re.compile(rf"have\s+effect\s+as\s+(?P<t>(?:{_SEC}\s+{_NUMS}|(?:CHAPTER|Chapter|PART|Part)\s+[IVXLC]+[A-Z]?|"
+                       rf"(?:the\s+)?[A-Z][a-z]+\s+Schedule))(?:\s+(?:of|to)\s+(?:that|the)\s+(?P<act>[^.;:]{{0,200}}?))?"
+                       r"(?:[:;.\-–—]|\s+of\s+that|\s*$)", re.S)
+INSERT_AFTER = re.compile(rf"(?:after|before|above|below)\s+(?P<t>{_SEC}\s+{_NUM}|(?:CHAPTER|Chapter|PART|Part)\s+[IVXLC]+[A-Z]?)\s+"
+                          r"(?:of|to)\s+(?:the\s+)?(?P<act>principal\s+enactment|[^,]{3,200}?)\s*(?:,|and\b)")
+_LEAD = re.compile(r"^\s*(?:\d{1,3}\s*\.\s*)?")
+
+
+def _act_name(raw):
+    """'principal enactment' -> None (the Act the instrument amends); else the named Act, without the 'hereinafter' aside."""
+    if not raw:
+        return None
+    a = re.sub(r"\s+", " ", raw).strip()
+    if re.search(r"(?:hereinafter|in\s+this\s+Act)\s+referred\s+to\s+as\s+(?:the\s+)?[\"“]?(?:the\s+)?principal\s+enactment", a, re.I):
+        return None  # the clause that names the principal enactment
+    if re.fullmatch(r"(?:that\s+|the\s+)?(?:principal\s+)?enactment|that\s+Act", a, re.I):
+        return None
+    a = re.split(r"\s*\(\s*hereinafter", a, maxsplit=1)[0].strip(" ,")
+    return None if re.fullmatch(r"principal\s+enactment", a, re.I) else a[:160]
+
+
+def _tidy(t):
+    t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"^the\s+", "", t)
+    t = re.sub(r"^Se\s?ction", "Section", t)
+    t = re.sub(r"(\d)\s?(?!(?:and|to|of|or)\b)([A-Za-z]{1,3})\b", lambda m: m.group(1) + m.group(2).upper(), t)  # "16 A", "97a" -> 16A, 97A
+    return t[0].lower() + t[1:] if t.lower().startswith("section") else t
+
+
+def amendment_of(text):
+    """(action, target, act) for one clause of an amending instrument, or None if its opening words change nothing."""
+    t = _LEAD.sub("", re.sub(r"\s+", " ", text or "")).strip()[:700]
+    m = AMEND_OPEN.match(t)
+    if m:
+        verb = m.group("verb")
+        after = t[m.end():m.end() + 300]
+        action = "replaced" if verb == "repealed" and re.search(r"substitut", after) else verb
+        return action, _tidy(m.group("unit")), _act_name(m.group("act"))
+    m = INSERT_OPEN.match(t)
+    if m:
+        rest = m.group("rest")
+        e = EFFECT_AS.search(rest)
+        if e:
+            act = _act_name(e.group("act")) if e.group("act") else None
+            if act is None and (a := INSERT_AFTER.search(rest)):
+                act = _act_name(a.group("act"))
+            return "inserted", _tidy(e.group("t")), act
+        a = INSERT_AFTER.search(rest)
+        if a:
+            where = re.search(r"\b(after|before|above|below)\b", rest).group(1)
+            return "inserted", f"new {m.group('what').lower()} {where} {_tidy(a.group('t'))}", _act_name(a.group("act"))
+    if WHOLE_OPEN.match(t):
+        return "amended", "words throughout the Act", None
+    if LISTED_OPEN.match(t):
+        return "amended", "the sections listed in its Schedule", None
+    return None
+
+
+def build_amended(store: Store, keys) -> int:
+    """Fill amended_sections for the given (amending) bills and Acts."""
+    db = store.db
+    db.execute("DELETE FROM amended_sections")
+    n = 0
+    for key in sorted(keys):
+        rows = []
+        for no, text in store.section_map(key).items():
+            a = amendment_of(text)
+            if a:
+                rows.append((key, no, *a))
+        db.executemany("INSERT OR REPLACE INTO amended_sections VALUES(?,?,?,?,?)", rows)
+        n += len(rows)
+    return n
+
+
+# a title = capitalised words (and of/and/the/for between them) ending in "No. N of YYYY" or "(Chapter N)", right before the aside
+_TW = r"[A-Z][\w'’&-]*"
+PRINCIPAL = re.compile(rf"(?P<a>{_TW}(?:\s+(?:{_TW}|of|and|the|for|on|in|\([A-Z][\w ]*\)))*(?:,?\s+No\.\s*\d+\s+of\s+\d{{4}}|\s*\(Chapter\s+\d+\)))"
+                       r"\s*\(\s*(?:hereinafter|in\s+this\s+Act)\s+referred\s+to\s+as\s+(?:the\s+)?[\"“]?(?:the\s+)?principal\s+enactment")
+
+
+def principal_of(store, key):
+    """'Inland Revenue Act, No. 24 of 2017' when a clause of the instrument names its principal enactment; else None."""
+    for text in store.section_map(key).values():
+        m = PRINCIPAL.search(re.sub(r"\s+", " ", text[:1500]))
+        if m:
+            return re.sub(r"^the\s+", "", m.group("a"), flags=re.I).strip(" ,")
+    return None
+
+
+def amended(store, key):
+    """[{section_no, action, target, act}] in clause order; [] if the table is missing or the instrument amends nothing."""
+    if not store.db.execute("SELECT 1 FROM sqlite_master WHERE name='amended_sections'").fetchone():
+        return []
+    return [dict(r) for r in store.db.execute(
+        "SELECT section_no, action, target, act FROM amended_sections WHERE bill_key=? ORDER BY section_no", (key,))]
 
 
 def refs_in(text: str, own: int, valid: set):

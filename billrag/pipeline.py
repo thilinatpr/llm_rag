@@ -58,6 +58,28 @@ FOCUS_NOTE = ("\n\nNOTE: the question refers to a bill without naming it. The be
 OVERVIEW_Q = re.compile(r"\b(?:key|main|major|important|principal)\s+(?:provisions?|points?|features?|clauses?|changes?)\b|"
                         r"\b(?:summari[sz]e|summary|overview|outline|gist|explain|describe|what\s+(?:does|is)\b.{0,40}\b(?:do|about))\b|"
                         r"\btell\s+me\s+about\b", re.I)
+# "which sections did Act No. 11 of 2026 amend?", "list all sections amended by ...", "what does the X (Amendment) Act amend?":
+# ranked clauses can never list every amending clause (k=14; Act 11/2026 has 43), so such a question gets the instrument's
+# complete list, read from the clause text at build time (meta.amended_sections), as one more piece of evidence.
+# "sections" right after which/what/list/all (not "which part of Section 3 ..."), never followed by a number ("sections 32, 33")
+_LISTED = r"(?:sections?|provisions?|clauses?|articles?)\b(?!\s*\d)"
+AMENDED_Q = re.compile(
+    rf"\b(?:which|what|list(?:\s+of)?|all|every|complete|full|entire)\s+(?:(?:the|of|all|its|other|are|were)\s+){{0,3}}{_LISTED}"
+    r"[^.?!]{0,100}?\b(?:amend\w*|repeal\w*|insert\w*|replac\w*|substitut\w*|chang\w*)|"
+    rf"\b(?:sections?|articles?)\b(?!\s*\d)\s+(?:were|are|was|is|have\s+been|has\s+been)\s+(?:amended|repealed|inserted|replaced|changed)\b|"
+    r"\bwhat\s+(?:does|did|will)\s+(?:the\s+|this\s+|that\s+|it\b)[^.?!]{0,100}?\bamend\s*\??\s*$", re.I)
+
+
+def asks_amended(q):
+    """AMENDED_Q, with "No." in "Act, No. 24 of 2017" not taken for the end of a sentence."""
+    return bool(AMENDED_Q.search(re.sub(r"\bNo\.", "No", q or "")))
+
+
+LIST_NOTE = ("\n\nNOTE: the question asks which provisions an instrument changes. The [LIST OF AMENDING CLAUSES] passage is "
+             "complete: it was read from every clause of the instrument. Give the COMPLETE list from it, compactly (for example "
+             "\"sections 8, 10, 46, ...; new sections 52A, 96A; the First to Sixth Schedules\"), cite that passage's label once, "
+             "and add a few cited details from the other passages only if the question asks for them. This list may exceed the "
+             "usual length limit. Mention clauses the list marks as not read automatically, so the reader can check them.")
 _TITLE_STOP = {"act", "bill", "amendment", "the", "of", "and", "for", "to", "in", "no", "a", "gs", "sri", "lanka"}
 LEAK = re.compile(r"<\|(?:call|start|end|channel|message|return|constrain)\|>|\bto=functions\b")
 
@@ -186,6 +208,7 @@ class Result:
     added_sections: list = field(default_factory=list)  # sections added to bill-level-only evidence (bill_sections)
     followed: list = field(default_factory=list)  # sections added because a kept clause refers to them (follow_section_refs)
     acts: list = field(default_factory=list)  # how bill evidence was related to Acts: {"bill", "section", "act", "act_section", "status"}
+    amend_list: str = ""  # bill/Act whose complete list of amending clauses was added (AMENDED_Q)
     focus: dict = None  # {"title", "bills", "score"}: the bill an unnamed "this new bill" was taken to mean
     quote_fixes: list = field(default_factory=list)  # [(quoted, official)] misspelt quotations replaced by the official text
     direct_rejected: str = ""  # the rejected one-step answer (diagnostics)
@@ -196,7 +219,8 @@ class Result:
         out = []
         for e in self.evidence:
             c = e.chunk
-            where = f"§{e.section}" if e.section is not None else c["kind"]
+            where = (f"§{e.section}" if e.section is not None else
+                     "list of amending clauses" if c["kind"] == "amendments" else c["kind"])
             official = " - official Sinhala text used" if (e.key, e.section) in self.official else ""
             out.append(f"[{e.key} {where}, p.{c['page']}] {version_tag(c)}{official}")
         return out
@@ -489,7 +513,8 @@ class Pipeline:
         for e in evidence:
             c = e.chunk
             label = f"[{e.key} §{e.section}]" if e.section is not None else f"[{e.key}]"
-            kind = "bill-level description" if c["kind"] == "overview" else f"p.{c['page']}"
+            kind = ("bill-level description" if c["kind"] == "overview" else
+                    "[LIST OF AMENDING CLAUSES], read from the text of every clause" if c["kind"] == "amendments" else f"p.{c['page']}")
             also = f" (identical text also in {', '.join(c['also_in'])})" if c.get("also_in") else ""
             status = c.get("status") or acts.status_lines(self.store, e.key, e.section) if hasattr(self.store, "db") else ""
             block = f"{label} {version_tag(c)}, {kind}{also}\n" + (f"STATUS: {status}\n" if status else "") + shown_text(c)
@@ -500,6 +525,8 @@ class Pipeline:
                                    "Answer what the evidence supports and state clearly what is missing.")
         if focus:
             note += FOCUS_NOTE.format(title=focus["title"], keys=", ".join(focus["bills"]))
+        if any(e.chunk["kind"] == "amendments" for e in evidence):
+            note += LIST_NOTE
         user = f"QUESTION: {question}\n\nEVIDENCE:\n\n" + "\n\n".join(blocks) + note + extra
         system = ANSWER_SYSTEM + (LOCAL_NOTE.format(lang=lang, LANG=lang.upper()) if code else "")
         return self._llm(system, user, 4000 if code else 1800, res, self.answer_effort, llm=self.answer_llm, stream=stream)
@@ -516,6 +543,53 @@ class Pipeline:
         r = self.store.db.execute("SELECT id FROM chunks WHERE bill_key=? AND kind='overview' LIMIT 1", (key,)).fetchone()
         ch = self.store.chunks_by_ids([r["id"]]).get(r["id"]) if r else None
         return Evidence(ch, score) if ch else None
+
+    def amendment_list(self, key):
+        """Evidence: every clause of the amending bill/Act `key` and what it changes (meta.amended_sections), or None.
+        Deterministic. Clauses that were not recognised are listed with their opening words, so the list never claims more
+        than it read."""
+        if not hasattr(self.store, "db"):
+            return None
+        rows = meta.amended(self.store, key)
+        if not rows:
+            return None
+        base = self._act_overview_evidence(key, 3)
+        if not base:
+            return None
+        secs = self.store.section_map(key)
+        by_no = {r["section_no"]: r for r in rows}
+        principal = meta.principal_of(self.store, key)
+        groups = {}
+        for r in rows:
+            label = r["target"] if not r["act"] else f"{r['target']} of the {r['act']}"
+            groups.setdefault(r["action"], []).append(f"{label} (§{r['section_no']})")
+        names = {"amended": "Amended", "inserted": "Inserted (new)", "replaced": "Repealed and replaced", "repealed": "Repealed"}
+        named = sum(1 for r in rows if r["act"])
+        what = ("the provisions named below" if named == len(rows) else
+                ("the " + principal if principal else "the Act it amends (the principal enactment)") +
+                (" or the other Acts named" if named else ""))
+        lines = [f"{base.chunk['title']}: {len(secs)} clauses, of which {len(rows)} change {what}."]
+        for action in ("amended", "inserted", "replaced", "repealed"):
+            if groups.get(action):
+                lines.append(f"{names[action]}: " + "; ".join(groups[action]) + ".")
+        rest, unread = [], []
+        for no in sorted(secs):
+            if no in by_no:
+                continue
+            opening = re.sub(r"\s+", " ", meta._LEAD.sub("", secs[no])).strip()
+            if re.search(r"\b(?:amend\w*|repeal\w*|insert\w*|substitut\w*)\b", opening[:200], re.I) and "may be cited" not in opening[:80]:
+                unread.append(f"§{no} (\"{opening[:90]}...\")")
+            else:
+                rest.append(f"§{no}")
+        if rest:
+            lines.append("Clauses that do not amend another provision (short title, commencement, transitional or general "
+                         "provisions): " + ", ".join(rest) + ".")
+        if unread:
+            lines.append("Clauses that could not be read automatically and may also amend something: " + "; ".join(unread) + ".")
+        chunk = {**base.chunk, "id": f"{key}#amendments", "kind": "amendments", "section_no": None, "text": "\n".join(lines),
+                 "cites": [(key, r["section_no"]) for r in rows] + [(key, n) for n in secs]}
+        chunk.pop("also_in", None)
+        return Evidence(chunk, 3)
 
     def apply_acts(self, question, evidence, keys, res):
         """If a bill in the evidence became an Act, answer from the Act. A clause with the same text is replaced by the Act's section
@@ -675,6 +749,7 @@ class Pipeline:
         """Citations in the answer that do not point at evidence we showed the model. Bill and Act section numbers are unrelated,
         which is why `also_in` never crosses between them (retrieve.py)."""
         ok_sec = {(e.key, e.section) for e in evidence if e.section is not None}
+        ok_sec |= {tuple(x) for e in evidence for x in e.chunk.get("cites", ())}  # clauses named in a list of amending clauses
         ok_key = {e.key for e in evidence}
         for e in evidence:  # identical text in sibling versions (GS/Bill) is also fair to cite
             for k in e.chunk.get("also_in", []):
@@ -858,7 +933,8 @@ class Pipeline:
         refs = act_refs | {normalize_ref(m) for m in re.findall(r"\d{1,3}\s*/\s*\d{4}", bare)}
         keys = [k for k in refs if k and self.store.bill(k)] or None
         ov_key = keys[0] if keys and len(keys) == 1 else None
-        if not keys and OVERVIEW_Q.search(q):
+        list_q = asks_amended(q)
+        if not keys and (OVERVIEW_Q.search(q) or list_q):
             ranker = self.title_ranker()
             if ranker:  # a gist question: which bill or Act does it name? (title index, see titles.py)
                 decision, cands = ranker.rank(q)
@@ -923,6 +999,15 @@ class Pipeline:
                 enough, missing, res.enough = True, "", True  # the question asks for the gist, not for every clause
                 self.on_event("overview_added", {"bill": ov_key})
         res.evidence = self.apply_acts(q, res.evidence, keys, res)
+        if list_q:  # the named instrument first; else the instrument the best evidence comes from
+            for k in dict.fromkeys(([ov_key] if ov_key else []) + list(keys or []) + ([] if keys else [e.key for e in res.evidence[:1]])):
+                lst = self.amendment_list(k)
+                if lst:
+                    res.evidence.insert(0, lst)
+                    res.amend_list = k
+                    enough, missing, res.enough = True, "", True
+                    self.on_event("amend_list", {"bill": k})
+                    break
         focus = res.focus = self.focus_bill(q, res.evidence, keys)
         if focus:  # its clauses first (stable sort keeps the grader's order within each group)
             res.evidence.sort(key=lambda e: e.key not in focus["bills"])
