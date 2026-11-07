@@ -1986,6 +1986,127 @@ def test_pipeline_follows_section_refs(tmp_path):
     assert p.follow_section_refs(ev + got) == []          # already in the evidence: nothing added
 
 
+# ---- which sections an amending instrument changes (meta.amended_sections, Pipeline.amendment_list)
+def test_amendment_of_reads_only_the_opening_words():
+    from billrag.meta import amendment_of
+    assert amendment_of("2. Section 8 of the principal enactment is hereby amended as follows") == ("amended", "section 8", None)
+    assert amendment_of("Section 16 A of the principal enactment is hereby amended") == ("amended", "section 16A", None)
+    assert amendment_of("Section 6 b of the principal enactment is hereby amended") == ("amended", "section 6B", None)
+    assert amendment_of("Se ction 3D of the principal enactment is hereby amended") == ("amended", "section 3D", None)
+    assert amendment_of("Sections 5 and 6 of the principal enactment are hereby repealed and the following sections substituted "
+                        "therefor") == ("replaced", "sections 5 and 6", None)
+    assert amendment_of("Section 81 of the principal enactment is hereby repealed.") == ("repealed", "section 81", None)
+    assert amendment_of("Section 2 of the Inland Revenue Act, No. 24 of 2017 (hereinafter referred to as the “principal "
+                        "enactment”) is hereby amended") == ("amended", "section 2", None)   # that IS the principal enactment
+    assert amendment_of("Section 3 of the Nation Building Tax Act, No. 9 of 2009 is hereby further amended") == \
+        ("amended", "section 3", "Nation Building Tax Act, No. 9 of 2009")
+    assert amendment_of("The following new section is hereby inserted immediately after section 52 of the principal enactment, "
+                        "and shall have effect as section 52A of that enactment: - 52A. (1)") == ("inserted", "section 52A", None)
+    assert amendment_of("The following new Chapter is hereby inserted immediately after section 185 of the principal enactment, "
+                        "and shall have effect as CHAPTER XVIIA of that enactment") == ("inserted", "CHAPTER XVIIA", None)
+    assert amendment_of("Article 154F of the Constitution is hereby amended by the deletion") == ("amended", "Article 154F", "Constitution")
+    assert amendment_of("The Second Schedule to the principal enactment is hereby amended") == ("amended", "Second Schedule", None)
+    # a clause that only MENTIONS a section changes nothing
+    assert amendment_of("(1) The Commissioner-General shall write off interest under section 157 of the principal enactment") is None
+    assert amendment_of("This Act may be cited as the Tax (Amendment) Act, No. of 2026.") is None
+    # wordings and misprints seen in 2020-2026 bills
+    assert amendment_of("Secti on 23w of the principal enactment is hereby amended") == ("amended", "section 23W", None)
+    assert amendment_of("Section 54B of the principal enactment is herby amended by") == ("amended", "section 54B", None)
+    assert amendment_of("Section 26 of the principal enactment is hereby amend- ed by the insertion") == ("amended", "section 26", None)
+    assert amendment_of("(1) Section 1 of the Personal Data Protection Act, No. 9 of 2022 (hereinafter referred to as the "
+                        "“principal enactment”) is hereby amended as follows") == ("amended", "section 1", None)
+    assert amendment_of("The Civil Procedure Code (Chapter 101) is hereby amended by the repeal of section 205 thereof and substitution "
+                        "therefor of the following section") == ("replaced", "section 205", "Civil Procedure Code (Chapter 101)")
+    assert amendment_of("The Constitution of the Democratic Socialist Republic of Sri Lanka (hereinafter referred to as the "
+                        "“Constitution”) is hereby amended by- (a) amendment of Article 155G by the")[:2] == ("amended", "Article 155G")
+    assert amendment_of("The heading appearing immediately before section 2 of Part I of the principal enactment is hereby repealed "
+                        "and the following heading is substituted therefor") == \
+        ("replaced", "heading immediately before section 2 of Part I", None)
+    assert amendment_of("The following new division is hereby inserted immediately after section 130 (SHARE REGISTER) of the principal "
+                        "enactment and shall have effect as a new division of that enactment") == \
+        ("inserted", "new division after section 130", None)
+    assert amendment_of("The sections of the principal enactment speci ﬁ ed in Column I of the Schedule hereto, are hereby amended")[1] \
+        == "the sections listed in its Schedule"
+    assert amendment_of("It is hereby declared that the amendments made to sections 7, 13, and 20 a shall not apply") is None
+
+
+def test_margin_notes_on_the_last_clause_are_not_flagged_as_unread():
+    from billrag.meta import margin_targets
+    last = ("In the event of any inconsistency between the Sinhala and Tamil texts of this Act, the Sinhala text shall prevail. "
+            "Amendment of section 478A of the principal enactment. Amendment of section 485 of the principal enactment.")
+    assert margin_targets(last) == {"478A", "485"}
+    assert margin_targets("Section 8 of the principal enactment is hereby amended") is None
+
+
+def _amending_store(tmp_path):
+    from billrag import meta
+    from billrag.store import Store
+    s = Store(tmp_path / "am.sqlite")
+    clauses = ["This Act may be cited as the Tax (Amendment) Act, No. of 2026.",
+               "Section 8 of the Tax Act, No. 1 of 2017 (hereinafter referred to as the “principal enactment”) is hereby amended "
+               "by the substitution for the words “ten” of the words “twenty”.",
+               "The following new section is hereby inserted immediately after section 52 of the principal enactment, and shall have "
+               "effect as section 52A of that enactment: - 52A. A credit is allowed.",
+               "Section 16 A of the principal enactment is hereby repealed and the following section is substituted therefor: - 16A. Text.",
+               "The First Schedule to the principal enactment is hereby amended in paragraph 1.",
+               "The Commissioner-General shall write off interest under section 157 of the principal enactment.",
+               "In the event of any inconsistency between the Sinhala and Tamil texts of this Act, the Sinhala text shall prevail. "
+               "Amendment of section 90 of the principal enactment."]   # a clause the parser merged with the next one
+    s.replace_bill({"key": "090/2026", "bill_no": 90, "year": 2026, "date": "2026-10-01T00:00:00.000Z", "title": "Tax (Amendment) - Bill",
+                    "title_norm": "tax amendment", "kind": "Bill", "long_title": "to amend the Tax Act", "presented_by": None,
+                    "presented_on": None, "gazette_date": None, "printed_no": None, "n_pages": 3, "n_sections": len(clauses),
+                    "pdf_path": None, "summary": None},
+                   [{"kind": "overview", "section_no": None, "text": "Bill 090/2026 — Tax (Amendment) - Bill (Bill, 2026-10-01). "
+                     "Long title: to amend the Tax Act.", "ctx": "overview"}] +
+                   [{"kind": "section", "section_no": i + 1, "text": f"{i + 1}. {t}", "ctx": "clause"} for i, t in enumerate(clauses)])
+    s.commit()
+    meta.build(s)
+    return s
+
+
+def test_amended_sections_table_and_principal(tmp_path):
+    from billrag import meta
+    s = _amending_store(tmp_path)
+    got = [(r["section_no"], r["action"], r["target"]) for r in meta.amended(s, "090/2026")]
+    assert got == [(2, "amended", "section 8"), (3, "inserted", "section 52A"), (4, "replaced", "section 16A"),
+                   (5, "amended", "First Schedule")]
+    assert meta.principal_of(s, "090/2026") == "Tax Act, No. 1 of 2017"
+    assert meta.amended(s, "nope") == []
+
+
+def test_list_question_gets_the_complete_list_and_its_citations_verify(tmp_path):
+    from billrag.pipeline import LIST_NOTE, asks_amended
+    from billrag.retrieve import Retriever
+    s = _amending_store(tmp_path)
+    for q in ("Which sections did the Tax (Amendment) Act, No. 11 of 2026 amend?", "which sections it amended",
+              "Which sections of the Tax Act, No. 1 of 2017 were amended by bill 090/2026?", "list all sections amended by it",
+              "what does the Tax (Amendment) bill amend?"):
+        assert asks_amended(q), q
+    for q in ("summarise bill 090/2026", "what is the penalty under section 4", "which section deals with bail?",
+              "what changes does the bill make to section 83A",
+              # detail questions from evals/retrieval_eval.jsonl that an earlier pattern took for list questions
+              "Under the proposed amendment to the Trusts Ordinance, which part of Section 3 is being removed and how is the "
+              "definition of “express trust” being changed?",
+              "From which assessment date are deductions previously claimed under sections 32, 33 or 34 of the repealed Act excluded?"):
+        assert not asks_amended(q), q
+    llm = ScriptLLM(cite="[090/2026 §4] [090/2026]")
+    r = Pipeline(s, Retriever(s), llm, on_event=lambda n, d: None).ask("Which sections does bill 090/2026 amend?")
+    assert r.amend_list == "090/2026" and r.enough
+    lst = r.evidence[0].chunk
+    assert lst["kind"] == "amendments"
+    text = lst["text"]
+    assert "7 clauses, of which 4 change the Tax Act, No. 1 of 2017" in text
+    assert "section 8 (§2)" in text and "section 52A (§3)" in text and "section 16A (§4)" in text
+    assert "157" not in text.split("Clauses that do not")[0]         # mentioned, not amended
+    assert "§1, §6" in text and "could not be read automatically" in text
+    assert "§7 (its margin notes name section(s) 90" in text     # a margin note names an amendment no clause was read as making
+    assert LIST_NOTE.strip()[:40] in llm.calls[-1]
+    assert r.warnings == []                                          # §4 is cited from the list: not an unsupported citation
+    assert any("list of amending clauses" in x for x in r.sources())
+    plain = Pipeline(s, Retriever(s), ScriptLLM(cite="[090/2026]")).ask("What does section 8 become under bill 090/2026?")
+    assert plain.amend_list == "" and all(e.chunk["kind"] != "amendments" for e in plain.evidence)
+
+
 # ---- prompt echo guard, "which bill?" clarification, per-call cost
 def test_glossary_block_echo_is_rejected():
     from billrag import translate
@@ -2753,3 +2874,27 @@ def test_a_partial_scrape_cannot_replace_the_full_csv_in_r2(tmp_path):
     assert mod.csv_path(Path("d"), "bills", 2025) == Path("d/bills.since-2025.csv")
     upload = (ROOT_FOR_SCRIPTS / "scripts/upload_r2.py").read_text(encoding="utf-8")
     assert '("bills.json", "bills.csv")' in upload and "rglob(\"*.csv\")" not in upload  # upload_r2 sends only these by name
+
+
+# ---- read-time cleanup of parser noise in clause text (pipeline.strip_noise)
+def test_strip_noise_removes_margin_notes_printer_and_running_header_only():
+    from billrag.pipeline import shown_text, strip_noise
+    t = ("shall be required to be registered under this Act, if- Amendment of section 7 of the principal enactment. Amendment of "
+         "section 10 of the principal enactment.\n(a) at the end of any taxable period the value has exceeded nine million rupees; or")
+    assert strip_noise(t) == ("shall be required to be registered under this Act, if-\n(a) at the end of any taxable period the value "
+                              "has exceeded nine million rupees; or")
+    last = ("In the event of any inconsistency between the Sinhala and Tamil texts of this Act, the Sinhala text shall prevail. "
+            "Short title. Amendment of section 36 of Act, No. 35 of 2018. Sinhala text to prevail in case of inconsistency. "
+            "Department of Government Printing, Sri Lanka.")
+    assert strip_noise(last) == ("In the event of any inconsistency between the Sinhala and Tamil texts of this Act, the Sinhala text "
+                                 "shall prevail.")
+    header = "the Commission.”. Replacement of Article 109 of the Constitution 25Twentieth Amendment to the Constitution\n(2) The"
+    assert strip_noise(header, "Twentieth Amendment to the Constitution - Bill") == "the Commission.”.\n(2) The"
+    # kept: a real sentence that mentions an amendment, the bill's title inside text, a Schedule after the last clause
+    keep = ["The amendment of section 7 of the principal enactment shall not apply to pending cases.",
+            "This Act may be cited as the Twentieth Amendment to the Constitution Act.\n(2) Next",
+            "the Sinhala text shall prevail. Column I Column II Section Offence 137 Wearing the dress one hundred rupees"]
+    for k in keep:
+        assert strip_noise(k, "Twentieth Amendment to the Constitution - Bill") == k
+    c = {"kind": "section", "text": last, "title": "X - Bill"}
+    assert shown_text(c).endswith("shall prevail.") and c["text"] == last   # stored text untouched

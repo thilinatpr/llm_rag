@@ -116,3 +116,7 @@ description, canonical, Open Graph, robots.txt, sitemap or structured data). Rea
       topics as keyword research (logs stay private). Optional: `llms.txt`.
 - [ ] Before publishing pages: lawyer glance at the disclaimer wording (consent text is not reviewed either); check documents.gov.lk terms on
       republishing text (link to PDFs rather than copy full text); keep "can be incomplete or wrong" and "not government, not legal advice" on every page.
+- [ ] Parser: margin notes and the printer's line ("Department of Government Printing, Sri Lanka.") leak into clause text: 211 of 14,788
+      clause chunks of 2024+ instruments, 1,053 of 27,923 older ones; on a page where several sections start, the margin notes land on the
+      last one. No content is lost; since `pipeline.strip_noise` the model no longer reads most of it, but search still does. Fix in `parse.py`, then `ingest` of the affected bills only (a full ingest renumbers chunk ids, so `embed` would redo nearly all), `embed`,
+      `link-acts`, `ingest-si`, the parser quality checks, the 72-item and gist evals, and `upload_r2.py --include-index`.
