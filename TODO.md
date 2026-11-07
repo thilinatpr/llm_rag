@@ -96,7 +96,7 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
 ## SEO (planned 2026-11-08, nothing built)
 Why: the chat and Procurement Rules are behind login, so search engines see only the homepage, which has just a `<title>` (no meta
 description, canonical, Open Graph, robots.txt, sitemap or structured data). Real ranking needs public, static pages generated from the index.
-- [ ] **Phase 1, basics (about a day):** homepage title + meta description + canonical + Open Graph/Twitter cards + favicon + 1200x630 share image;
+- [ ] **Phase 1, basics (about a day). Homepage part DONE on branch `claude/seo` (title, description, canonical, OG, JSON-LD, favicon, robots.txt, sitemap.xml, tests; not deployed). Still open: share image (1200x630), `noindex`/robots on bills, procurement and admin hosts, Search Console/Bing:** homepage title + meta description + canonical + Open Graph/Twitter cards + favicon + 1200x630 share image;
       `robots.txt` + `sitemap.xml` per public Worker (disallow `/api/`, `/login`, `/consent`); `noindex` on login, consent, privacy, admin
       (admin host: disallow all); JSON-LD (`Organization`, `WebSite`, `WebApplication`); register citizenlk.com and bills.citizenlk.com in Google
       Search Console and Bing Webmaster Tools (DNS TXT).
