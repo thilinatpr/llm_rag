@@ -5,6 +5,7 @@
 // env.AUTH is this Worker's own KV (sessions, audit). env.BILLS_KV is Bill Assistant's: only the admin:* keys below are touched there.
 // Log records hold text anyone can type, so everything is escaped and the CSP allows only this response's own script.
 import { lastDayProblems, listQuestions, loadDays, PROBLEMS, quantile, readLog, seconds, SERVICES, utcDay, validKey } from "./admin-stats.js";
+import { visitors } from "./admin-visitors.js";
 import { checkBalance } from "./balance.js";
 import { publicUsedToday } from "./public.js";
 import { CHECK_STALE_MS, detect, discard, ignorePending, phaseOf, refreshView, startRun } from "./refresh.js";
@@ -265,7 +266,7 @@ function respond(body, { status = 200, nonce }) {
     "Content-Security-Policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
   } });
 }
-const NAV = [["/admin", "Home", "home"], ["/admin/source/bills", "Questions", "questions"], ["/admin/source/money", "Running", "running"], ["/admin/audit", "Audit", "audit"]];
+const NAV = [["/admin", "Home", "home"], ["/admin/source/bills", "Questions", "questions"], ["/admin/source/visitors", "Visitors", "visitors"], ["/admin/source/money", "Running", "running"], ["/admin/audit", "Audit", "audit"]];
 function page(title, body, c, { active = "", status = 200 } = {}) {
   const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
   return respond(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -330,7 +331,50 @@ ${id === "bills" ? `<p class="dim small">Code answering: ${lastBuild ? `build <b
   },
 });
 
+// ---------- visitors ----------
+const VISIT_DAYS = [7, 30, 90];
+const SITE_NAMES = { home: "citizenlk.com", bills: "Bill Assistant", procurement: "Procurement Rules" };
+const pct = (n, of) => (of ? `${Math.round((n / of) * 100)}%` : "—");
+const tableOf = (head, rows) => (rows.length ? `<div class="scroll"><table><tr>${head.map((h, i) => `<th${i ? ' class="n"' : ""}>${esc(h)}</th>`).join("")}</tr>${rows.map((r) => `<tr>${r.map((v, i) => `<td${i ? ' class="n"' : ""}>${esc(v)}</td>`).join("")}</tr>`).join("")}</table></div>` : `<p class="dim small">Nothing yet.</p>`);
+const ranked = (o, n = 10) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n);
+const siteName = (k) => SITE_NAMES[k] || k;
+
+export function visitorsBody(v, days) {
+  const tabs = `<div class="bar">${VISIT_DAYS.map((d) => button({ label: `${d} days`, href: `?days=${d}`, primary: d === days })).join("")}</div>`;
+  if (v.setup) return `${tabs}<p>Visitor counting is not connected to this panel yet.</p><p class="dim small">Create an API token with <b>Account &gt; Account Analytics: Read</b>, then <code>npx wrangler secret put CF_API_TOKEN -c workers/admin/wrangler.toml</code>. The pages count only once <code>EV_KEY</code> (homepage) or <code>OTP_PEPPER</code> (the services) exists and the Workers have been deployed with the <code>EVENTS</code> binding.</p>`;
+  if (v.error) return `${tabs}<p class="red">Could not read the counts: ${esc(v.error)}</p>`;
+  const sites = Object.entries(v.bySite).sort((a, b) => b[1].views - a[1].views);
+  const trend = v.prev ? ` (${v.views >= v.prev ? "+" : ""}${Math.round(((v.views - v.prev) / v.prev) * 100)}% on the ${days} days before)` : "";
+  const visitsBy = Object.fromEntries(v.dailyVisits.map((d) => [d.day, d]));
+  const dayRows = [...v.daily].reverse().slice(0, 21).map((d) => [d.day, d.total, visitsBy[d.day]?.total || 0, Object.entries(d.sites).sort().map(([k, n]) => `${siteName(k)} ${n}`).join(" · ")]);
+  const scrollBase = Object.values(v.scroll).reduce((a, b) => a + b, 0);
+  return `${tabs}
+<p><b>${v.views}</b> page views by a person, <b>${v.visits}</b> visits${esc(trend)}. A view is counted only after the page was visible for 2 seconds and was touched; a visit is a page opened from outside the site.</p>
+<h2>By site</h2>${tableOf(["Site", "Views", "Visits"], sites.map(([k, x]) => [siteName(k), x.views, x.visits]))}
+<h2>By day (Sri Lanka time)</h2>${tableOf(["Day", "Views", "Visits", "Where"], dayRows)}
+<h2>Where visits came from</h2>${tableOf(["Sending site", "Visits"], ranked(v.referrers))}
+${Object.keys(v.sources).length ? `<h2>Tagged links</h2>${tableOf(["Kind of link", "Visits"], ranked(v.sources))}${Object.keys(v.campaigns).length ? tableOf(["Campaign", "Visits"], ranked(v.campaigns)) : ""}` : ""}
+<h2>What they did</h2>${tableOf(["Action", "Count"], [
+    ...ranked(v.go).map(([k, n]) => [`Went on to ${k === "other" ? "another citizenlk address" : siteName(k === "admin" ? "admin" : k)}`, n]),
+    ...["25", "50", "75", "100"].map((k) => [`Scrolled ${k}% down the page`, `${v.scroll[k] || 0} (${pct(v.scroll[k] || 0, scrollBase)})`]),
+    ["Reloaded", v.nav.reload], ["Pressed back", v.nav.back], ["Moved within the site", v.nav.inside],
+  ])}
+<h2>Countries</h2>${tableOf(["Country", "Views"], v.countries)}
+<p class="dim small">Not counted: ${v.droppedTotal} requests (${esc(ranked(v.dropped, 6).map(([k, n]) => `${k} ${n}`).join(", ") || "none")}) - bots, pages where nobody touched anything, bad tokens. Browsers with Global Privacy Control or Do Not Track on send nothing at all, so real traffic is a little higher. Nothing here identifies a person: no cookie, no IP address, no ID. Updated ${v.at ? when(Date.parse(v.at)) : "—"}; new events take a minute or two to show.</p>`;
+}
+
+const SOURCES_VISITORS = {
+  title: "Visitors",
+  brief: () => "Anonymous page counts, no IDs",
+  body: async ({ env, url, fetchFn, now }) => {
+    const asked = Number(url?.searchParams.get("days"));
+    const days = VISIT_DAYS.includes(asked) ? asked : 30;
+    return visitorsBody(await visitors(env, days, { fetchFn, now }), days);
+  },
+};
+
 const SOURCES = {
+  visitors: SOURCES_VISITORS,
   bills: serviceSource("bills"),
   procurement: serviceSource("procurement"),
   money: {
@@ -406,6 +450,7 @@ function refreshSection(s) {
 }
 const GROUPS = [
   { id: "questions", name: "Questions", sources: ["bills", "procurement"] },
+  { id: "visitors", name: "Visitors", sources: ["visitors"] },
   { id: "running", name: "Running", sources: ["money", "public", "containers", "index"] },
 ];
 
@@ -429,7 +474,7 @@ async function sourcePage(c, id) {
   const items = todoItems(s), group = GROUPS.find((g) => g.sources.includes(id));
   const tabs = group.sources.map((x) => `<a${x === id ? ' class="on"' : ""} href="/admin/source/${x}">${dot(levelOf(items, x))}${esc(SOURCES[x].title)}</a>`).join("");
   return page(src.title, `<div class="tabs">${tabs}</div><div class="top"><h1>${esc(src.title)}</h1></div>
-${todoHtml(items.filter((x) => x.source === id), s.now)}${await src.body({ env: c.env, s })}`, c, { active: group.id });
+${todoHtml(items.filter((x) => x.source === id), s.now)}${await src.body({ env: c.env, s, url: c.url, fetchFn: c.fetchFn, now: c.now })}`, c, { active: group.id });
 }
 
 const clip = (text, n) => {
