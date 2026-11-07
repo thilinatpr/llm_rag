@@ -51,10 +51,10 @@ Findings from the flagged Procurement answers:
 ## Phase 2: Earn trust (before opening sign-up)
 
 - [ ] **O** Have a Sinhala reader check the Financial Regulations translations (`procurement/npc_texts/FRA.md`, `PFC0120.md`)
-- [ ] **O** Have Sinhala and Tamil speakers review the interface messages and the machine-translation note
+- [ ] **O** Have Sinhala and Tamil speakers review the machine-translation note (service pages are English only since 2026-11-07, so nothing else on them needs it)
 - [ ] **O** Get a procurement officer to review 20+ new questions, as the first real accuracy figure (`evals/procurement_eval.jsonl` is only a regression check)
 - [ ] **M** Find NPC's Contract Management Guidelines and the works bidding documents, or say clearly in answers that they are missing
-- [ ] **M** Privacy page: what is logged, how long it is kept, and that questions go to DeepSeek
+- [x] **M** Privacy page for each service at `/privacy`. Needs the owner: a contact address (`PRIVACY_CONTACT`) and the retention decision below, then its "how long" section changes.
 - [ ] **S** Set a retention period for chat logs (they hold private questions, with no expiry today)
 - [ ] **O** Get the terms and "not legal advice" wording checked, ideally by a lawyer
 - [ ] **O** Send login mail from citizenlk.com instead of `tripletrackr.com` (needs dashboard access or a wider token)

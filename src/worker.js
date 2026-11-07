@@ -31,6 +31,6 @@ async function upstream(request, env, opts = {}) {
 }
 
 export default {
-  fetch: createHandler({ upstream }),
+  fetch: createHandler({ upstream, privacy: "bills" }),
   scheduled: (_event, env, ctx) => ctx.waitUntil(Promise.all([checkBalance(env), reportSettings(env)])), // hourly: see [triggers] in wrangler.toml
 };
