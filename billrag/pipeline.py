@@ -358,14 +358,43 @@ class Pipeline:
                 continue
         return scores, bool(d.get("enough", True)), str(d.get("missing", "")), [q for q in d.get("queries", []) if isinstance(q, str)][:2]
 
-    def expand(self, ev):
-        """Replace a clause snippet by the full section text (a section can span several chunks)."""
+    SECTION_CHARS = 3000  # most of a section the answering model is shown (the whole evidence has its own budget)
+
+    def expand(self, ev, hits=None):
+        """Replace a clause snippet by the section text (a section can span several chunks). A section that fits the budget is shown
+        whole. A longer one is shown as a WINDOW: the chunk(s) that matched (`hits`, default the chunk itself), then the parts next to
+        them while the budget lasts, in reading order, with a plain note where parts are left out - so a match late in a long section
+        is no longer cut off, and the model can say what it has not seen."""
         c = ev.chunk
         if c["kind"] == "section" and c.get("section_no") is not None:
-            s = self.store.section_text(c["bill_key"], c["section_no"])
-            if s:
-                c = {**c, "text": s["text"][:3000]}
+            parts = self.store.section_parts(c["bill_key"], c["section_no"]) if hasattr(self.store, "section_parts") else []
+            if parts:
+                c = {**c, "text": self.section_window(parts, hits or {c.get("id")}, c["section_no"])}
+            else:
+                s = self.store.section_text(c["bill_key"], c["section_no"])
+                if s:
+                    c = {**c, "text": s["text"][:self.SECTION_CHARS]}
         return Evidence(c, ev.score)
+
+    def section_window(self, parts, hits, no):
+        cap = self.SECTION_CHARS
+        if sum(len(p["text"]) + 1 for p in parts) - 1 <= cap:
+            return "\n".join(p["text"] for p in parts)
+        chosen = {i for i, p in enumerate(parts) if p["id"] in hits} or {0}
+        size = sum(len(parts[i]["text"]) + 1 for i in chosen)
+        lo, hi, more = min(chosen), max(chosen), True
+        while more:  # grow outwards, the continuation first, while the next part still fits
+            more = False
+            if hi + 1 < len(parts) and size + len(parts[hi + 1]["text"]) + 1 <= cap:
+                hi += 1; size += len(parts[hi]["text"]) + 1; more = True
+            if lo > 0 and size + len(parts[lo - 1]["text"]) + 1 <= cap:
+                lo -= 1; size += len(parts[lo]["text"]) + 1; more = True
+        text = "\n".join(p["text"] for p in parts[lo:hi + 1])
+        if lo > 0:
+            text = f"(... the first {lo} of {len(parts)} parts of section {no} are not shown ...)\n" + text
+        if hi + 1 < len(parts):
+            text += f"\n(... {len(parts) - hi - 1} more part(s) of section {no} are not shown ...)"
+        return text
 
     def build_evidence(self, graded):
         kept = [e for e in graded if e.score >= 2]
@@ -375,11 +404,15 @@ class Pipeline:
         kept.sort(key=lambda e: (-e.score, e.chunk["date"]), reverse=False)
         kept.sort(key=lambda e: (e.score, e.chunk["date"]), reverse=True)
         out, seen, used = [], set(), 0
+        hits = {}  # every kept chunk of a section, so a long section's window covers all the parts that matched
+        for e in kept[: self.keep_max]:
+            if e.section is not None and e.chunk.get("id") is not None:
+                hits.setdefault((e.key, e.section), set()).add(e.chunk["id"])
         for e in kept[: self.keep_max]:
             ident = (e.key, e.section) if e.section is not None else (e.key, e.chunk["kind"])
             if ident in seen:
                 continue
-            e = self.expand(e)
+            e = self.expand(e, hits.get(ident))
             if used + len(e.chunk["text"]) > self.evidence_chars and out:
                 continue
             seen.add(ident)
