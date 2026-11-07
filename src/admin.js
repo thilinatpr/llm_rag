@@ -454,7 +454,7 @@ export function createAdmin({ containerState = null, now = () => Date.now(), bal
   return async function admin(request, env, user) {
     const u = new URL(request.url);
     if (!user) {
-      if (request.method === "GET") return Response.redirect(new URL("/login?next=/admin", u).toString(), 302);
+      if (request.method === "GET") return Response.redirect(new URL("/login", u).toString(), 302);
       return json({ error: "Not signed in." }, 401);
     }
     if (!isAdmin(env, user)) return new Response("Not found.", { status: 404, headers: { "Cache-Control": "no-store" } });

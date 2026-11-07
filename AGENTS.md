@@ -91,6 +91,7 @@ One subdomain per service, each its own Worker (custom domains in that Worker's 
 |---|---|---|---|
 | `citizenlk.com`, `www.` (redirect) | `citizenlk-home` | `workers/home/wrangler.toml` | static `site/`, no login, no container |
 | `bills.citizenlk.com` | `gov-rag-llm` | `wrangler.toml` | Bill Assistant |
+| `admin.citizenlk.com` | `gov-rag-llm` (same Worker, `ADMIN_HOST`) | `wrangler.toml` | admin panel; serves only sign-in and the panel, own sign-in |
 | `procurement.citizenlk.com` | `citizenlk-procurement` | `workers/procurement/wrangler.toml` | Procurement Rules: `procurement/serve.py` in its own `lite` container |
 Deploy the homepage with `npx wrangler deploy -c workers/home/wrangler.toml`. Sessions are host-only cookies: each service has its own sign-in.
 Procurement Rules: `python -m procurement build`, then `npx wrangler deploy -c workers/procurement/wrangler.toml` from the main checkout
@@ -120,7 +121,7 @@ Container: restores index.sqlite + vectors.npz from R2 (gov-rag/bills/) on start
 | R2 bucket | `gov-rag`: `bills/` (PDFs, `index.sqlite`, `vectors.npz`), `chatlogs/` (conversation logs), `bills/vectors.float32.npz` (old float32 backup, delete when no longer needed) |
 | Email | zone `tripletrackr.com`; sender `login@tripletrackr.com` via the Email Service REST API (`/accounts/<id>/email/sending/send`) - no per-recipient verification in Cloudflare; `ALLOWED_EMAILS` is the only allowlist |
 
-**Worker vars** (`wrangler.toml`): `ALLOWED_EMAILS`, `ADMIN_EMAILS`, `FROM_ADDRESS`, `CF_ACCOUNT_ID`, `R2_BUCKET`; optional `CHAT_MODEL`
+**Worker vars** (`wrangler.toml`): `ALLOWED_EMAILS`, `ADMIN_EMAILS`, `ADMIN_HOST`, `FROM_ADDRESS`, `CF_ACCOUNT_ID`, `R2_BUCKET`; optional `CHAT_MODEL`
 (default `@cf/openai/gpt-oss-120b`), `ORIGIN` (ignored when the container is bound), `TRANSLATE` (`off`|`script`|`ai`, passed to the container as
 `BILLRAG_TRANSLATE`; currently `ai`), `TRANSLATE_MODEL` (-> `BILLRAG_TRANSLATE_MODEL`; currently `@cf/meta/llama-3.3-70b-instruct-fp8-fast`).
 **Worker secrets** (`npx wrangler secret put NAME`): `OTP_PEPPER`, `CF_EMAIL_TOKEN` (Email Sending), `PROXY_SECRET` (shared with the
@@ -327,8 +328,8 @@ Worker-side errors (`upstream_failed`, with path, ms, error) go to Workers Logs 
 `[observability] enabled = true`), and container logs are enabled too.
 
 ### Admin panel (`src/admin.js`, `src/admin-stats.js`, `test/admin.test.mjs`; live since 2026-11-07, see "Deployed vs main")
-`https://bills.citizenlk.com/admin`, modelled on LankaWatch's control panel (`sri-lanka-ds-boundaries/docs/control-panel.md`): home is a **To do** list, most urgent first (People affected, Waiting for you, Watching), each row with its own button and gone when the cause is; then tiles; then `/admin/source/<id>` per source (`bills`, `procurement`, `money`, `public`, `containers`, `index`). `/admin/questions` and `/admin/q/<log key>` read the logs; `/admin/audit` lists buttons pressed. Server-rendered, no build step; pages update when loaded (no auto-refresh).
-- **Who:** the normal sign-in, then `ADMIN_EMAILS` (var; must also be in `ALLOWED_EMAILS`; unset = nobody). Anyone else signed in gets 404. Actions are POST with an `Origin` check.
+`https://admin.citizenlk.com` (var `ADMIN_HOST`; `/admin` on any other host is 404; `src/auth.js` keeps that host to sign-in and the panel, with no chat page, API or container), modelled on LankaWatch's control panel (`sri-lanka-ds-boundaries/docs/control-panel.md`): home is a **To do** list, most urgent first (People affected, Waiting for you, Watching), each row with its own button and gone when the cause is; then tiles; then `/admin/source/<id>` per source (`bills`, `procurement`, `money`, `public`, `containers`, `index`). `/admin/questions` and `/admin/q/<log key>` read the logs; `/admin/audit` lists buttons pressed. Server-rendered, no build step; pages update when loaded (no auto-refresh).
+- **Why the same Worker:** it needs the same secrets, KV and Durable Objects; a separate Worker would need copies of the secrets. **Who:** the normal sign-in (its own session, since cookies are host-only), then `ADMIN_EMAILS` (var; must also be in `ALLOWED_EMAILS`; unset = nobody). Anyone else signed in gets 404. Actions are POST with an `Origin` check.
 - **Never wakes a container** and spends no model call: `getState()` reads stored state, the credit is the last result of `checkBalance` (KV `admin:balance`), the public count is `QuotaCounter.peek`.
 - **Numbers:** rollups at R2 `admin-rollups/<service>/<day>.json` (`LOGS` binding) remember the last log key counted and read only newer ones, within a budget of R2 calls per view; the hourly cron moves them too. A day over for 2 days is closed. The newest minute is left for later, because a log is written just after its key's time and `startAfter` would skip it for good. Rollups hold counts and keys, never words. Deleting a rollup recounts it. Days are UTC (the log folders), times are Sri Lanka time.
 - **Log records are untrusted** (anyone can type a question): everything is escaped, and the CSP allows only that response's nonce. Keep both; a test posts a `<script>` question.
