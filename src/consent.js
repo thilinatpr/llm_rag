@@ -2,7 +2,7 @@
 // accepting "general" on Bill Assistant also covers Procurement Rules; Procurement Rules asks for its own extra items once.
 // Bump VERSION whenever the wording changes in substance: everyone is asked again. Not reviewed by a lawyer (TODO_LAUNCH.md, Phase 2).
 // Every statement here must stay true of the code: what is logged and who sees it is in privacy.js.
-export const VERSION = "2026-11-08";
+export const VERSION = "2026-11-09";
 
 const GENERAL = [
   { id: "accuracy", text: "Answers are written by AI from official documents. They can be incomplete, out of date or wrong. I will check the cited document before I rely on an answer." },
@@ -12,7 +12,7 @@ const GENERAL = [
 
 const EXTRA = {
   procurement: [
-    { id: "procurement-official", text: "Procurement Rules is not the National Procurement Commission or the Treasury. For a real procurement, my entity's own guidelines, circulars, bidding documents and procurement committee decide. Circulars expire and rules change, so I will check that the text is still in force." },
+    { id: "procurement-official", text: "citizenlk.com is an independent service, not the National Procurement Commission or the Treasury, and its answers are not official guidance. For a real procurement, my entity's own guidelines, circulars, bidding documents and procurement committee decide. Circulars expire and rules change, so I will check that the text is still in force." },
     { id: "procurement-confidential", text: "I will not enter confidential procurement information: bids, evaluation reports, bidder names, or tender documents that are not public." },
     { id: "procurement-decision", text: "An answer will not be the only basis for awarding, rejecting or cancelling a bid, for approving a payment, or for an appeal. I stay responsible for my decisions." },
   ],
