@@ -12,13 +12,14 @@
 import { getCookie, hex, json, readJson, safeEqual } from "./util.js";
 import { anonApi, publicMe, publicOn, publicStart, verifyTurnstile } from "./public.js";
 import { privacyPage } from "./privacy.js";
+import { consentPage, hasConsent, saveConsent } from "./consent.js";
 
 const PAUSE_KEY = "admin:public-paused"; // set by the admin panel (admin.js, citizenlk-admin Worker)
 const OTP_TTL = 300; // seconds a code is valid
 const RESEND_COOLDOWN = 60; // seconds between code requests per address
 const MAX_ATTEMPTS = 5;
 const SESSION_TTL = 7 * 24 * 3600;
-const COOKIE = "session";
+const COOKIE = "session"; // default; the services that share one account pass `cookie` to createHandler
 
 const enc = new TextEncoder();
 
@@ -71,8 +72,10 @@ export async function sendMessage(env, message) {
   }
 }
 
-const sessionCookie = (value, maxAge) =>
-  `${COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+// COOKIE_DOMAIN (Worker var, "citizenlk.com") makes the cookie valid on every subdomain: that is how one sign-in works on all services.
+// Without it the cookie is host-only (the admin panel, local runs). Set and cleared with the same Domain, or the browser keeps the old one.
+const sessionCookie = (env, name, value, maxAge) =>
+  `${name}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}${env.COOKIE_DOMAIN ? `; Domain=${env.COOKIE_DOMAIN}` : ""}`;
 
 async function requestCode(env, request, sendMail) {
   const email = normalizeEmail((await readJson(request)).email);
@@ -95,7 +98,7 @@ async function requestCode(env, request, sendMail) {
   return reply;
 }
 
-async function verifyCode(env, request) {
+async function verifyCode(env, request, name) {
   const body = await readJson(request);
   const email = normalizeEmail(body.email);
   const code = String(body.code || "").trim();
@@ -115,11 +118,11 @@ async function verifyCode(env, request) {
   await env.AUTH.delete(`otp:${email}`); // single use
   const sid = hex(crypto.getRandomValues(new Uint8Array(32)));
   await env.AUTH.put(`session:${sid}`, email, { expirationTtl: SESSION_TTL });
-  return json({ ok: true }, 200, { "Set-Cookie": sessionCookie(sid, SESSION_TTL) });
+  return json({ ok: true }, 200, { "Set-Cookie": sessionCookie(env, name, sid, SESSION_TTL) });
 }
 
-async function currentUser(env, request) {
-  const sid = getCookie(request, COOKIE);
+async function currentUser(env, request, name) {
+  const sid = getCookie(request, name);
   if (!sid || !/^[0-9a-f]{64}$/.test(sid)) return null;
   const email = await env.AUTH.get(`session:${sid}`);
   return email && allowed(env, email) ? email : null;
@@ -196,7 +199,9 @@ $('f2').onsubmit = async (e) => { e.preventDefault();
 // verify(env, token, ip, host) checks a Turnstile token; now() is the clock (both replaceable in tests).
 // app(request, env, user): handles everything but the login routes, with user = null when signed out (the admin Worker's panel).
 // loginTitle replaces the line under the wordmark on the sign-in page.
-export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null, verify = verifyTurnstile, now = () => Date.now(), app = null, privacy = null, loginTitle = null } = {}) {
+// cookie: the session cookie's name (services on one account share one name and one AUTH namespace). consent: {service, name} asks every signed-in
+// account to accept consent.js's statements before anything but sign-in, sign-out and the privacy page (null = no consent step: the admin panel).
+export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null, verify = verifyTurnstile, now = () => Date.now(), app = null, privacy = null, loginTitle = null, cookie = COOKIE, consent = null } = {}) {
   return async function fetch(request, realEnv) {
     let env = realEnv;
     const url = new URL(request.url);
@@ -206,15 +211,28 @@ export function createHandler({ sendMail = sendMailViaCloudflare, upstream = nul
     if (privacy && pathname === "/privacy" && request.method === "GET") // readable before signing in or starting a chat
       return new Response(privacyPage(privacy, env.PRIVACY_CONTACT), { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
     if (pathname === "/login/request" && request.method === "POST") return requestCode(env, request, sendMail);
-    if (pathname === "/login/verify" && request.method === "POST") return verifyCode(env, request);
+    if (pathname === "/login/verify" && request.method === "POST") return verifyCode(env, request, cookie);
     if (pathname === "/logout" && request.method === "POST") {
-      const sid = getCookie(request, COOKIE);
+      const sid = getCookie(request, cookie);
       if (sid && /^[0-9a-f]{64}$/.test(sid)) await env.AUTH.delete(`session:${sid}`);
-      return json({ ok: true }, 200, { "Set-Cookie": sessionCookie("", 0) });
+      return json({ ok: true }, 200, { "Set-Cookie": sessionCookie(env, cookie, "", 0) });
     }
 
-    const user = await currentUser(env, request);
+    const user = await currentUser(env, request, cookie);
     if (app) return app(request, env, user);
+    if (consent && pathname === "/consent") {
+      if (!user) return Response.redirect(new URL("/login", url).toString(), 302);
+      if (request.method === "GET") return new Response(consentPage(consent.service, consent.name), { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+      if (request.method === "POST") {
+        const ok = await saveConsent(env, user, consent.service, (await readJson(request)).ids, now());
+        return ok ? json({ ok: true }) : json({ error: "Every statement must be accepted." }, 400);
+      }
+    }
+    // Signed in but has not accepted the current statements (new account, wording changed, or this service asks for more): nothing is answered until they do.
+    if (consent && user && !(await hasConsent(env, user, consent.service))) {
+      if (request.method === "GET" && (request.headers.get("Accept") || "").includes("text/html")) return Response.redirect(new URL("/consent", url).toString(), 302);
+      return json({ error: "Please accept the terms first.", consent_required: true }, 403);
+    }
     // The panel's pause button: a visitor is treated as if PUBLIC_CHAT were off. Cached a minute, so this is not a KV call per request.
     if (!user && env.PUBLIC_CHAT === "on" && (await env.AUTH.get(PAUSE_KEY, { cacheTtl: 60 }))) env = { ...env, PUBLIC_CHAT: "off" };
     // Public (anonymous) lane: see public.js. Off unless PUBLIC_CHAT = "on" and everything it needs is configured.

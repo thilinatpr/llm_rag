@@ -71,7 +71,8 @@ Findings from the flagged Procurement answers:
 ## Phase 3: Launch the free account
 
 - [ ] **M** Open sign-up in place of the `ALLOWED_EMAILS` list, with abuse protection (Turnstile on sign-up, limits per address)
-- [ ] **M** One account across Bill Assistant and Procurement Rules (sign-ins are separate today)
+- [x] **M** One account across Bill Assistant and Procurement Rules: one session cookie for `.citizenlk.com`, one KV, one consent record. Written 2026-11-08, not deployed (see `AGENTS.md` "One account"). Still open: each service keeps its own `ALLOWED_EMAILS`, so Procurement Rules stays owner-only until sign-up is open
+- [x] **S** Consent at first sign-in (accuracy, not legal advice, data sent to third-party providers outside Sri Lanka); Procurement Rules adds three of its own. Written 2026-11-08, not deployed. **O** Have the wording checked with the terms (Phase 2)
 - [ ] **M** Per-user limits: 20/day and 150/month for Bill Assistant, 5/day for Procurement Rules
 - [ ] **M** Save 30 days of chat history, with a way for users to delete it
 - [ ] **M** Weekly new-bill email, with unsubscribe

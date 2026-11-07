@@ -1,7 +1,7 @@
 // The privacy page of each service, at /privacy, readable without signing in. Every sentence states what the code does today: change it when the code
 // changes (what is logged: billrag/chatlog.py, workers/procurement/handler.js; cookies and limits: auth.js, public.js; providers: chatconfig.js).
 // PRIVACY_CONTACT (Worker var): where to write. Without it the page leaves that sentence out. Not reviewed by a lawyer.
-const UPDATED = "7 November 2026";
+const UPDATED = "8 November 2026";
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 const list = (items) => `<ul>${items.map((i) => `<li>${i}</li>`).join("")}</ul>`;
@@ -19,7 +19,8 @@ const SERVICES = {
     keep: [
       "<b>Your questions and the answers.</b> Each is saved in a log with its time, the bills it cited, how long it took and what it cost. The record carries a random chat ID, not your name, email or IP address. If a question contains something that identifies you, the log contains it too.",
       "<b>If you use it without signing in:</b> a cookie with a random ID (30 days) counts your free questions. Your IP address is used for a daily count that stops one network taking every free question; that count is deleted within a day or so.",
-      "<b>If you sign in:</b> your email address is used to send a one-time code and is kept with your session for 7 days. The code is stored only in scrambled form, for 5 minutes. The list of invited addresses is kept for as long as you have access.",
+      "<b>If you sign in:</b> your email address is used to send a one-time code and is kept with your session for 7 days (the session cookie works on every citizenlk.com address). The code is stored only in scrambled form, for 5 minutes. The list of invited addresses is kept for as long as you have access.",
+      "<b>Your agreement:</b> when you accept the statements shown after your first sign-in, we keep the date and version of the wording with your email address. One account works on all citizenlk services, so the same sign-in and the same record are used on each. They are kept for as long as you have access.",
       "<b>In your browser:</b> a random chat ID, your Thorough or Fast choice, and the list of latest bills. These stay on your device.",
     ],
     others: [
@@ -30,7 +31,8 @@ const SERVICES = {
     name: "Procurement Rules",
     keep: [
       "<b>Your questions and the answers.</b> Each is saved in a log with its time, the passages it used, how long it took and what it cost. The record does not carry your name, email or IP address. If a question contains something that identifies you, the log contains it too. A copy of each question and answer also goes to the service's system logs at Cloudflare.",
-      "<b>Your sign-in:</b> your email address is used to send a one-time code and is kept with your session for 7 days. The code is stored only in scrambled form, for 5 minutes. The list of invited addresses is kept for as long as you have access.",
+      "<b>Your sign-in:</b> your email address is used to send a one-time code and is kept with your session for 7 days (the session cookie works on every citizenlk.com address). The code is stored only in scrambled form, for 5 minutes. The list of invited addresses is kept for as long as you have access.",
+      "<b>Your agreement:</b> when you accept the statements shown after your first sign-in, we keep the date and version of the wording with your email address. One account works on all citizenlk services, so the same sign-in and the same record are used on each. They are kept for as long as you have access.",
       "<b>Your conversation:</b> the page holds your last questions and answers while it is open, and sends the last two with a new question so that a follow-up can be understood. The service does not keep a conversation between questions, apart from the log above.",
     ],
     others: [],

@@ -14,10 +14,12 @@ directory = "./public"
 binding = "ASSETS"
 run_worker_first = true
 
-# Its own namespace: a Bill Assistant session is not a Procurement Rules session.
+# One account for every citizenlk service: the SAME namespace as Bill Assistant (gov-rag-llm-auth), so a session, a sign-in code and the
+# consent record made on either are valid on both. The session cookie is domain-wide (COOKIE_DOMAIN). Its old own namespace
+# (66d74e46b9844e81877f70856514fba7) is no longer used; sessions in it end here, so people sign in once more.
 [[kv_namespaces]]
 binding = "AUTH"
-id = "66d74e46b9844e81877f70856514fba7"
+id = "a44e7e8cc8f0444ba865ea162820193d"
 
 # Question/answer logs (see handler.js logAsk). Same bucket as Bill Assistant, own prefix.
 [[r2_buckets]]
@@ -47,6 +49,7 @@ new_sqlite_classes = ["ProcurementContainer"]
 enabled = true
 
 [vars]
+COOKIE_DOMAIN = "citizenlk.com"
 ALLOWED_EMAILS = "thilinatpr@gmail.com"
 FROM_ADDRESS = "login@citizenlk.com"
 CF_ACCOUNT_ID = "e81ea992523c4e14d3d1a89f10732576"

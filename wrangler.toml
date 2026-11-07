@@ -50,6 +50,8 @@ enabled = true
 crons = ["17 * * * *"]
 
 [vars]
+# The session cookie is valid on every citizenlk.com subdomain (one sign-in for all services); Procurement Rules sets the same.
+COOKIE_DOMAIN = "citizenlk.com"
 # Who gets the low-credit email, and below how many US dollars. $5 is about 4 days at the public lane's daily ceiling.
 ALERT_EMAIL = "thilinatpr@gmail.com"
 BALANCE_ALERT_USD = "5"
