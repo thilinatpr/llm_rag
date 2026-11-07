@@ -575,7 +575,7 @@ def test_long_section_is_shown_as_a_window_around_the_match(tmp_path):
     assert "ZEBRA" in text and len(text) < 3400 and "are not shown" in text  # the matched part is kept, the gap is announced
     assert "clause a" not in text  # the opening was left out, not the match
     whole = p.expand(Evidence(st.chunks_by_ids([parts[0]["id"]])[parts[0]["id"]], 3)).chunk["text"]
-    assert "clause a" in whole and "more part(s)" in whole  # a match at the start keeps the start and says the rest is not shown
+    assert "clause a" in whole and "not shown" not in whole  # a match inside the first 3000 characters: the old cut, no notes
     short = Pipeline(st, Retriever(st), ScriptLLM(), ).expand(Evidence(st.chunks_by_ids([st.section_parts("095/2026", 1)[0]["id"]])[st.section_parts("095/2026", 1)[0]["id"]], 3)).chunk["text"]
     assert "not shown" not in short  # a short section is shown whole
 

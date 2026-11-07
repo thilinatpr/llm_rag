@@ -934,6 +934,14 @@ the grader kept scattered sections and never the Act's overview. `Pipeline.ask` 
 - **Gist eval** (`scripts/eval_gist.py`, gold `evals/gist_eval.jsonl`, 30 questions: 8 by number, 22 by full/partial title, a typo, 2 ambiguous; facts are word groups from the official long title, checked to occur in the instrument's own text). 2 runs each, deepseek-flash, 2026-11-07: main strict 47/60, branch 53/60; hedged ("evidence not enough") 30 -> 14; facts 0.93 -> 0.96; cites the target 58/60 both; citation warnings 2 -> 3 (sporadic, 6 reruns of the three cases showed none). Numbered questions 5/8 -> 7/8, titled 42/52 -> 46/52. The words in `must` are narrow ("establish": the Cricket answers say "create", so 4 branch rows fail on wording; a widened group gives 54/60 vs 47/60). Written after reading 12 earlier A/B answers, so not blind; one model, one judge-free mechanical score.
 - **Production:** the index must be rebuilt and uploaded (`meta` or `titles`, then `upload_r2.py --include-index`) for the ranker; code alone falls back to `titled_bills`. `ingest` and `ingest-acts` rebuild it (so `refresh_bills.py` does too).
 
+## Long sections: window around the match (`Pipeline.expand`, `Store.section_parts`, written 2026-11-07, branch `claude/chunk-window`, NOT merged or deployed)
+
+The answering model gets at most `SECTION_CHARS` (3,000) characters of a section; 496 of 6,765 sections of 2025+ bills and Acts are longer, and the old cut kept only the opening, so a
+match late in a long section was lost (live: Act 26/2025 §4 is 4,721 characters, its §4B on tax returns and withholding tax started near character 2,700 and the answer said it was cut off).
+Now, if a matched chunk (any kept chunk of that section) ends past the first 3,000 characters, the section is shown as a window: the matched chunks plus neighbouring parts while the budget lasts, in reading order, with
+"(... N more part(s) of section S are not shown ...)" where parts are left out. Otherwise the text is exactly what it was (first 3,000 characters, no notes).
+**First try, a window for every long section, was dropped:** the gist eval fell (47 and 49 of 60 vs 50-53 for the code without it; more hedging and citation warnings; the notes may nudge the model, not tested) although the 72-item eval did not move (0.96 vs 0.94). Measured 2026-11-07, deepseek-flash, same index: late-match-only variant: gist 53/60 vs 50/60 for `main` run at the same time (warnings 3 vs 6; run-to-run spread is about 3), 72-item eval strict 0.96, cited gold 0.99 (main 0.94 / 0.99). Not done: following continuation or "section N" links between chunks (`chunk_links`), whole-section requests ("full text of section 4").
+
 ## Product priority: recent bills
 
 Users mostly ask about **newly published bills** and rarely about old ones. So: report eval numbers on the recent slice

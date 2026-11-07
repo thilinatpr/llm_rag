@@ -378,8 +378,16 @@ class Pipeline:
 
     def section_window(self, parts, hits, no):
         cap = self.SECTION_CHARS
-        if sum(len(p["text"]) + 1 for p in parts) - 1 <= cap:
-            return "\n".join(p["text"] for p in parts)
+        joined = "\n".join(p["text"] for p in parts)
+        if len(joined) <= cap:
+            return joined
+        end, late = 0, False  # a match inside the first `cap` characters changes nothing: the old cut (no notes) is kept
+        for p in parts:
+            end += len(p["text"]) + 1
+            if p["id"] in hits and end - 1 > cap:
+                late = True
+        if not late:
+            return joined[:cap]
         chosen = {i for i, p in enumerate(parts) if p["id"] in hits} or {0}
         size = sum(len(parts[i]["text"]) + 1 for i in chosen)
         lo, hi, more = min(chosen), max(chosen), True
