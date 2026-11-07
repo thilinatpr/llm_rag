@@ -7,6 +7,7 @@
 import { lastDayProblems, listQuestions, loadDays, PROBLEMS, quantile, readLog, seconds, SERVICES, utcDay, validKey } from "./admin-stats.js";
 import { checkBalance } from "./balance.js";
 import { publicUsedToday } from "./public.js";
+import { CHECK_STALE_MS, detect, discard, ignorePending, phaseOf, refreshView, startRun } from "./refresh.js";
 import { hex, json } from "./util.js";
 
 export const PAUSE_KEY = "admin:public-paused";
@@ -66,15 +67,16 @@ export async function snapshot(env, { now = Date.now(), containerState = null } 
   }));
   const settings = await attempt(async () => JSON.parse((await env.BILLS_KV.get(SETTINGS_KEY)) || "null"));
   const limit = settings?.limits?.global ?? null;
-  const [balance, paused, used, index, containers] = await Promise.all([
+  const [balance, paused, used, index, containers, refresh] = await Promise.all([
     attempt(async () => JSON.parse((await env.BILLS_KV.get(BALANCE_KEY)) || "null")),
     attempt(async () => JSON.parse((await env.BILLS_KV.get(PAUSE_KEY)) || "null")),
     attempt(() => (env.QUOTA && limit !== null ? publicUsedToday(env, limit, now) : null)),
     attempt(() => (env.LOGS ? indexFiles(env) : { failed: "no LOGS binding" })),
     Promise.all(CONTAINERS.map(async (c) => ({ ...c, state: await attempt(() => (containerState ? containerState(env, c.binding) : { failed: "not connected" })) }))),
+    attempt(() => refreshView(env)),
   ]);
   const known = settings && !settings.failed;
-  return { now, stats, balance, paused, used, index, containers, limit, settings, limits: known ? settings.limits : null,
+  return { now, stats, balance, paused, used, index, containers, refresh, limit, settings, limits: known ? settings.limits : null,
     publicWanted: !!known && settings.publicWanted, publicWorks: !!known && settings.publicWorks };
 }
 
@@ -151,9 +153,60 @@ export function todoItems(s) {
   else if (s.now - s.index.sqlite.uploaded > INDEX_OLD_DAYS * DAY)
     add({ tier: "watch", source: "index", title: `The bill index was last published ${ago(s.now - s.index.sqlite.uploaded)} ago`, detail: "New bills are not in it until scripts/refresh_bills.py --publish is run." });
 
+  refreshItems(s, add);
+
   const rank = (x) => TIERS.indexOf(x.tier);
   return out.sort((a, b2) => rank(a) - rank(b2) || String(a.since || "9").localeCompare(String(b2.since || "9")));
 }
+
+// New bills on documents.gov.lk (src/refresh.js): found by the daily check, built and published on GitHub Actions at the owner's button presses.
+const listTitles = (pending) => {
+  const items = Object.entries(pending);
+  const shown = items.slice(0, 4).map(([k, v]) => `${k} ${v.title}`.slice(0, 90));
+  return shown.join("; ") + (items.length > shown.length ? `; and ${items.length - shown.length} more` : "");
+};
+const countWords = (o) => { const n = Object.keys(o || {}).length; return n ? plural(n, "document") : "no new documents"; };
+
+function refreshItems(s, add) {
+  const r = s.refresh;
+  if (!r) return;
+  const src = { source: "index" };
+  if (r.failed) return add({ tier: "watch", ...src, title: "Cannot read the index build state", detail: r.failed });
+  const { state, status } = r;
+  const phase = phaseOf(state, status, s.now);
+  const run = r.actionsUrl ? { label: "Open the run", href: r.actionsUrl } : null;
+  const check = state.check;
+  const pending = check?.pending || {};
+  const nPending = Object.keys(pending).length;
+  if (phase === "unknown") add({ tier: "watch", ...src, title: "Cannot read the index build report", detail: status.failed });
+  else if (phase === "starting" || phase === "running")
+    add({ tier: "watch", ...src, since: state.run?.at || status.at, title: phase === "starting" ? "Index build requested; the job has not started yet" : `Index ${status.mode === "publish" ? "publish" : "build"} is running`,
+      detail: "A build takes 20-40 minutes. It publishes nothing: you press Publish when it is done.", actions: run ? [run] : [] });
+  else if (phase === "stuck")
+    add({ tier: "you", level: "red", ...src, since: state.run?.at || status.at, title: "The index job has not reported for too long", detail: "It may have been cancelled or failed to start. Look at the run, then build again.", actions: [run, { label: "Build again", post: "/admin/refresh-build" }].filter(Boolean) });
+  else if (phase === "built")
+    add({ tier: "you", ...src, since: status.at, title: `A new index is built and checked: ${countWords({ ...status.new_bills, ...status.new_acts })}, ready to publish`,
+      detail: `${listTitles({ ...Object.fromEntries(Object.entries(status.new_bills || {}).map(([k, t]) => [k, { title: t }])), ...Object.fromEntries(Object.entries(status.new_acts || {}).map(([k, t]) => [k, { title: t }])) })}. Checks passed: nothing lost, new documents found by title, retrieval ${status.mrr ?? "?"} (floor ${status.min_mrr ?? 0.8}). The live index changes only when you publish.`,
+      actions: [{ label: "Publish", post: "/admin/refresh-publish", primary: true, confirm: "Replace the live bill index with the built one? The old pair is backed up in R2; a running container picks the new one up when it next starts." },
+        { label: "Discard", post: "/admin/refresh-discard", confirm: "Throw the built index away?" }, ...(run ? [run] : [])] });
+  else if (phase === "failed")
+    add({ tier: "you", level: "red", ...src, since: status.at, title: "The last index build stopped; nothing was published", detail: squeezeText(status.error || (status.problems || []).join("; ")) || "See the run for the output.",
+      actions: [{ label: "Build again", post: "/admin/refresh-build", primary: true }, ...(run ? [run] : [])] });
+  // A publish (or a build that found nothing to index) changes what "pending" means: the stored list is from before it.
+  const outdated = phase === "idle" && ["published", "nothing_new"].includes(status?.state) && Date.parse(status.at) > Date.parse(check?.at || 0);
+  if (outdated)
+    add({ tier: "watch", ...src, since: status.at, title: status.state === "published" ? "A new index was published: check that nothing is still missing" : "The build found nothing to index: check again",
+      detail: "The list of missing documents is from before it.", actions: [{ label: "Check now", post: "/admin/refresh-check", primary: true }] });
+  if (phase === "idle" && nPending && !outdated)
+    add({ tier: "you", ...src, since: check.at, title: `${plural(nPending, "new document")} on documents.gov.lk ${nPending === 1 ? "is" : "are"} not in the index`, detail: listTitles(pending),
+      actions: [{ label: "Build the index", post: "/admin/refresh-build", primary: true, confirm: "Start a build on GitHub Actions? It uses a few cents of model calls and publishes nothing: you press Publish afterwards." },
+        { label: "Ignore these", post: "/admin/refresh-ignore", confirm: "Stop reporting these documents?" }] });
+  if (check?.error) add({ tier: "watch", ...src, since: check.failedAt, title: "Cannot check documents.gov.lk for new bills", detail: `${check.error} If the site was redeployed, set DOCS_ACTION_ID (see AGENTS.md "Refreshing the index").`, actions: [{ label: "Check now", post: "/admin/refresh-check" }] });
+  else if (check?.noManifest) add({ tier: "watch", ...src, title: "R2 has no list of the documents in the live index yet", detail: "Run once from the main checkout: python scripts/upload_r2.py --manifest-only", actions: [{ label: "Check now", post: "/admin/refresh-check" }] });
+  else if (!check) add({ tier: "watch", ...src, title: "New bills have not been checked for yet", detail: "The daily check runs at 08:10 Sri Lanka time.", actions: [{ label: "Check now", post: "/admin/refresh-check" }] });
+  else if (s.now - Date.parse(check.at) > CHECK_STALE_MS) add({ tier: "watch", ...src, since: check.at, title: `New bills were last checked ${ago(s.now - Date.parse(check.at))} ago`, detail: "It should run daily: look at this Worker's cron.", actions: [{ label: "Check now", post: "/admin/refresh-check" }] });
+}
+const squeezeText = (t) => String(t ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
 
 // ---------- page parts ----------
 const CSS = `
@@ -333,10 +386,23 @@ ${s.containers.map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(containerWord(c,
       if (s.index?.failed) return failedLine(s.index);
       const row = (name, f) => `<tr><td>${name}</td><td>${f ? when(f.uploaded) : `<span class="red">missing</span>`}</td><td class="n">${f ? mb(f.size) : ""}</td></tr>`;
       return `<div class="scroll"><table><tr><th>File in R2</th><th>Published</th><th class="n">Size</th></tr>${row("bills/index.sqlite", s.index.sqlite)}${row("bills/vectors.npz", s.index.vectors)}</table></div>
-<p class="dim small">Nothing adds new bills automatically. From the main checkout: <code>scripts/refresh_bills.py</code>, then <code>--publish</code> (see AGENTS.md "Refreshing the index"). A running container picks up a new index the next time it starts.</p>`;
+${refreshSection(s)}`;
     },
   },
 };
+function refreshSection(s) {
+  const r = s.refresh;
+  if (!r || r.failed) return `<p class="dim">${esc(r?.failed || "Build state not read.")}</p>`;
+  const { state, status } = r, check = state.check, phase = phaseOf(state, status, s.now), pending = check?.pending || {};
+  const last = status?.state ? `${esc(status.state)} ${when(Date.parse(status.at))}${status.by ? ` by ${esc(status.by)}` : ""}` : "no build yet";
+  return `<h2>New bills</h2><dl>
+<dt>Last check</dt><dd>${check?.at ? `${when(Date.parse(check.at))} (${ago(s.now - Date.parse(check.at))} ago): ${check.listed ?? "?"} documents listed` : "never"}${check?.error ? ` <span class="red">${esc(check.error)}</span>` : ""}</dd>
+<dt>Not in the index</dt><dd>${Object.keys(pending).length ? esc(listTitles(pending)) : "none"}</dd>
+<dt>Last build</dt><dd>${last}${status?.mrr ? ` · retrieval ${esc(status.mrr)}` : ""}${status?.error ? ` · <span class="red">${esc(squeezeText(status.error))}</span>` : ""}</dd>
+<dt>Now</dt><dd>${esc(phase)}</dd></dl>
+<div class="bar">${button({ label: "Check now", post: "/admin/refresh-check" })}${phase === "idle" || phase === "failed" ? button({ label: "Build the index", post: "/admin/refresh-build", primary: Object.keys(pending).length > 0, confirm: "Start a build on GitHub Actions? It publishes nothing." }) : ""}${r.actionsUrl ? button({ label: "Open runs on GitHub", href: r.actionsUrl }) : ""}</div>
+<p class="dim small">The daily check compares documents.gov.lk with the live index. A build runs <code>scripts/refresh_bills.py</code> on GitHub Actions and publishes nothing; Publish then swaps the checked pair in R2 (see AGENTS.md "Refreshing the index"). A running container picks up a new index the next time it starts.</p>`;
+}
 const GROUPS = [
   { id: "questions", name: "Questions", sources: ["bills", "procurement"] },
   { id: "running", name: "Running", sources: ["money", "public", "containers", "index"] },
@@ -440,6 +506,31 @@ const ACTIONS = {
     await c.env.BILLS_KV.delete(PAUSE_KEY);
     return { text: "Public questions are back on.", log: "Resumed public questions" };
   },
+  "refresh-check": async (c) => {
+    const k = await detect(c.env, { now: c.now, fetchFn: c.fetchFn });
+    const n = Object.keys(k.pending || {}).length;
+    const text = k.error ? `The check failed: ${k.error}` : k.noManifest ? "R2 has no list of indexed documents yet." : n ? `${plural(n, "document")} not in the index.` : "The index has every listed document.";
+    return { text, log: `Checked documents.gov.lk: ${text}` };
+  },
+  "refresh-build": async (c) => {
+    const r = await startRun(c.env, "build", { by: c.user, now: c.now, fetchFn: c.fetchFn });
+    const text = r.ok ? "Build started on GitHub. It takes 20-40 minutes and publishes nothing." : r.error;
+    return { text, log: r.ok ? "Started an index build" : `Index build not started: ${r.error}` };
+  },
+  "refresh-publish": async (c) => {
+    const r = await startRun(c.env, "publish", { by: c.user, now: c.now, fetchFn: c.fetchFn });
+    const text = r.ok ? "Publish started on GitHub. It takes a few minutes." : r.error;
+    return { text, log: r.ok ? "Started publishing the built index" : `Publish not started: ${r.error}` };
+  },
+  "refresh-discard": async (c) => {
+    const r = await discard(c.env, { by: c.user, now: c.now });
+    const text = r.ok ? "The built index was discarded." : r.error;
+    return { text, log: r.ok ? "Discarded the built index" : `Discard refused: ${r.error}` };
+  },
+  "refresh-ignore": async (c) => {
+    const n = await ignorePending(c.env, { now: c.now });
+    return { text: `${plural(n, "document")} will not be reported again.`, log: `Ignored ${plural(n, "new document")}` };
+  },
 };
 
 async function action(c, request, name) {
@@ -458,14 +549,14 @@ async function action(c, request, name) {
 }
 
 // containerState(env, bindingName) -> the container's stored state, without starting it (worker.js gives the real one).
-export function createAdmin({ containerState = null, now = () => Date.now(), balanceOptions = {} } = {}) {
+export function createAdmin({ containerState = null, now = () => Date.now(), balanceOptions = {}, fetchFn = fetch } = {}) {
   return async function admin(request, env, user) {
     const u = new URL(request.url);
     if (!user) {
       if (request.method === "GET") return Response.redirect(new URL("/login", u).toString(), 302);
       return json({ error: "Not signed in." }, 401);
     }
-    const c = { env, user, url: u, now: now(), containerState, balanceOptions };
+    const c = { env, user, url: u, now: now(), containerState, balanceOptions, fetchFn };
     const path = u.pathname.replace(/\/+$/, "");
     if (request.method === "POST" && path.startsWith("/admin/")) return action(c, request, path.slice(7));
     if (request.method !== "GET") return json({ error: "Not found." }, 404);

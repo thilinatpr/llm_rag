@@ -1,0 +1,81 @@
+# Refresh the bill index on demand. Started by the admin panel's buttons (src/refresh.js dispatches it), or by hand from the Actions tab.
+#   build    scripts/refresh_bills.py WITHOUT --publish: scrape, parse only the new documents, embed, run the checks. A built index is staged in R2
+#            (refresh/staging/); nothing live changes. Reports to the panel through R2 (refresh/status.json), so it needs no inbound endpoint.
+#   publish  promote the staged pair with upload_r2.py --include-index (its own checks, backup of the live pair, swap, indexed-keys.json).
+# Repository secrets: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY (write access to the gov-rag bucket), R2_BUCKET,
+# CLOUDFLARE_API_TOKEN (Workers AI: embeddings and rerank), DEEPSEEK_API_KEY (summaries). See AGENTS.md "Refreshing the index".
+name: Refresh index
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "build (publishes nothing) or publish (promotes the staged build)"
+        type: choice
+        options: [build, publish]
+        default: build
+
+# One at a time: a publish must not run beside a build.
+concurrency:
+  group: refresh-index
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      MODE: ${{ inputs.mode }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-billrag.txt
+      - run: pip install -r requirements-billrag.txt boto3
+
+      - name: Tell the panel the job has started
+        run: python scripts/refresh_r2.py status running --mode "$MODE" --run-url "$RUN_URL"
+
+      # ---- build ----
+      - name: Build and check (publishes nothing)
+        if: inputs.mode == 'build'
+        run: python scripts/refresh_bills.py --report report.json
+      - name: Stage the built index
+        id: stage
+        if: inputs.mode == 'build' && success()
+        run: |
+          if [ "$(jq -r '.state' report.json)" = built ]; then python scripts/refresh_r2.py stage --data data/refresh/bills; fi
+      - name: Report the result
+        if: inputs.mode == 'build' && always()
+        run: |
+          state=failed
+          if [ -f report.json ]; then state=$(jq -r '.state // "failed"' report.json); fi
+          if [ "${{ steps.stage.outcome }}" = failure ]; then state=failed; fi
+          python scripts/refresh_r2.py status "$state" --mode build --report report.json --run-url "$RUN_URL"
+
+      # ---- publish ----
+      - name: Publish the staged index
+        if: inputs.mode == 'publish'
+        run: |
+          python scripts/refresh_r2.py unstage --data data/refresh/bills
+          python scripts/upload_r2.py --bucket "$R2_BUCKET" --data data/refresh/bills --include-index
+          python scripts/refresh_r2.py clear
+      - name: Report the result
+        if: inputs.mode == 'publish' && always()
+        run: |
+          state=failed
+          if [ "${{ job.status }}" = success ]; then state=published; fi
+          python scripts/refresh_r2.py status "$state" --mode publish --run-url "$RUN_URL"

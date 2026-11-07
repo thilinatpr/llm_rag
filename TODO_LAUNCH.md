@@ -38,7 +38,8 @@ Written and tested 2026-11-07, not yet deployed. Details and measurements: `AGEN
 - [x] **O** Deploy both services (live 2026-11-07 05:43 UTC)
 - [ ] **O** Ask a question on each site and check the logs (no question has reached the new code yet)
 - [x] **O** Publish the new index (2026-11-07 06:12 UTC; adds the presented version of Prevention of Organised Crimes, 087/2026)
-- [ ] **O** Decide whether to schedule `scripts/refresh_bills.py --publish`
+- [x] Schedule the refresh: daily check in the admin panel, Build/Publish buttons that run `refresh_bills.py` on GitHub Actions. Written 2026-11-08, not deployed.
+- [ ] **O** Turn the scheduled refresh on: manifest, GitHub secrets, dispatch token, merge, deploy the admin Worker (steps in `AGENTS.md` "Scheduled refresh"), then press Build once
 - [ ] **O** Run `scripts/load_test.py` against the live site with a signed-in cookie (a small run: each question costs money)
 - [ ] **O** Top up DeepSeek: under $5 when this was written
 

@@ -44,7 +44,7 @@ function setup({ logs = {}, used = 0, user = "me@example.com", extra = {}, kvIni
   if (used) for (let i = 0; i < used; i++) store.take([{ k: `g|${slDay(NOW)}`, limit: 500, ttl: 86400, tag: "global" }], NOW / 1000);
   const LOGS = bucket({ "bills/index.sqlite": "x", "bills/vectors.npz": "x", ...logs });
   const env = {
-    AUTH: kv(), BILLS_KV: kv(kvInit), LOGS, DEEPSEEK_API_KEY: "k", ALERT_EMAIL: "me@example.com",
+    AUTH: kv({ "refresh:state": JSON.stringify({ check: { at: new Date(NOW - 3600e3).toISOString(), listed: 10, pending: {} } }) }), BILLS_KV: kv(kvInit), LOGS, DEEPSEEK_API_KEY: "k", ALERT_EMAIL: "me@example.com",
     QUOTA: { idFromName: () => "main", get: () => ({ peek: async (items) => store.peek(items, NOW / 1000) }) },
     ...extra,
   };

@@ -9,6 +9,7 @@ Idempotent: objects that already exist with the same size are skipped.
 
   python scripts/upload_r2.py --bucket gov-rag [--prefix bills] [--dry-run] [--include-index]
 
+--manifest-only writes bills/indexed-keys.json (the documents in the live index; --include-index writes it after every publish).
 --include-index also publishes index.sqlite and vectors.npz (always, as they can change without changing size), as one pair: a
 container that restores a new index with old vectors, or the reverse, refuses to start (VectorsError). See publish_index.
 Restore them in a fresh session with scripts/fetch_index.py.
@@ -87,6 +88,29 @@ def check_pair(root: Path):
         store.db.close()
     if not same:
         raise PublishError("vectors.npz was not built from this index.sqlite: run `python -m billrag embed`. Nothing was changed.")
+
+
+MANIFEST = "indexed-keys.json"
+
+
+def index_keys(root: Path):
+    """The documents (bill and Act keys) in root/index.sqlite, sorted."""
+    import sqlite3
+    db = sqlite3.connect(str(root / "index.sqlite"))
+    try:
+        return sorted(r[0] for r in db.execute("SELECT key FROM bills"))
+    finally:
+        db.close()
+
+
+def write_manifest(s3, bucket, prefix, root: Path):
+    """{prefix}/indexed-keys.json = which documents the LIVE index holds. The admin panel's daily check (src/refresh.js) compares the
+    documents.gov.lk listing with it to find new bills. Written after the pair is published, so it never claims more than is live."""
+    import json
+    keys = index_keys(root)
+    s3.put_object(Bucket=bucket, Key=f"{prefix}/{MANIFEST}", ContentType="application/json",
+                  Body=json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "keys": keys}).encode())
+    print(f"Wrote {prefix}/{MANIFEST}: {len(keys)} documents.", file=sys.stderr)
 
 
 def _exists(s3, bucket, key) -> bool:
@@ -176,10 +200,15 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--include-index", action="store_true", help="also publish index.sqlite and vectors.npz as a pair")
+    ap.add_argument("--manifest-only", action="store_true",
+                    help="only write indexed-keys.json from --data/index.sqlite (use once, with the index that is live, so the daily new-bills check has a list)")
     a = ap.parse_args()
     if not a.bucket:
         sys.exit("Pass --bucket or set R2_BUCKET")
     root = Path(a.data)
+    if a.manifest_only:
+        write_manifest(client(), a.bucket, a.prefix, root)
+        return 0
     files = sorted((root / "pdfs").rglob("*.pdf")) + [root / n for n in ("bills.json", "bills.csv") if (root / n).exists()]
     s3 = client()
     have = existing(s3, a.bucket, a.prefix)
@@ -221,6 +250,10 @@ def main():
         except PublishError as e:
             print(f"Index NOT published: {e}", file=sys.stderr)
             return 1
+        try:
+            write_manifest(s3, a.bucket, a.prefix, root)
+        except Exception as e:  # the index is live; only the daily check's list is stale
+            print(f"WARNING: published, but the manifest was not written ({type(e).__name__}: {e}). Run with --manifest-only.", file=sys.stderr)
     return 1 if failed else 0
 
 
