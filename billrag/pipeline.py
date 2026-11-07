@@ -52,6 +52,12 @@ UNNAMED = re.compile(rf"\b(?:(?:this|that)\s+(?:{_ADJ}){{0,2}}|the\s+(?:{_ADJ}){
 FOCUS_NOTE = ("\n\nNOTE: the question refers to a bill without naming it. The best-matching evidence is from {title} ({keys}): "
               "answer about THAT bill, name it in your first sentence, and lead with its clauses. Mention another bill only if "
               "it adds something the question asks for, and then say clearly that it is a different bill.")
+# "key provisions of Act No. 6 of 2026", "summarise bill 060/2026", "what does it do": no single clause matches such a question, so
+# ranked clauses alone leave the grader saying "no overview" and the answer hedges. When one instrument is named, its own overview
+# (auto summary) is always part of the evidence.
+OVERVIEW_Q = re.compile(r"\b(?:key|main|major|important|principal)\s+(?:provisions?|points?|features?|clauses?|changes?)\b|"
+                        r"\b(?:summari[sz]e|summary|overview|outline|gist|explain|describe|what\s+(?:does|is)\b.{0,40}\b(?:do|about))\b|"
+                        r"\btell\s+me\s+about\b", re.I)
 LEAK = re.compile(r"<\|(?:call|start|end|channel|message|return|constrain)\|>|\bto=functions\b")
 
 EVAL_PROMPT = """You are a strict evidence grader for a question-answering system over Sri Lankan bills.
@@ -174,6 +180,7 @@ class Result:
     official: list = field(default_factory=list)  # [(bill, section)] whose official local-language text informed the answer
     glossary_hints: list = field(default_factory=list)  # "local = English" names given to the question -> English step
     glossary_terms: list = field(default_factory=list)  # English terms whose official local form the answer prompt got
+    added_overview: str = ""  # bill/Act whose overview was added to the evidence for a "key provisions / summarise" question
     added_sections: list = field(default_factory=list)  # sections added to bill-level-only evidence (bill_sections)
     followed: list = field(default_factory=list)  # sections added because a kept clause refers to them (follow_section_refs)
     acts: list = field(default_factory=list)  # how bill evidence was related to Acts: {"bill", "section", "act", "act_section", "status"}
@@ -805,6 +812,13 @@ class Pipeline:
             res.added_sections = self.bill_sections(q, res.evidence)
             res.evidence += res.added_sections
             res.seconds["bill_sections"] = time.time() - t
+        if keys and len(keys) == 1 and OVERVIEW_Q.search(q) and not any(e.chunk["kind"] == "overview" and e.key == keys[0] for e in res.evidence):
+            ov = self._act_overview_evidence(keys[0], 3)
+            if ov:
+                res.evidence.insert(0, ov)  # the instrument's own description first
+                res.added_overview = keys[0]
+                enough, missing, res.enough = True, "", True  # the question asks for the gist, not for every clause
+                self.on_event("overview_added", {"bill": keys[0]})
         res.evidence = self.apply_acts(q, res.evidence, keys, res)
         focus = res.focus = self.focus_bill(q, res.evidence, keys)
         if focus:  # its clauses first (stable sort keeps the grader's order within each group)

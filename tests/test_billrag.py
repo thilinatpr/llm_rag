@@ -484,6 +484,20 @@ def test_parse_json_tolerates_chatter():
     assert parse_json('{"a": 1} and later {"b": 2}') == {"a": 1}
 
 
+def test_overview_question_on_named_bill_adds_overview(tmp_path):
+    st = make_store(tmp_path, with_gs=False)
+    st.db.execute("UPDATE chunks SET text = text || ' Summary (auto-generated): amends the Trusts Ordinance.' "
+                  "WHERE kind='overview' AND bill_key='086/2026'")
+    st.commit()
+    llm = ScriptLLM(enough=False)
+    p = Pipeline(st, Retriever(st), llm, on_event=lambda n, d: None)
+    r = p.ask("What are the key provisions of bill 086/2026?")
+    assert r.added_overview == "086/2026" and r.enough
+    assert r.evidence[0].chunk["kind"] == "overview"
+    other = Pipeline(st, Retriever(st), ScriptLLM()).ask("How many days does bill 086/2026 allow?")
+    assert other.added_overview == ""  # a specific question is left to the ranked clauses
+
+
 def test_pipeline_happy_path_two_llm_calls(tmp_path):
     st, llm = make_store(tmp_path), ScriptLLM()
     events = []
