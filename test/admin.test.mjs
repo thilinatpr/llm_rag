@@ -1,8 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAdmin, esc, isAdmin, snapshot, todoItems } from "../src/admin.js";
+import { readFileSync } from "node:fs";
+import { createAdmin, esc, snapshot, todoItems } from "../src/admin.js";
 import { addRecord, emptyDay, lastDayProblems, listQuestions, loadDay, problemsOf, quantile, utcDay, validKey } from "../src/admin-stats.js";
 import { createHandler } from "../src/auth.js";
+import { reportSettings } from "../src/public.js";
+import adminWorker from "../workers/admin/worker.js";
 import { checkBalance } from "../src/balance.js";
 import { Counters, memoryStore, slDay } from "../src/quota.js";
 
@@ -33,13 +36,15 @@ function kv(init = {}) {
 const ask = (extra = {}) => ({ ts: `${DAY}T10:00:00.000Z`, type: "ask", question: "q", answer: "a", seconds: 10, evidence: [{ bill: "070/2026", section: "3", score: 3 }], queries: ["q"], enough: true, warnings: [], ...extra });
 const logKey = (hhmmss, day = DAY, prefix = "chatlogs") => `${prefix}/${day}/${hhmmss}000-abc-1.json`;
 
-function setup({ logs = {}, used = 0, user = "me@example.com", extra = {}, kvInit = {} } = {}) {
+const SETTINGS = { publicWanted: true, publicWorks: true, proxySecret: true, limits: { cookie: 10, ip: 300, global: 500, issue: 50 } };
+const settings = (o = {}) => ({ "admin:settings": JSON.stringify({ at: new Date(NOW).toISOString(), ...SETTINGS, ...o }) });
+
+function setup({ logs = {}, used = 0, user = "me@example.com", extra = {}, kvInit = settings() } = {}) {
   const store = new Counters(memoryStore());
   if (used) for (let i = 0; i < used; i++) store.take([{ k: `g|${slDay(NOW)}`, limit: 500, ttl: 86400, tag: "global" }], NOW / 1000);
   const LOGS = bucket({ "bills/index.sqlite": "x", "bills/vectors.npz": "x", ...logs });
   const env = {
-    AUTH: kv(kvInit), LOGS, ADMIN_EMAILS: "me@example.com", ALLOWED_EMAILS: "me@example.com,other@example.com", PROXY_SECRET: "s".repeat(16),
-    PUBLIC_CHAT: "on", TURNSTILE_SECRET: "t", TURNSTILE_SITEKEY: "k", OTP_PEPPER: "p", BILLRAG: {}, DEEPSEEK_API_KEY: "k", ALERT_EMAIL: "me@example.com",
+    AUTH: kv(), BILLS_KV: kv(kvInit), LOGS, DEEPSEEK_API_KEY: "k", ALERT_EMAIL: "me@example.com",
     QUOTA: { idFromName: () => "main", get: () => ({ peek: async (items) => store.peek(items, NOW / 1000) }) },
     ...extra,
   };
@@ -52,49 +57,57 @@ function setup({ logs = {}, used = 0, user = "me@example.com", extra = {}, kvIni
 const text = (r) => r.text();
 
 // --- who gets in ---
-test("only ADMIN_EMAILS get in; unset means nobody; signed out goes to the login", async () => {
-  assert.equal(isAdmin({ ADMIN_EMAILS: "" }, "me@example.com"), false);
-  assert.equal(isAdmin({}, "me@example.com"), false);
-  assert.equal(isAdmin({ ADMIN_EMAILS: " Me@Example.com " }, "me@example.com"), true);
-  assert.equal((await setup({ user: "other@example.com" }).call("/admin")).status, 404);
+test("signed out goes to the login; actions need a session", async () => {
   const out = await setup({ user: null }).call("/admin");
   assert.equal(out.status, 302);
   assert.match(out.headers.get("Location"), /\/login$/);
   assert.equal((await setup({ user: null }).call("/admin/public-pause", { method: "POST" })).status, 401);
 });
 
-test("the panel is only on ADMIN_HOST, and that host serves nothing else", async () => {
-  let upstreamCalls = 0, assetCalls = 0;
-  const handler = createHandler({ upstream: async () => { upstreamCalls++; return new Response("container"); }, admin: async () => new Response("panel"), now: () => NOW });
-  const env = { AUTH: kv({ [`session:${"a".repeat(64)}`]: "me@example.com" }), ALLOWED_EMAILS: "me@example.com", ADMIN_HOST: "admin.test", BILLRAG: {}, PROXY_SECRET: "s".repeat(16),
-    ASSETS: { fetch: async () => { assetCalls++; return new Response("page"); } } };
-  const call = (u, init = {}) => handler(new Request(u, { ...init, headers: { Cookie: `session=${"a".repeat(64)}`, ...init.headers } }), env);
+test("the admin Worker serves sign-in and the panel, and only ALLOWED_EMAILS can have a session", async () => {
+  const sid = "a".repeat(64);
+  const env = { AUTH: kv({ [`session:${sid}`]: "me@example.com", [`session:${"b".repeat(64)}`]: "gone@example.com" }), BILLS_KV: kv(settings()), LOGS: bucket({}), ALLOWED_EMAILS: "me@example.com" };
+  const call = (p, s = sid) => adminWorker.fetch(new Request(`https://admin.test${p}`, { headers: s ? { Cookie: `session=${s}` } : {} }), env);
+  assert.match(await (await call("/login")).text(), /Sign in to the admin panel/);
+  assert.equal((await call("/")).headers.get("Location"), "https://admin.test/admin");
+  assert.equal((await call("/admin")).status, 200);
+  for (const p of ["/api/ask", "/api/search", "/healthz", "/public/me", "/index.html"]) assert.equal((await call(p)).status, 404, p);
+  for (const s of [null, "b".repeat(64)]) assert.match((await call("/admin", s)).headers.get("Location"), /\/login$/);
+  env.ALLOWED_EMAILS = "";
+  assert.match((await call("/admin")).headers.get("Location"), /\/login$/, "empty list = nobody");
+});
 
-  assert.equal(await (await call("https://admin.test/admin")).text(), "panel");
-  assert.equal(await (await call("https://admin.test/admin/source/bills")).text(), "panel");
-  const root = await call("https://admin.test/");
-  assert.equal(root.status, 302);
-  assert.equal(root.headers.get("Location"), "https://admin.test/admin");
-  assert.match(await (await call("https://admin.test/login")).text(), /Sign in to the admin panel/);
-  for (const p of ["/api/ask", "/api/search", "/healthz", "/public/me", "/public/start", "/index.html", "/favicon.ico"])
-    assert.equal((await call(`https://admin.test${p}`)).status, 404, p);
-  assert.equal(upstreamCalls + assetCalls, 0);
+test("Bill Assistant's Worker has no panel any more: /admin is an ordinary missing page", async () => {
+  const worker = readFileSync(new URL("../src/worker.js", import.meta.url), "utf8"), toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
+  assert.doesNotMatch(worker, /admin/i);
+  for (const gone of ["r2_buckets", "citizenlk-procurement", "admin.citizenlk.com", "ADMIN_"]) assert.ok(!toml.includes(gone), gone);
+  const handler = createHandler({ upstream: async () => new Response("container") });
+  const env = { AUTH: kv({ [`session:${"a".repeat(64)}`]: "me@example.com" }), ALLOWED_EMAILS: "me@example.com", BILLRAG: {}, PROXY_SECRET: "s".repeat(16), ASSETS: { fetch: async () => new Response("no", { status: 404 }) } };
+  assert.equal((await handler(new Request("https://bills.test/admin", { headers: { Cookie: `session=${"a".repeat(64)}` } }), env)).status, 404);
+});
 
-  for (const p of ["/admin", "/admin/", "/admin/source/bills"]) assert.equal((await call(`https://bills.test${p}`)).status, 404, p);
-  assert.equal((await call("https://bills.test/admin/public-pause", { method: "POST" })).status, 404);
-  assert.match(await (await call("https://bills.test/login")).text(), /Sign in to the Bill Assistant/);
-  assert.equal(await (await call("https://bills.test/")).text(), "page");
-  assert.equal(await (await call("https://bills.test/api/search")).text(), "container");
+test("the credit alert settings match in both Workers, since Check now runs the same check", () => {
+  const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
+  for (const k of ["ALERT_EMAIL", "BALANCE_ALERT_USD", "FROM_ADDRESS", "CF_ACCOUNT_ID"]) {
+    const val = (t) => new RegExp(`^${k} = (.*)$`, "m").exec(t)?.[1];
+    assert.ok(val(read("../wrangler.toml")), k);
+    assert.equal(val(read("../workers/admin/wrangler.toml")), val(read("../wrangler.toml")), k);
+  }
+});
 
-  delete env.ADMIN_HOST;
-  assert.equal((await call("https://admin.test/admin")).status, 404, "unset = no panel anywhere");
+test("Bill Assistant reports its settings, never a secret's value", async () => {
+  const AUTH = kv();
+  await reportSettings({ AUTH, PUBLIC_CHAT: "on", PROXY_SECRET: "topsecretvalue", TURNSTILE_SECRET: "alsosecret", PUBLIC_DAILY_GLOBAL: "400" }, NOW);
+  const raw = AUTH.m.get("admin:settings"), got = JSON.parse(raw);
+  assert.deepEqual([got.publicWanted, got.publicWorks, got.proxySecret, got.limits.global], [true, false, true, 400]);
+  assert.ok(!raw.includes("secret"));
 });
 
 test("actions need a same-site Origin", async () => {
   const t = setup();
   const r = await t.call("/admin/public-pause", { method: "POST", headers: { Origin: "https://evil.test" } });
   assert.equal(r.status, 403);
-  assert.equal(await t.env.AUTH.get("admin:public-paused"), null);
+  assert.equal(await t.env.BILLS_KV.get("admin:public-paused"), null);
 });
 
 // --- nothing wakes a container, nothing leaks ---
@@ -232,7 +245,7 @@ test("quantile and the 24 h window", () => {
 
 // --- To do ---
 const titles = (items) => items.map((x) => `${x.tier}: ${x.title}`);
-const balanceOk = { "admin:balance": JSON.stringify({ state: "ok", balance: 12, currency: "USD", limit: 5, at: new Date(NOW - 1800e3).toISOString() }) };
+const balanceOk = { ...settings(), "admin:balance": JSON.stringify({ state: "ok", balance: 12, currency: "USD", limit: 5, at: new Date(NOW - 1800e3).toISOString() }) };
 const items = async (opts) => { const t = setup(opts); return todoItems(await snapshot(t.env, { now: NOW, containerState: async () => ({ status: "stopped", lastChange: NOW }) })); };
 
 test("all well: nothing to do", async () => {
@@ -251,7 +264,7 @@ test("failures, warnings and the backup model are listed, worst first, with a bu
 
 test("credit: low waits for you with Top up; empty affects people; a failing check; never checked; stale", async () => {
   const at = new Date(NOW).toISOString();
-  const with_ = (o) => ({ kvInit: { "admin:balance": JSON.stringify({ at, ...o }) } });
+  const with_ = (o) => ({ kvInit: { ...settings(), "admin:balance": JSON.stringify({ at, ...o }) } });
   const low = await items(with_({ state: "low", balance: 4.2, currency: "USD", limit: 5 }));
   assert.deepEqual(titles(low), ["you: DeepSeek credit is low: 4.2 USD"]);
   assert.equal(low[0].actions[0].label, "Top up");
@@ -259,7 +272,7 @@ test("credit: low waits for you with Top up; empty affects people; a failing che
   assert.match(titles(await items(with_({ state: "check_failed", failures: 1, error: "e" })))[0], /^watch: The credit check failed 1 time/);
   assert.match(titles(await items(with_({ state: "check_failed", failures: 3, error: "e" })))[0], /^you: The credit check failed 3 times/);
   assert.match(titles(await items({}))[0], /has not been checked/);
-  assert.match(titles(await items({ kvInit: { "admin:balance": JSON.stringify({ state: "ok", balance: 9, at: new Date(NOW - 4 * 3600e3).toISOString() }) } }))[0], /last checked 4 h ago/);
+  assert.match(titles(await items({ kvInit: { ...settings(), "admin:balance": JSON.stringify({ state: "ok", balance: 9, at: new Date(NOW - 4 * 3600e3).toISOString() }) } }))[0], /last checked 4 h ago/);
 });
 
 test("public questions: near the cap, at the cap, paused, broken config", async () => {
@@ -268,8 +281,8 @@ test("public questions: near the cap, at the cap, paused, broken config", async 
   const paused = await items({ kvInit: { ...balanceOk, "admin:public-paused": JSON.stringify({ at: new Date(NOW).toISOString(), by: "me" }) }, used: 500 });
   assert.deepEqual(titles(paused), ["you: Public questions are paused"]);
   assert.equal(paused[0].actions[0].post, "/admin/public-resume");
-  assert.match(titles(await items({ kvInit: balanceOk, extra: { TURNSTILE_SECRET: "" } }))[0], /^people: Public questions are on, but/);
-  assert.deepEqual(titles(await items({ kvInit: balanceOk, extra: { PUBLIC_CHAT: "off" }, used: 500 })), []);
+  assert.match(titles(await items({ kvInit: { ...balanceOk, ...settings({ publicWorks: false }) } }))[0], /^people: Public questions are on, but/);
+  assert.deepEqual(titles(await items({ kvInit: { ...balanceOk, ...settings({ publicWanted: false, publicWorks: false }) }, used: 500 })), []);
 });
 
 test("index: missing affects people, two weeks old is watched", async () => {
@@ -294,6 +307,7 @@ test("a part that cannot be read says so instead of looking fine", async () => {
   t.LOGS.list = async () => { throw new Error("R2 down"); };
   const s = await snapshot(t.env, { now: NOW, containerState: async () => ({ status: "stopped", lastChange: NOW }) });
   assert.ok(titles(todoItems(s)).includes("people: Cannot read the Bill Assistant logs"));
+  assert.ok(titles(todoItems(await snapshot({ ...t.env, BILLS_KV: kv() }, { now: NOW }))).includes("watch: Bill Assistant has not reported its settings yet"));
   const noLogs = await snapshot({ ...t.env, LOGS: undefined }, { now: NOW });
   assert.ok(titles(todoItems(noLogs)).includes("people: Cannot read the Procurement Rules logs"));
 });
@@ -307,7 +321,9 @@ test("pause: a visitor is shut out, a member is not, the audit log says who; res
   assert.match(await text(await t.call("/admin/audit")), /me@example.com[\s\S]*Paused public questions/);
 
   const handler = createHandler({ upstream: async () => new Response("container"), now: () => NOW });
-  const env = { ...t.env, ASSETS: { fetch: async () => new Response("page") } };
+  // Bill Assistant's own view of the same KV the panel wrote to
+  const env = { ...t.env, AUTH: t.env.BILLS_KV, PROXY_SECRET: "s".repeat(16), PUBLIC_CHAT: "on", TURNSTILE_SECRET: "t", TURNSTILE_SITEKEY: "k", OTP_PEPPER: "p", BILLRAG: {},
+    ALLOWED_EMAILS: "me@example.com", ASSETS: { fetch: async () => new Response("page") } };
   const me = () => handler(new Request("https://bills.test/public/me"), env);
   assert.equal((await (await me()).json()).enabled, false);
   assert.equal((await handler(new Request("https://bills.test/", { headers: { Accept: "text/html" } }), env)).status, 302);
@@ -334,10 +350,19 @@ test("the credit check records its result for the panel, without the mail fields
   assert.equal(JSON.parse(env.AUTH.m.get("admin:balance")).lowSince, null);
 });
 
-test("every page renders", async () => {
+test("settings: not reported, stale, or PROXY_SECRET missing", async () => {
+  const of = async (o) => titles(await items({ kvInit: { ...balanceOk, ...o } }));
+  assert.deepEqual(await of(settings({ at: new Date(NOW - 4 * 3600e3).toISOString() })), ["watch: Bill Assistant last reported its settings 4 h ago"]);
+  assert.deepEqual(await of(settings({ proxySecret: false })), ["people: PROXY_SECRET is not set"]);
+});
+
+test("every page renders, also before Bill Assistant has reported its settings", async () => {
   const t = setup({ kvInit: balanceOk, logs: { [logKey("100000")]: ask({ calls: [{ kind: "chat", step: "answer", model: "m", s: 1, in: 2, out: 3 }], cost: { usd: 0.01, priced_calls: 1 } }) } });
   for (const p of ["/admin", "/admin/", "/admin/source/bills", "/admin/source/procurement", "/admin/source/money", "/admin/source/public", "/admin/source/containers", "/admin/source/index", "/admin/questions", "/admin/questions?s=procurement", "/admin/audit", `/admin/q/${logKey("100000")}`])
     assert.equal((await t.call(p)).status, 200, p);
+  const fresh = setup({ kvInit: {} });
+  assert.equal((await fresh.call("/admin/source/public")).status, 200);
+  assert.equal((await fresh.call("/admin")).status, 200);
   assert.equal((await t.call("/admin/source/nope")).status, 404);
   assert.equal((await t.call("/admin/nope")).status, 404);
 });

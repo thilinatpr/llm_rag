@@ -47,11 +47,15 @@ function items(env, anonId, ip, nowMs) {
   ];
 }
 
-// How many public questions were asked today (admin panel). Peeking counts nothing.
-export async function publicUsedToday(env, nowMs) {
-  const limit = limits(env).global;
+// How many public questions were asked today (admin panel, which has this Worker's QUOTA binding). Peeking counts nothing.
+export async function publicUsedToday(env, limit, nowMs) {
   const { left } = await counter(env).peek([{ k: `g|${slDay(nowMs)}`, limit, ttl: 0, tag: "global" }]);
   return limit - left[0];
+}
+
+// Hourly, for the admin panel: it is a separate Worker and cannot see this one's vars or secrets, only whether they are in order.
+export async function reportSettings(env, nowMs = Date.now()) {
+  await env.AUTH.put("admin:settings", JSON.stringify({ at: new Date(nowMs).toISOString(), publicWanted: env.PUBLIC_CHAT === "on", publicWorks: publicOn(env), proxySecret: !!env.PROXY_SECRET, limits: limits(env) }));
 }
 
 async function sign(env, msg) {
