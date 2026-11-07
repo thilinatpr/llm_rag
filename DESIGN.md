@@ -59,6 +59,7 @@ Abhaya Libre and Yaldevi cover both Sinhala and Latin, so mixed-language lines m
 - **Chat page:** top bar (wordmark, "Bill Assistant", Thorough | Fast switch, New chat, Sign out); one 700px column; the user's
   message is a tinted bubble on the right, the answer is plain text on the page with citations like `[070/2026 §4(b)]` in
   `--sindoor`; the ask box is fixed at the bottom. First screen: heading, one sentence, three example questions.
+- **Admin panel** (`src/admin.js`, not public): same tokens. Status dots add `--err` and `--ok`, for state only, never decoration. Principles 1 and 2 do not apply: it is dense and names models on purpose.
 - **Sign-in:** the home layout: wordmark, tagline, one pill form for the email, then one for the 6-digit code.
 
 - **Wordmark:** `citizen<b>lk</b>` in the display face, "lk" in `--sindoor`. Below it, muted:

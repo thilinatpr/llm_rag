@@ -47,6 +47,13 @@ function items(env, anonId, ip, nowMs) {
   ];
 }
 
+// How many public questions were asked today (admin panel). Peeking counts nothing.
+export async function publicUsedToday(env, nowMs) {
+  const limit = limits(env).global;
+  const { left } = await counter(env).peek([{ k: `g|${slDay(nowMs)}`, limit, ttl: 0, tag: "global" }]);
+  return limit - left[0];
+}
+
 async function sign(env, msg) {
   const key = await crypto.subtle.importKey("raw", enc.encode(`${env.OTP_PEPPER}|anon-cookie`), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   return hex(await crypto.subtle.sign("HMAC", key, enc.encode(msg)));
