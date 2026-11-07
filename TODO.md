@@ -100,7 +100,7 @@ description, canonical, Open Graph, robots.txt, sitemap or structured data). Rea
       `robots.txt` + `sitemap.xml` per public Worker (disallow `/api/`, `/login`, `/consent`); `noindex` on login, consent, privacy, admin
       (admin host: disallow all); JSON-LD (`Organization`, `WebSite`, `WebApplication`); register citizenlk.com and bills.citizenlk.com in Google
       Search Console and Bing Webmaster Tools (DNS TXT).
-- [ ] **Phase 2, public content pages:** build step that generates static `/bills/<NNN-YYYY>` and `/acts/<N-YYYY>` pages from the index (title, date,
+- [ ] **Phase 2, public content pages. PILOT BUILT on branch `claude/seo` (2026-11-08), NOT deployed, not yet in Google:** `scripts/build_site.py` writes 99 Acts (2024+), 49 bill families (2026), 2 list pages and `sitemap-docs.xml` into `site/` (git-ignored); checked through the real home Worker with `wrangler dev --local` and in Chromium at 1100 and 400 px. Open: deploy (run the build first), check indexing after 2-3 weeks, then widen `--bills-since`; Act PDF links need `acts.csv` in R2 (they link the documents.gov.lk Acts list for now); a deep link from a page into the chat with the question filled in. Original plan: build step that generates static `/bills/<NNN-YYYY>` and `/acts/<N-YYYY>` pages from the index (title, date,
       stage/status, long title, "auto-generated" summary, section list, bill -> Act link, versions, "Ask about this bill" button). Pilot: 2026 bills
       + all Acts (~200 pages); check indexing after 2-3 weeks before doing older bills. Reuse the hedged status wording; never state "failed" or
       "became law" more strongly than `acts.status_lines` does. Internal links from `bill_meta`, `section_refs`, `act_links`.

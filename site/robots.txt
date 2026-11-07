@@ -2,3 +2,4 @@ User-agent: *
 Allow: /
 
 Sitemap: https://citizenlk.com/sitemap.xml
+Sitemap: https://citizenlk.com/sitemap-docs.xml
