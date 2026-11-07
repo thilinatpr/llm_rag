@@ -48,7 +48,18 @@ new_sqlite_classes = ["ProcurementContainer"]
 [observability]
 enabled = true
 
+# The counters live in Bill Assistant's Durable Object (one place for the day and month counts); used once OPEN_SIGNUP is "on" here.
+[[durable_objects.bindings]]
+name = "QUOTA"
+class_name = "QuotaCounter"
+script_name = "gov-rag-llm"
+
 [vars]
+# Free accounts are NOT open here yet (depends on the translation review, TODO_LAUNCH.md). To open: OPEN_SIGNUP = "on" and the secret
+# TURNSTILE_SECRET + var TURNSTILE_SITEKEY for a widget on procurement.citizenlk.com. Free accounts: 5 questions a day, no monthly cap.
+OPEN_SIGNUP = "off"
+MEMBER_DAILY = "5"
+MEMBER_MONTHLY = "none"
 COOKIE_DOMAIN = "citizenlk.com"
 ALLOWED_EMAILS = "thilinatpr@gmail.com"
 FROM_ADDRESS = "login@citizenlk.com"

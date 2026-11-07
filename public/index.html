@@ -300,7 +300,7 @@ async function askStream(body, el) {
       else if (kind === 'reset') { if (draft) { draft = ''; el.classList.remove('draft', 'md'); step('Checking the answer and writing it again'); } }
       else if (kind === 'token') { draft += d.text || ''; if (!queued) { queued = true; requestAnimationFrame(paint); } }
       else if (kind === 'done') final = d.answer || '';
-      else if (kind === 'unanswered') refreshQuota();
+      else if (kind === 'unanswered' || kind === 'free') refreshQuota();
       else if (kind === 'error') { refreshQuota(); throw new Error(d.error || 'The server reported an error'); }
     }
   } } finally { closed = true; }
@@ -314,20 +314,23 @@ const T = {left: (n) => n + ' free questions left today', checking: 'Checking th
     ip: 'Too many questions from your network today. Please come back tomorrow.', global: "Today's free questions for everyone are used up. Please come back tomorrow.",
     issue: 'Too many new visits from your network today. Please come back tomorrow.', long: 'Please keep your question under 600 characters.'};
 const tr = (k, ...a) => { const v = T[k]; return typeof v === 'function' ? v(...a) : v; };
-const state = {anon: false};
+const state = {anon: false, free: false};   // free = a signed-in free account (counted per day and month)
 const gate = document.getElementById('gate'), gateMsg = document.getElementById('gateMsg'), quotaEl = document.getElementById('quota');
 function noteQuota(r) {
   const left = r && r.headers && r.headers.get('X-Quota-Left');
-  if (state.anon && left !== null && left !== undefined) quotaEl.textContent = '· ' + tr('left', left);
+  if ((state.anon || state.free) && left !== null && left !== undefined) quotaEl.textContent = '· ' + tr('left', left);
 }
 // The Worker gives back a question that got no answer: read the corrected count.
 async function refreshQuota() {
-  if (!state.anon) return;
-  try { const m = await (await fetch('/public/me', {cache: 'no-store'})).json(); if (m.user === 'anon') quotaEl.textContent = '· ' + tr('left', m.left); } catch (e) {}
+  if (!state.anon && !state.free) return;
+  try { const m = await (await fetch('/public/me', {cache: 'no-store'})).json(); if (m.user === 'anon' || m.free) quotaEl.textContent = '· ' + tr('left', m.left); } catch (e) {}
 }
 // Error from a failed API reply; an anonymous visitor's quota/verification reasons get the localized text.
 function failure(j, r) {
-  const e = new Error(state.anon && tr(j.reason) && typeof tr(j.reason) === 'string' ? tr(j.reason) : `${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
+  if (j.consent_required) location.href = '/consent';   // the terms changed, or this service asks for more: accept them first
+  // a refused question (429) comes with its own sentence from the Worker, which knows whether sign-up is open
+  const own = (state.anon || state.free) && r.status === 429 && j.reason && j.error;
+  const e = new Error(own ? j.error : state.anon && tr(j.reason) && typeof tr(j.reason) === 'string' ? tr(j.reason) : `${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
   e.reason = j.reason;
   if (j.reason === 'verify' && state.anon) location.reload();   // the cookie expired: verify again
   return e;
@@ -360,6 +363,7 @@ function verify(sitekey) {
   try { me = await (await fetch('/public/me', {cache: 'no-store'})).json(); } catch (e) {}
   if (me.enabled && me.user === 'none') return verify(me.sitekey);   // not signed in, no cookie yet
   if (me.enabled && me.user === 'anon') showAnon(me.left);
+  if (me.user === 'member' && me.free) { state.free = true; quotaEl.textContent = '· ' + tr('left', me.left); }
   warm();
 })();
 document.getElementById('f').addEventListener('submit', async (e) => {
