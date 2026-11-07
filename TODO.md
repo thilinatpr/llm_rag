@@ -92,3 +92,27 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
 - [ ] Find NPC's Contract Management Guidelines (PG2024 §1.4(c)) and the works SBD; not on the NPC site as of 2026-11-06. They would replace most of the 2017 guide.
 - [ ] Authority/scope tags per clause (who it applies to: PPC, MPC, provincial council, project; value band) so retrieval can filter.
       Largest piece, least certain, and the measurement gave no sign that retrieval is the limit (evidence 0.99): probably not worth doing yet.
+
+## SEO (planned 2026-11-08, nothing built)
+Why: the chat and Procurement Rules are behind login, so search engines see only the homepage, which has just a `<title>` (no meta
+description, canonical, Open Graph, robots.txt, sitemap or structured data). Real ranking needs public, static pages generated from the index.
+- [ ] **Phase 1, basics (about a day):** homepage title + meta description + canonical + Open Graph/Twitter cards + favicon + 1200x630 share image;
+      `robots.txt` + `sitemap.xml` per public Worker (disallow `/api/`, `/login`, `/consent`); `noindex` on login, consent, privacy, admin
+      (admin host: disallow all); JSON-LD (`Organization`, `WebSite`, `WebApplication`); register citizenlk.com and bills.citizenlk.com in Google
+      Search Console and Bing Webmaster Tools (DNS TXT).
+- [ ] **Phase 2, public content pages:** build step that generates static `/bills/<NNN-YYYY>` and `/acts/<N-YYYY>` pages from the index (title, date,
+      stage/status, long title, "auto-generated" summary, section list, bill -> Act link, versions, "Ask about this bill" button). Pilot: 2026 bills
+      + all Acts (~200 pages); check indexing after 2-3 weeks before doing older bills. Reuse the hedged status wording; never state "failed" or
+      "became law" more strongly than `acts.status_lines` does. Internal links from `bill_meta`, `section_refs`, `act_links`.
+- [ ] Procurement pages (one per guideline/section group, link to source PDF): first check the licence and provenance of the PDFs.
+- [ ] Regenerate pages + sitemap (with `lastmod`) after each published index build; ping IndexNow (Bing/Yandex) on new documents.
+- [ ] **Phase 3, query targeting:** titles like "<Bill title> - Sri Lanka Bill 2026 | citizenlk", "Act No. N of YYYY", abbreviations (PTSA, OSA);
+      per-page FAQ blocks from the Act comparison data. Decide (owner): use official Sinhala titles as `hreflang`/alternate names on 2025+ pages?
+      Conflicts with DESIGN.md principle 6 (languages not advertised).
+- [ ] **Phase 4, technical:** serve from Worker assets with long cache headers; light server-rendered HTML; load Turnstile and chat code only on
+      interaction; one `<h1>` per page; canonical between GS and presented-bill versions; 301s on renamed URLs.
+- [ ] **Phase 5, authority and measurement:** admin-panel tiles for pages indexed and queries with impressions (Search Console); link to and get cited
+      by documents.gov.lk, civil-society and journalist sources; a few explainer pages on high-interest recent bills; use aggregated chat-log
+      topics as keyword research (logs stay private). Optional: `llms.txt`.
+- [ ] Before publishing pages: lawyer glance at the disclaimer wording (consent text is not reviewed either); check documents.gov.lk terms on
+      republishing text (link to PDFs rather than copy full text); keep "can be incomplete or wrong" and "not government, not legal advice" on every page.
