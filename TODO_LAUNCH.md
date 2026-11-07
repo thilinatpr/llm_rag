@@ -39,7 +39,11 @@ Written and tested 2026-11-07, not yet deployed. Details and measurements: `AGEN
 - [ ] **O** Ask a question on each site and check the logs (no question has reached the new code yet)
 - [x] **O** Publish the new index (2026-11-07 06:12 UTC; adds the presented version of Prevention of Organised Crimes, 087/2026)
 - [x] Schedule the refresh: daily check in the admin panel, Build/Publish buttons that run `refresh_bills.py` on GitHub Actions. Written 2026-11-08, not deployed.
-- [ ] **O** Turn the scheduled refresh on: manifest, GitHub secrets, dispatch token, merge, deploy the admin Worker (steps in `AGENTS.md` "Scheduled refresh"), then press Build once
+- [ ] **O** **Later, once real users are on the site:** turn the scheduled refresh on. Until then refresh by hand with `scripts/refresh_bills.py`. The code is merged (PR #85) but not deployed. Steps (details in `AGENTS.md` "Scheduled refresh"):
+  - [ ] Write `bills/indexed-keys.json` to R2: `upload_r2.py --bucket gov-rag --manifest-only --data data/bills`, with the live index in `data/bills`
+  - [ ] GitHub repo secrets: `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` (own R2 token, Object Read & Write on `gov-rag`), `CLOUDFLARE_API_TOKEN` (own token, Workers AI only), `DEEPSEEK_API_KEY`
+  - [ ] Fine-grained GitHub token (this repo only, Actions: read and write, with an expiry), then `wrangler secret put GITHUB_DISPATCH_TOKEN -c workers/admin/wrangler.toml`
+  - [ ] Deploy the admin Worker (`npx wrangler deploy -c workers/admin/wrangler.toml`), press **Check now**, then **Build** once and read the run
 - [ ] **O** Run `scripts/load_test.py` against the live site with a signed-in cookie (a small run: each question costs money)
 - [ ] **O** Top up DeepSeek: under $5 when this was written
 
