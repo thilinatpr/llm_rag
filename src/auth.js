@@ -12,7 +12,7 @@
 import { getCookie, hex, json, readJson, safeEqual } from "./util.js";
 import { anonApi, publicMe, publicOn, publicStart, verifyTurnstile } from "./public.js";
 
-const PAUSE_KEY = "admin:public-paused"; // set by the admin panel (admin.js)
+const PAUSE_KEY = "admin:public-paused"; // set by the admin panel (admin.js, citizenlk-admin Worker)
 const OTP_TTL = 300; // seconds a code is valid
 const RESEND_COOLDOWN = 60; // seconds between code requests per address
 const MAX_ATTEMPTS = 5;
@@ -190,20 +190,21 @@ $('f1').onsubmit = async (e) => { e.preventDefault();
   try { const j = await post('/login/request', { email: $('email').value }); msg(j.message); $('f2').hidden = false; $('code').focus(); }
   catch (x) { msg(x.message, true); } };
 $('f2').onsubmit = async (e) => { e.preventDefault();
-  try { await post('/login/verify', { email: $('email').value, code: $('code').value }); location.href = location.search === '?next=/admin' ? '/admin' : '/'; }
+  try { await post('/login/verify', { email: $('email').value, code: $('code').value }); location.href = '/'; }
   catch (x) { msg(x.message, true); } };
 </script></body></html>`;
 
 // upstream(request, env): optional, forwards signed-in requests (e.g. to a container). Used when env.BILLRAG is bound.
 // verify(env, token, ip, host) checks a Turnstile token; now() is the clock (both replaceable in tests).
-// admin(request, env, user): the admin panel at /admin (admin.js).
-export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null, verify = verifyTurnstile, now = () => Date.now(), admin = null } = {}) {
+// app(request, env, user): handles everything but the login routes, with user = null when signed out (the admin Worker's panel).
+// loginTitle replaces the line under the wordmark on the sign-in page.
+export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null, verify = verifyTurnstile, now = () => Date.now(), app = null, loginTitle = null } = {}) {
   return async function fetch(request, realEnv) {
     let env = realEnv;
     const url = new URL(request.url);
     const { pathname } = url;
     if (pathname === "/login" && request.method === "GET")
-      return new Response(LOGIN_PAGE, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+      return new Response(loginTitle ? LOGIN_PAGE.replace("Sign in to the Bill Assistant", loginTitle) : LOGIN_PAGE, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
     if (pathname === "/login/request" && request.method === "POST") return requestCode(env, request, sendMail);
     if (pathname === "/login/verify" && request.method === "POST") return verifyCode(env, request);
     if (pathname === "/logout" && request.method === "POST") {
@@ -213,7 +214,7 @@ export function createHandler({ sendMail = sendMailViaCloudflare, upstream = nul
     }
 
     const user = await currentUser(env, request);
-    if (admin && (pathname === "/admin" || pathname.startsWith("/admin/"))) return admin(request, env, user);
+    if (app) return app(request, env, user);
     // The panel's pause button: a visitor is treated as if PUBLIC_CHAT were off. Cached a minute, so this is not a KV call per request.
     if (!user && env.PUBLIC_CHAT === "on" && (await env.AUTH.get(PAUSE_KEY, { cacheTtl: 60 }))) env = { ...env, PUBLIC_CHAT: "off" };
     // Public (anonymous) lane: see public.js. Off unless PUBLIC_CHAT = "on" and everything it needs is configured.

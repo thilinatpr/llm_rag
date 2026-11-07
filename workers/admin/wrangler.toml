@@ -1,0 +1,59 @@
+# The admin panel. Deploy: npx wrangler deploy -c workers/admin/wrangler.toml
+# Secrets (npx wrangler secret put NAME -c workers/admin/wrangler.toml):
+#   OTP_PEPPER (its own random value), CF_EMAIL_TOKEN (login mail), DEEPSEEK_API_KEY ("Check now" on the credit)
+name = "citizenlk-admin"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "admin.citizenlk.com", custom_domain = true }]
+
+# Its own sessions and audit log.
+[[kv_namespaces]]
+binding = "AUTH"
+id = "c828e50de45c430b897982f6ce06cb28"
+
+# Bill Assistant's namespace, which also holds that Worker's user sessions. The panel uses only the admin:* keys (src/admin.js).
+[[kv_namespaces]]
+binding = "BILLS_KV"
+id = "a44e7e8cc8f0444ba865ea162820193d"
+
+# Chat logs and index files; the panel writes only admin-rollups/ (src/admin-stats.js).
+[[r2_buckets]]
+binding = "LOGS"
+bucket_name = "gov-rag"
+
+# Read only: the containers' stored state and today's public question count.
+[[durable_objects.bindings]]
+name = "BILLRAG"
+class_name = "BillragContainer"
+script_name = "gov-rag-llm"
+
+[[durable_objects.bindings]]
+name = "PROCUREMENT"
+class_name = "ProcurementContainer"
+script_name = "citizenlk-procurement"
+
+[[durable_objects.bindings]]
+name = "QUOTA"
+class_name = "QuotaCounter"
+script_name = "gov-rag-llm"
+
+# The running Worker version, shown at the foot of the panel.
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
+[observability]
+enabled = true
+
+[triggers]
+crons = ["23 * * * *"]
+
+[vars]
+# Who can sign in, which is who can use the panel. Empty = nobody.
+ALLOWED_EMAILS = "thilinatpr@gmail.com"
+FROM_ADDRESS = "login@tripletrackr.com"
+CF_ACCOUNT_ID = "e81ea992523c4e14d3d1a89f10732576"
+# Must match wrangler.toml at the repo root (test/admin.test.mjs checks): "Check now" runs the same credit check as Bill Assistant's cron.
+ALERT_EMAIL = "thilinatpr@gmail.com"
+BALANCE_ALERT_USD = "5"

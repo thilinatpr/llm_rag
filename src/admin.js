@@ -1,15 +1,18 @@
 // The admin panel at /admin: the same idea as LankaWatch's control panel. Home is a To do list, most urgent first, each row with the
 // button that deals with it; then one tile per source; each source has its own page. Server-rendered, no build step, works on a phone.
-// Only addresses in ADMIN_EMAILS get in (unset = nobody). It never calls a container, so opening it costs nothing and wakes nothing:
-// numbers come from R2 rollups (admin-stats.js), KV, the quota Durable Object and the containers' stored state.
+// Runs as its own Worker (workers/admin/worker.js): whoever can sign in there is an admin. It never calls a container, so opening it costs
+// nothing and wakes nothing: numbers come from R2 rollups (admin-stats.js), KV, the quota Durable Object and the containers' stored state.
+// env.AUTH is this Worker's own KV (sessions, audit). env.BILLS_KV is Bill Assistant's: only the admin:* keys below are touched there.
 // Log records hold text anyone can type, so everything is escaped and the CSP allows only this response's own script.
 import { lastDayProblems, listQuestions, loadDays, PROBLEMS, quantile, readLog, seconds, SERVICES, utcDay, validKey } from "./admin-stats.js";
 import { checkBalance } from "./balance.js";
-import { limits, publicOn, publicUsedToday } from "./public.js";
+import { publicUsedToday } from "./public.js";
 import { hex, json } from "./util.js";
 
 export const PAUSE_KEY = "admin:public-paused";
 export const BALANCE_KEY = "admin:balance";
+export const SETTINGS_KEY = "admin:settings"; // written hourly by Bill Assistant (public.js reportSettings)
+const SETTINGS_STALE_MS = 3 * 3600e3;
 const AUDIT_KEY = "admin:audit";
 const AUDIT_MAX = 200;
 const DAY = 864e5;
@@ -22,9 +25,6 @@ export const CONTAINERS = [
   { id: "bills", name: "Bill Assistant", binding: "BILLRAG", usdPerHour: 0.009 },
   { id: "procurement", name: "Procurement Rules", binding: "PROCUREMENT", usdPerHour: 0.002 },
 ];
-
-export const isAdmin = (env, email) =>
-  !!email && String(env.ADMIN_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean).includes(email);
 
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const url = encodeURIComponent;
@@ -64,15 +64,18 @@ export async function snapshot(env, { now = Date.now(), containerState = null } 
       return { days: await loadDays(env, id, 2, { now }) };
     });
   }));
+  const settings = await attempt(async () => JSON.parse((await env.BILLS_KV.get(SETTINGS_KEY)) || "null"));
+  const limit = settings?.limits?.global ?? null;
   const [balance, paused, used, index, containers] = await Promise.all([
-    attempt(async () => JSON.parse((await env.AUTH.get(BALANCE_KEY)) || "null")),
-    attempt(async () => JSON.parse((await env.AUTH.get(PAUSE_KEY)) || "null")),
-    attempt(() => (env.QUOTA ? publicUsedToday(env, now) : null)),
+    attempt(async () => JSON.parse((await env.BILLS_KV.get(BALANCE_KEY)) || "null")),
+    attempt(async () => JSON.parse((await env.BILLS_KV.get(PAUSE_KEY)) || "null")),
+    attempt(() => (env.QUOTA && limit !== null ? publicUsedToday(env, limit, now) : null)),
     attempt(() => (env.LOGS ? indexFiles(env) : { failed: "no LOGS binding" })),
     Promise.all(CONTAINERS.map(async (c) => ({ ...c, state: await attempt(() => (containerState ? containerState(env, c.binding) : { failed: "not connected" })) }))),
   ]);
-  return { now, stats, balance, paused, used, index, containers, limit: limits(env).global,
-    publicWanted: env.PUBLIC_CHAT === "on", publicWorks: publicOn(env), proxySecret: !!env.PROXY_SECRET };
+  const known = settings && !settings.failed;
+  return { now, stats, balance, paused, used, index, containers, limit, settings, limits: known ? settings.limits : null,
+    publicWanted: !!known && settings.publicWanted, publicWorks: !!known && settings.publicWorks };
 }
 
 // ---------- To do ----------
@@ -88,7 +91,11 @@ export function todoItems(s) {
   const credit = { label: "Check now", post: "/admin/check-credit" };
   const topUp = { label: "Top up", href: TOP_UP, primary: true };
 
-  if (!s.proxySecret) add({ tier: "people", level: "red", source: "containers", title: "PROXY_SECRET is not set", detail: "Every question fails until it is: npx wrangler secret put PROXY_SECRET" });
+  const cfg = s.settings;
+  if (cfg?.failed) add({ tier: "watch", source: "containers", title: "Cannot read Bill Assistant's settings", detail: cfg.failed });
+  else if (!cfg) add({ tier: "watch", source: "containers", title: "Bill Assistant has not reported its settings yet", detail: "Its hourly job does, at 17 minutes past. Until then the public question limit and its checks are unknown." });
+  else if (s.now - Date.parse(cfg.at) > SETTINGS_STALE_MS) add({ tier: "watch", source: "containers", title: `Bill Assistant last reported its settings ${ago(s.now - Date.parse(cfg.at))} ago`, detail: "It should every hour: look at that Worker's cron." });
+  if (cfg && !cfg.failed && !cfg.proxySecret) add({ tier: "people", level: "red", source: "containers", title: "PROXY_SECRET is not set", detail: "Every question fails until it is: npx wrangler secret put PROXY_SECRET" });
 
   for (const [id, svc] of Object.entries(SERVICES)) {
     const st = s.stats[id];
@@ -300,16 +307,16 @@ ${rows.bills.map((d, i) => `<tr><td>${d.day}</td>${Object.keys(SERVICES).map((id
   },
   public: {
     title: "Public questions",
-    brief: (s) => (s.paused?.at ? "Paused" : !s.publicWorks ? "Off: login only" : Number.isFinite(s.used) ? `${s.used} of ${s.limit} used today` : "Counter unavailable"),
-    body: async ({ env, s }) => {
-      const L = limits(env), on = s.publicWorks && !s.paused?.at;
+    brief: (s) => (s.paused?.at ? "Paused" : !s.settings || s.settings.failed ? "Settings not reported yet" : !s.publicWorks ? "Off: login only" : Number.isFinite(s.used) ? `${s.used} of ${s.limit} used today` : "Counter unavailable"),
+    body: async ({ s }) => {
+      const L = s.limits || {}, on = s.publicWorks && !s.paused?.at;
       return `<dl>
 <dt>State</dt><dd>${s.paused?.at ? `<b>Paused</b> since ${when(Date.parse(s.paused.at))} by ${esc(s.paused.by)}` : on ? `<span class="good">On</span>` : "Off: login only"}</dd>
 <dt>Used today</dt><dd>${Number.isFinite(s.used) ? `${s.used} of ${s.limit} (resets at midnight in Sri Lanka)` : "unknown"}</dd>
-<dt>Per visitor</dt><dd>${L.cookie} a day</dd><dt>Per IP address</dt><dd>${L.ip} a day (a flood backstop: mobile users share addresses)</dd><dt>New visitors per IP</dt><dd>${L.issue} a day</dd></dl>
+<dt>Per visitor</dt><dd>${L.cookie ?? "unknown"} a day</dd><dt>Per IP address</dt><dd>${L.ip ?? "unknown"} a day (a flood backstop: mobile users share addresses)</dd><dt>New visitors per IP</dt><dd>${L.issue ?? "unknown"} a day</dd></dl>
 <div class="bar">${s.paused?.at ? button({ label: "Resume public questions", post: "/admin/public-resume", primary: true })
   : on ? button({ label: "Pause public questions", post: "/admin/public-pause", confirm: "Pause public questions? Visitors will have to sign in until you resume. Signed-in people are not affected." }) : ""}</div>
-<p class="dim small">Pausing takes up to a minute to reach every location. Limits are set in wrangler.toml.</p>`;
+<p class="dim small">Pausing takes up to a minute to reach every location. Limits are set in Bill Assistant's wrangler.toml and reach this page within the hour.</p>`;
     },
   },
   containers: {
@@ -420,16 +427,17 @@ async function audit(env, who, what, now) {
 
 const ACTIONS = {
   "check-credit": async (c) => {
-    const r = await checkBalance(c.env, c.balanceOptions);
+    // Same KV as Bill Assistant's cron, so the two share the once-a-day mail limit and the last result.
+    const r = await checkBalance({ ...c.env, AUTH: c.env.BILLS_KV }, c.balanceOptions);
     const text = { ok: `Credit is ${r.balance} ${r.currency}.`, low: `Credit is low: ${r.balance} ${r.currency}.`, check_failed: `The check failed: ${r.error}`, off: "The check is off: DEEPSEEK_API_KEY or ALERT_EMAIL is missing." }[r.state];
     return { text, log: `Checked the credit: ${text}` };
   },
   "public-pause": async (c) => {
-    await c.env.AUTH.put(PAUSE_KEY, JSON.stringify({ at: new Date(c.now).toISOString(), by: c.user }));
+    await c.env.BILLS_KV.put(PAUSE_KEY, JSON.stringify({ at: new Date(c.now).toISOString(), by: c.user }));
     return { text: "Public questions are paused. Visitors must sign in.", log: "Paused public questions" };
   },
   "public-resume": async (c) => {
-    await c.env.AUTH.delete(PAUSE_KEY);
+    await c.env.BILLS_KV.delete(PAUSE_KEY);
     return { text: "Public questions are back on.", log: "Resumed public questions" };
   },
 };
@@ -454,14 +462,14 @@ export function createAdmin({ containerState = null, now = () => Date.now(), bal
   return async function admin(request, env, user) {
     const u = new URL(request.url);
     if (!user) {
-      if (request.method === "GET") return Response.redirect(new URL("/login?next=/admin", u).toString(), 302);
+      if (request.method === "GET") return Response.redirect(new URL("/login", u).toString(), 302);
       return json({ error: "Not signed in." }, 401);
     }
-    if (!isAdmin(env, user)) return new Response("Not found.", { status: 404, headers: { "Cache-Control": "no-store" } });
     const c = { env, user, url: u, now: now(), containerState, balanceOptions };
     const path = u.pathname.replace(/\/+$/, "");
     if (request.method === "POST" && path.startsWith("/admin/")) return action(c, request, path.slice(7));
     if (request.method !== "GET") return json({ error: "Not found." }, 404);
+    if (path === "") return Response.redirect(new URL("/admin", u).toString(), 302);
     if (path === "/admin") return homePage(c);
     if (path.startsWith("/admin/source/")) return sourcePage(c, path.slice(14));
     if (path === "/admin/questions") return questionsPage(c);
