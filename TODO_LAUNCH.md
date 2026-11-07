@@ -74,7 +74,7 @@ Findings from the flagged Procurement answers:
 - [x] **M** One account across Bill Assistant and Procurement Rules: one session cookie for `.citizenlk.com`, one KV, one consent record. Written 2026-11-08, not deployed (see `AGENTS.md` "One account"). Still open: each service keeps its own `ALLOWED_EMAILS`, so Procurement Rules stays owner-only until sign-up is open
 - [x] **S** Consent at first sign-in (accuracy, not legal advice, data sent to third-party providers outside Sri Lanka); Procurement Rules adds three of its own. Written 2026-11-08, not deployed. **O** Have the wording checked with the terms (Phase 2)
 - [x] **M** Per-user limits: 20/day and 150/month for Bill Assistant, 5/day for Procurement Rules (counted on the server, per service). Written, not deployed
-- [x] **M** Save 30 days of chat history, with a way for users to delete it. Bill Assistant page + the API for both services (`src/history.js`). Written 2026-11-09, not deployed. Procurement Rules' page has no History button yet
+- [x] **M** Save 30 days of chat history, with a way for users to delete it. Both pages + the API (`src/history.js`). Written 2026-11-09, not deployed.
 - [ ] **M** Weekly new-bill email, with unsubscribe
 - [x] **S** Don't count greetings, clarifications, translations of an earlier answer or failures against the limit (Bill Assistant; Procurement Rules does not send the marker yet, so there every question counts). Written, not deployed
 - [ ] **S** Lower the public limit from 10 to 3 (`PUBLIC_DAILY_PER_COOKIE`): a config change to make together with `OPEN_SIGNUP = "on"`. The "create a free account for more" message is written and shows only while sign-up is open
