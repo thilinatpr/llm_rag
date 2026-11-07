@@ -55,17 +55,18 @@ SUM_PROMPT = ("Summarise this Sri Lankan {doc} for a non-lawyer in at most 110 w
               "TITLE: {title}\nLONG TITLE: {long_title}\n\nTEXT (truncated):\n{text}")
 
 
-def _summarise(llm, b, body):
+def _summarise(llm, b, body, effort=None):
+    # effort: thinking on, deepseek-flash spent the whole token limit on reasoning and returned nothing for 6 of 7 documents (2026-11-07)
     prompt = SUM_PROMPT.format(doc="Act" if b.get("kind") == "Act" else "bill", title=b["title"], long_title=b["long_title"] or "n/a", text=body[:9000])
     for _ in range(2):
         s = llm.chat("You are a careful legislative analyst.", [{"role": "user", "content": prompt}],
-                     max_tokens=1500).text.strip()
+                     max_tokens=1500, effort=effort).text.strip()
         if len(s) > 80 and "Keywords:" in s:
             return s
     return s if len(s) > 80 else None
 
 
-def summarize_all(store, llm, since_year=0, limit=None, overwrite=False, workers=8):
+def summarize_all(store, llm, since_year=0, limit=None, overwrite=False, workers=8, effort=None):
     from .ingest import overview_text
     todo = []
     for b in store.find_bills(limit=100000):
@@ -78,7 +79,7 @@ def summarize_all(store, llm, since_year=0, limit=None, overwrite=False, workers
             break
     done = failed = 0
     with ThreadPoolExecutor(workers) as ex:
-        for (b, _), s in zip(todo, ex.map(lambda t: _safe(_summarise, llm, t[0], t[1]), todo)):
+        for (b, _), s in zip(todo, ex.map(lambda t: _safe(_summarise, llm, t[0], t[1], effort), todo)):
             if not s:
                 failed += 1
                 print(f"  ! no usable summary for {b['key']}", file=sys.stderr)

@@ -39,7 +39,9 @@ class Retriever:
         z = np.load(path)
         if "fingerprint" not in z.files or str(z["fingerprint"]) != self.store.fingerprint():
             raise VectorsError(f"{path} was not built from the current index (stale or unstamped). {hint}")
-        self.ids, self.mat = z["ids"], z["vectors"]  # float32, or float16 (half the RAM; see scripts/shrink_vectors.py)
+        # float16 on disk (half the download; scripts/shrink_vectors.py), float32 in memory: a scan is ~15x cheaper in CPU for ~70 MB more RAM,
+        # and on a small container CPU is what runs out (measured under load, AGENTS.md "Load test").
+        self.ids, self.mat = z["ids"], z["vectors"].astype("float32", copy=False)
 
     def _scores(self, q):
         """Cosine scores for every chunk. Scans in blocks so a float16 matrix never needs a full float32 copy."""

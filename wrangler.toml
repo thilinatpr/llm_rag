@@ -45,7 +45,14 @@ new_sqlite_classes = ["QuotaCounter"]
 [observability]
 enabled = true
 
+# Hourly check of the DeepSeek credit (src/balance.js).
+[triggers]
+crons = ["17 * * * *"]
+
 [vars]
+# Who gets the low-credit email, and below how many US dollars. $5 is about 4 days at the public lane's daily ceiling.
+ALERT_EMAIL = "thilinatpr@gmail.com"
+BALANCE_ALERT_USD = "5"
 # Comma-separated. This is the only allowlist: nothing needs verifying on the Cloudflare side.
 ALLOWED_EMAILS = "thilinatpr@gmail.com"
 # Any address on a domain onboarded under Cloudflare Email -> Email Sending.

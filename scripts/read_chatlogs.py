@@ -64,6 +64,10 @@ def main():
     if not asks:
         return
     secs = sorted(r.get("seconds") or 0 for r in asks)
+    used_backup = [r for r in asks if r.get("fallback")]
+    if used_backup:
+        print(f"backup model used on {len(used_backup)} of {len(asks)} questions (reasons: "
+              f"{sorted({r['fallback'].get('reason') for r in used_backup})}); their `cost.usd` leaves out the backup's calls")
     print(f"seconds: median {secs[len(secs) // 2]:.1f}, p90 {secs[int(len(secs) * 0.9)]:.1f}, max {secs[-1]:.1f}")
     for line in usage_summary(recs):
         print(line)

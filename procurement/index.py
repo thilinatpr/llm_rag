@@ -1,6 +1,7 @@
 """Clause index for the procurement documents: SQLite + FTS5 at data/procurement/index.sqlite (git-ignored)."""
 import re
 import sqlite3
+import threading
 from pathlib import Path
 
 from billrag.store import fts_query
@@ -117,8 +118,18 @@ class Index:
     def __init__(self, path=DB, reranker=None):
         if not Path(path).exists():
             raise FileNotFoundError(f"{path} not found: run `python -m procurement build`")
-        self.db, self.reranker = connect(path), reranker
+        self.path, self.reranker, self._local = str(path), reranker, threading.local()
+        self._local.conn = connect(path)
         self.docs = {r["id"]: dict(r) for r in self.db.execute("SELECT * FROM docs")}
+
+    @property
+    def db(self):
+        """One connection per thread: a shared one breaks when questions overlap (see billrag.store.Store.db)."""
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = self._local.conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+            c.row_factory = sqlite3.Row
+        return c
 
     def bm25(self, query, limit=40, docs=None):
         def expand(w):

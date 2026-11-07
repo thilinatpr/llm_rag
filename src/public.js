@@ -113,6 +113,43 @@ export async function publicStart(env, request, verify, nowMs) {
 }
 
 // /api/ask, /api/ask/stream and /healthz for a visitor who is not signed in. Everything else under /api is members only.
+// A streamed reply is HTTP 200 before the answer exists, so failure arrives inside the stream: an `error` event (provider failure, busy),
+// an `unanswered` event (only an apology), or the stream ending without `done` (container died). The bytes pass through untouched; the
+// question is given back before the visitor sees the failure, so the page can read the corrected count. A visitor who closes the tab is
+// not given it back: the container finishes that answer anyway. Newlines inside event data are JSON-escaped, so answer text cannot match.
+export function watchStream(body, giveBack) {
+  const reader = body.getReader(), dec = new TextDecoder();
+  let tail = "\n", given = false, finished = false;
+  const fail = async () => {
+    if (given) return;
+    given = true;
+    try { await giveBack(); } catch (e) { console.error(JSON.stringify({ event: "refund_failed", error: String((e && e.message) || e) })); }
+  };
+  return new ReadableStream({
+    async pull(ctrl) {
+      let r;
+      try {
+        r = await reader.read();
+      } catch (e) {
+        if (!finished) await fail();
+        return ctrl.error(e);
+      }
+      if (r.done) {
+        if (!finished) await fail();
+        return ctrl.close();
+      }
+      const text = tail + dec.decode(r.value, { stream: true });
+      if (/\nevent: (error|unanswered)\n/.test(text)) await fail();
+      if (/\nevent: done\n/.test(text)) finished = true;
+      tail = text.slice(-24);
+      ctrl.enqueue(r.value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
 export async function anonApi(env, request, pathname, upstream, nowMs) {
   const anon = await readAnon(env, request, nowMs);
   if (!anon) return json({ error: "Please complete the check first.", reason: "verify" }, 401);
@@ -134,8 +171,19 @@ export async function anonApi(env, request, pathname, upstream, nowMs) {
   if (body.answer === "fast" || body.answer === "thorough") payload.answer = body.answer;
   const forwarded = new Request(request.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   const res = await upstream(forwarded, env, { lane: "public" });
-  if (res.status >= 500) await counter(env).refund(its); // busy or down: the visitor got nothing, so the question is not used
+  const left = Math.min(...took.left);
+  const giveBack = () => counter(env).refund(its);
+  const streamed = res.status === 200 && res.body && (res.headers.get("Content-Type") || "").includes("text/event-stream");
+  if (streamed) {
+    const out = new Response(watchStream(res.body, giveBack), res);
+    out.headers.set("X-Quota-Left", String(left));
+    return out;
+  }
+  // busy, down, or only an apology: the visitor got nothing, so the question is not used
+  const failed = res.status >= 500 || res.headers.get("X-Unanswered") === "1";
+  if (failed) await giveBack();
   const out = new Response(res.body, res);
-  out.headers.set("X-Quota-Left", String(res.status >= 500 ? Math.min(...took.left) + 1 : Math.min(...took.left)));
+  out.headers.delete("X-Unanswered");
+  out.headers.set("X-Quota-Left", String(failed ? left + 1 : left));
   return out;
 }

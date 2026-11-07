@@ -13,6 +13,7 @@ export class ProcurementContainer extends Container {
     this.envVars = {
       PROCUREMENT_PROXY_SECRET: env.PROXY_SECRET,
       PROCUREMENT_RERANK_URL: env.RERANK_URL,
+      PROCUREMENT_FALLBACK_URL: env.CHAT_FALLBACK_URL,
       BILLRAG_CHAT_PROVIDER: "openai",
       BILLRAG_CHAT_MODEL: env.CHAT_MODEL,
       BILLRAG_CHAT_BASE_URL: env.CHAT_BASE_URL,

@@ -1,6 +1,7 @@
 """SQLite store: bill metadata, clause chunks, and an FTS5 (BM25) index."""
 import re
 import sqlite3
+import threading
 from pathlib import Path
 
 SCHEMA = """
@@ -58,9 +59,18 @@ def normalize_ref(ref: str):
 class Store:
     def __init__(self, path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(path), check_same_thread=False)  # sqlite is serialized; evals read from threads
-        self.db.row_factory = sqlite3.Row
+        self.path, self._local = str(path), threading.local()
         self.db.executescript(SCHEMA)
+
+    @property
+    def db(self):
+        """One connection per thread. Sharing one across threads looks fine until questions overlap: the load test (2026-11-07) got
+        InterfaceError / IndexError on 11 of 24 questions at 4-8 people at once. Writes stay on the thread that commits them."""
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = self._local.conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)  # not shared; False so GC can close it
+            c.row_factory = sqlite3.Row
+        return c
 
     # ---- coverage (shown on the chat page)
     def coverage(self, recent=8):

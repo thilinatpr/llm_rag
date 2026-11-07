@@ -8,14 +8,15 @@ GET  /healthz     {"ok": true, "coverage": {bills, first, last, recent[]}} (the 
 GET  /api/stats   CPU/memory snapshot (billrag/resources.py) + sessions, turns, build; behind the login like all /api/*
 POST /api/ask     {"session": str, "question": str, "answer"?: "fast"|"thorough"} -> {"answer": str}   (needs a chat model)
 POST /api/ask/stream  same body -> text/event-stream: `status` {step}, `token` {text}, `reset` {}, then `done` {answer}
-                  (the checked final answer, which replaces the streamed draft) or `error` {error}
+                  (the checked final answer, which replaces the streamed draft) or `error` {error}. `unanswered` {} before `done`
+                  (header X-Unanswered on /api/ask) = the reply is only an apology: the Worker gives a visitor's question back.
 POST /api/search  {"query": str, "k": int}          -> {"results": [str]} (retrieval only, no key needed)
 
-Concurrency (billrag/gate.py): up to BILLRAG_MAX_CONCURRENT (default 4) questions run at once; up to BILLRAG_MAX_QUEUE (10) wait
+Concurrency (billrag/gate.py): up to BILLRAG_MAX_CONCURRENT (default 8) questions run at once; up to BILLRAG_MAX_QUEUE (20) wait
 in arrival order (a streamed reply gets `queue` {position} events), each at most BILLRAG_QUEUE_WAIT seconds (90). Beyond that the
 reply is HTTP 503 + Retry-After (a streamed one: an `error` event). One conversation runs one question at a time.
-Anonymous visitors arrive with `X-Lane: public` (set by the Worker only): they get BILLRAG_PUBLIC_SLOTS (1) of the slots and a
-BILLRAG_PUBLIC_QUEUE (3) long queue of their own, so they cannot crowd out signed-in users.
+Anonymous visitors arrive with `X-Lane: public` (set by the Worker only): they get BILLRAG_PUBLIC_SLOTS (2) of the slots and a
+BILLRAG_PUBLIC_QUEUE (6) long queue of their own, so they cannot crowd out signed-in users.
 """
 import hmac
 import json
@@ -38,6 +39,15 @@ _INIT = threading.Lock()
 # fast = "low" (first word ~1-7 s instead of ~3-27 s, measured 2026-11-06), thorough = the server default (BILLRAG_ANSWER_EFFORT,
 # unset = the model's own default). Grading and translation are not affected.
 ANSWER_MODES = ("fast", "thorough")
+
+PUBLIC_ERROR = "The answer could not be produced just now. Please try again."  # visitors never see provider errors; the log has them
+
+
+def unanswered(text):
+    """The model failed twice and the reply is only an apology (Pipeline._llm), so a visitor should not pay for it."""
+    from .pipeline import UNUSABLE
+    return UNUSABLE in (text or "")
+
 
 def load_page():
     """The UI is a static file (public/index.html). In production the Worker serves it; this is for local runs."""
@@ -63,9 +73,9 @@ class App:
         with _INIT:
             if getattr(self, "_gate", None) is None:
                 env = os.environ.get
-                self._gate = Gate(int(env("BILLRAG_MAX_CONCURRENT") or 4), int(env("BILLRAG_MAX_QUEUE") or 10),
-                                  float(env("BILLRAG_QUEUE_WAIT") or 90), int(env("BILLRAG_PUBLIC_SLOTS") or 1),
-                                  int(env("BILLRAG_PUBLIC_QUEUE") or 3))
+                self._gate = Gate(int(env("BILLRAG_MAX_CONCURRENT") or 8), int(env("BILLRAG_MAX_QUEUE") or 20),
+                                  float(env("BILLRAG_QUEUE_WAIT") or 90), int(env("BILLRAG_PUBLIC_SLOTS") or 2),
+                                  int(env("BILLRAG_PUBLIC_QUEUE") or 6))
                 self._slocks = {}
 
     def _session_lock(self, session):
@@ -215,7 +225,8 @@ class App:
                         # cpu_s/cpu_pct are process-wide: with `concurrent` > 1 they include the other running turns
                         log_turn(type="ask", session=session, turn=turn, question=question, answer=text, error=err,
                                  seconds=round(time.time() - tm.t, 2), usage=use.fields(), calls=trace.calls or None,
-                                 cost=calltrace.cost_summary(trace.calls), queue_wait_s=round(waited, 2),
+                                 cost=calltrace.cost_summary(trace.calls), fallback=calltrace.fallback_summary(trace.calls),
+                                 queue_wait_s=round(waited, 2),
                                  concurrent=concurrent, lane=lane, **meta)
             finally:
                 self._gate.release(lane)
@@ -231,11 +242,13 @@ def answer_mode(body):
 
 def make_handler(app):
     class H(BaseHTTPRequestHandler):
-        def _send(self, code, body, ctype="application/json"):
+        def _send(self, code, body, ctype="application/json", headers=()):
             data = body.encode() if isinstance(body, str) else body
             self.send_response(code)
             if code == 503:
                 self.send_header("Retry-After", "30")
+            for name, value in headers:
+                self.send_header(name, value)
             self.send_header("Content-Type", ctype + "; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -304,12 +317,13 @@ def make_handler(app):
                     kw = self._lane_kw()
                     if mode:
                         kw["mode"] = mode
-                    return self._send(200, json.dumps({"answer": app.ask(sid, q, **kw)}))
+                    text = app.ask(sid, q, **kw)
+                    return self._send(200, json.dumps({"answer": text}), headers=[("X-Unanswered", "1")] if unanswered(text) else ())
                 self._send(404, json.dumps({"error": "not found"}))
             except Busy as e:
                 self._send(503, json.dumps({"error": str(e), "busy": True}))
-            except Exception as e:  # surface config problems (missing API key, stale vectors) in the UI
-                self._send(500, json.dumps({"error": f"{type(e).__name__}: {e}"}))
+            except Exception as e:  # surface config problems (missing API key, stale vectors) to signed-in users, not to visitors
+                self._send(500, json.dumps({"error": PUBLIC_ERROR if self._lane_kw() else f"{type(e).__name__}: {e}"}))
 
         def _stream(self, sid, question, mode=None, lane_kw=None):
             """Server-sent events over this response; the connection closes at the end (HTTP/1.0 handler)."""
@@ -335,11 +349,14 @@ def make_handler(app):
                 kw = dict(lane_kw or {})
                 if mode:
                     kw["mode"] = mode
-                send("done", {"answer": app.ask(sid, question, emit=emit, **kw)})
+                text = app.ask(sid, question, emit=emit, **kw)
+                if unanswered(text):
+                    send("unanswered", {})
+                send("done", {"answer": text})
             except Busy as e:
                 send("error", {"error": str(e), "busy": True})
             except Exception as e:  # headers are sent already: report the error as an event
-                send("error", {"error": f"{type(e).__name__}: {e}"})
+                send("error", {"error": PUBLIC_ERROR if lane_kw else f"{type(e).__name__}: {e}"})
 
         def log_message(self, *a):
             pass

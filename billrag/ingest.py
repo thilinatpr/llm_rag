@@ -73,11 +73,15 @@ def build_chunks(bill: dict, parsed):
     return chunks
 
 
-def ingest(data_dir: Path, db_path: Path, limit=None, workers=4, since_year=0):
+def ingest(data_dir: Path, db_path: Path, limit=None, workers=4, since_year=0, only_new=False):
+    """only_new: leave bills already in the index alone, so their chunk ids and vectors stay valid and only new text needs embedding."""
     meta = json.loads((data_dir / "bills.json").read_text(encoding="utf-8"))
+    known = {r[0] for r in Store(db_path).db.execute("SELECT key FROM bills")} if only_new else set()
     jobs = []
     for b in sorted(meta, key=lambda x: x.get("date") or "", reverse=True):
         if since_year and int((b.get("date") or "0")[:4]) < since_year:
+            continue
+        if bill_key(b["billNo"], b["billSubNo"]) in known:
             continue
         p = english_pdf(data_dir, b)
         if p:
@@ -135,14 +139,16 @@ def link_si(store, key, pdf, lo=0.4, hi=2.5):
     store.replace_local(key, "si", why or "ok", [(s.no, s.heading, s.page, s.text) for s in keep], str(pdf), max(en))
 
 
-def ingest_si(data_dir: Path, db_path: Path, since_year=2025, lo=0.4, hi=2.5):
+def ingest_si(data_dir: Path, db_path: Path, since_year=2025, lo=0.4, hi=2.5, keys=None):
     """Link the official Sinhala text of each bill (date >= since_year) to its English sections (store.local_sections).
 
     Only Unicode Sinhala PDFs that line up with the English bill section-for-section are linked (see parse_si); within a
-    linked bill, a section whose length is outside lo..hi x the English one (boundary slip, tables) is left out."""
+    linked bill, a section whose length is outside lo..hi x the English one (boundary slip, tables) is left out.
+    keys: only these bills. Needed when the other bills' PDFs are not on this machine: a missing PDF would unlink them."""
     store = Store(db_path)
+    wanted, keys = keys, None
     keys = [r[0] for r in store.db.execute("SELECT key FROM bills WHERE substr(date,1,4) >= ? AND kind!='Act' ORDER BY date DESC",
-                                           (str(since_year),))]
+                                           (str(since_year),)) if wanted is None or r[0] in wanted]
     for n, key in enumerate(keys, 1):
         hits = sorted((data_dir / "pdfs").glob(f"*/{key.replace('/', '_')}_SINHALA.pdf"))
         link_si(store, key, hits[0] if hits else None, lo, hi)
@@ -164,14 +170,17 @@ def _work_act(args):
         return None, f"{type(e).__name__}: {e}"
 
 
-def ingest_acts(acts_dir: Path, db_path: Path, since_year=2024, workers=4):
+def ingest_acts(acts_dir: Path, db_path: Path, since_year=2024, workers=4, only_new=False):
     """Add certified Acts (date >= since_year) from data/acts (scripts/scrape_bills.py --source acts) to the index, then link them to
     their bills and link their official Sinhala text. Existing chunks keep their ids, so `embed` only has to embed the new text."""
     from . import acts, meta
     listing = json.loads((acts_dir / "acts.json").read_text(encoding="utf-8"))
     jobs, skipped = [], []
+    known = {r[0] for r in Store(db_path).db.execute("SELECT key FROM bills WHERE kind='Act'")} if only_new else set()
     for a in sorted(listing, key=lambda x: x.get("date") or "", reverse=True):
         if int(a.get("actSubNo") or 0) < since_year:
+            continue
+        if a.get("actNo") and acts.act_key(a["actNo"], a["actSubNo"]) in known:
             continue
         if not a.get("actNo"):  # six listing rows are numbered 0
             skipped.append((a["actNoText"], "no Act number"))

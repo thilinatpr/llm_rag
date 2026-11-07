@@ -300,7 +300,8 @@ async function askStream(body, el) {
       else if (kind === 'reset') { if (draft) { draft = ''; el.classList.remove('draft', 'md'); step('Checking the answer and writing it again'); } }
       else if (kind === 'token') { draft += d.text || ''; if (!queued) { queued = true; requestAnimationFrame(paint); } }
       else if (kind === 'done') final = d.answer || '';
-      else if (kind === 'error') throw new Error(d.error || 'The server reported an error');
+      else if (kind === 'unanswered') refreshQuota();
+      else if (kind === 'error') { refreshQuota(); throw new Error(d.error || 'The server reported an error'); }
     }
   } } finally { closed = true; }
   if (final === null) throw new Error('The connection closed before the answer was complete. Try again.');
@@ -328,6 +329,11 @@ const gate = document.getElementById('gate'), gateMsg = document.getElementById(
 function noteQuota(r) {
   const left = r && r.headers && r.headers.get('X-Quota-Left');
   if (state.anon && left !== null && left !== undefined) quotaEl.textContent = '· ' + tr('left', left);
+}
+// The Worker gives back a question that got no answer: read the corrected count.
+async function refreshQuota() {
+  if (!state.anon) return;
+  try { const m = await (await fetch('/public/me', {cache: 'no-store'})).json(); if (m.user === 'anon') quotaEl.textContent = '· ' + tr('left', m.left); } catch (e) {}
 }
 // Error from a failed API reply; an anonymous visitor's quota/verification reasons get the localized text.
 function failure(j, r) {

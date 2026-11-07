@@ -34,7 +34,7 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
       with a different model than the one answering.
 - [ ] Grader drops (`kept_gold` < `cand_gold`) and boilerplate retrieval misses (identical "qualified auditor" / rules clauses in
       many incorporation bills): when several bills match a boilerplate question, show the candidate bills instead of guessing.
-- [ ] **One-command refresh for newly published bills** (the users' main use case): scrape -> `ingest` -> `summarize
+- [x] **One-command refresh for newly published bills** (done: `scripts/refresh_bills.py`) (the users' main use case): scrape -> `ingest` -> `summarize
       --since-year <current-1>` -> incremental `embed` -> `upload_r2.py --include-index`, ideally on a schedule. Each
       step is already resumable/incremental; they just aren't chained. Check how the scraper detects new/changed bills
       (listing has `updatedAt`).

@@ -14,12 +14,15 @@ def main(argv=None):
     p.add_argument("--limit", type=int)
     p.add_argument("--since-year", type=int, default=0)
     p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--only-new", action="store_true", help="leave bills already in the index alone (keeps their chunk ids and vectors)")
     sub.add_parser("stats")
     p = sub.add_parser("ingest-si", help="link the official Sinhala text (Unicode PDFs, 2025+) to the English sections")
     p.add_argument("--since-year", type=int, default=2025)
+    p.add_argument("--keys", help="comma-separated bill keys: only these (the others' PDFs need not be on this machine)")
     p = sub.add_parser("ingest-acts", help="add certified Acts from data/acts and link them to their bills, then run `embed`")
     p.add_argument("--since-year", type=int, default=2024)
     p.add_argument("--workers", type=int, default=4)
+    p.add_argument("--only-new", action="store_true", help="leave Acts already in the index alone")
     sub.add_parser("link-acts", help="recompute bill -> Act links and the section-by-section comparison (no re-parse)")
     sub.add_parser("glossary", help="mine English <-> official Sinhala titles and defined terms from the linked sections")
     sub.add_parser("meta", help="(re)build bill metadata: families, newest instance, bill type, section cross-references")
@@ -74,7 +77,7 @@ def main(argv=None):
     from .store import Store, normalize_ref
     if a.cmd == "ingest":
         from .ingest import ingest
-        ingest(s.data_dir, s.db_path, a.limit, a.workers, a.since_year)
+        ingest(s.data_dir, s.db_path, a.limit, a.workers, a.since_year, a.only_new)
         if s.vectors_path.exists():
             print(f"NOTE: {s.vectors_path} no longer matches the index. Re-run `python -m billrag embed` "
                   f"(dense retrieval will refuse to start until you do).", file=sys.stderr)
@@ -84,11 +87,11 @@ def main(argv=None):
     store = Store(s.db_path)
     if a.cmd == "ingest-si":
         from .ingest import ingest_si
-        ingest_si(s.data_dir, s.db_path, a.since_year)
+        ingest_si(s.data_dir, s.db_path, a.since_year, keys=set(a.keys.split(",")) if a.keys else None)
         return 0
     if a.cmd == "ingest-acts":
         from .ingest import ingest_acts
-        out = ingest_acts(s.data_dir.parent / "acts", s.db_path, a.since_year, a.workers)
+        out = ingest_acts(s.data_dir.parent / "acts", s.db_path, a.since_year, a.workers, a.only_new)
         print({k: v for k, v in out.items() if k != "skipped"})
         return 0
     if a.cmd == "link-acts":
@@ -186,7 +189,7 @@ def main(argv=None):
     llm = make_llm(s)
     if a.cmd == "summarize":
         from .enrich import summarize_all
-        print(summarize_all(store, llm, a.since_year, a.limit, a.overwrite, a.workers), "bills summarised")
+        print(summarize_all(store, llm, a.since_year, a.limit, a.overwrite, a.workers, effort=s.grade_effort), "bills summarised")
         return 0
     retriever = Retriever(store, embedder, s.vectors_path, llm, s.rerank, make_reranker(s))
     if a.mode == "agent":

@@ -110,10 +110,12 @@ class AnthropicLLM:
 
 
 class OpenAILLM:
-    def __init__(self, model, base_url=None, api_key=None):
+    def __init__(self, model, base_url=None, api_key=None, max_retries=6, timeout=None):
         import openai
         kw = {k: v for k, v in (("base_url", base_url), ("api_key", api_key)) if v}
-        self.client, self.model = openai.OpenAI(max_retries=6, **kw), model
+        if timeout:  # seconds without a byte from the provider (the SDK's default is 10 minutes)
+            kw["timeout"] = float(timeout)
+        self.client, self.model = openai.OpenAI(max_retries=max_retries, **kw), model
 
     def chat(self, system, messages, tools=(), max_tokens=2048, effort=None, on_token=None) -> Reply:
         """on_token(text): stream the reply, calling it with each piece of visible text (not with reasoning)."""
@@ -175,13 +177,62 @@ class OpenAILLM:
         return Reply("".join(parts), [], stop)
 
 
+class FallbackLLM:
+    """The main model, and a second one for when the main provider fails (out of credit, down, too slow).
+
+    A failed call is repeated on `backup` within the same question, so the user still gets an answer. After a failure the main model is
+    left alone for a while, so one outage does not add its timeout to every call: `cooldown` seconds, or `long_cooldown` for errors that
+    do not cure themselves (401/402/403: key or credit). A 400 is about that one request, so it does not stop the next one.
+    `off_effort`: "reasoning off" is sent differently per provider; the backup gets this level instead.
+    A stream that fails part-way is not continued on the backup as a stream: the page keeps the draft until `done` replaces it."""
+
+    def __init__(self, primary, backup, off_effort="low", cooldown=60, long_cooldown=300, clock=time.monotonic):
+        self.primary, self.backup, self.off_effort = primary, backup, off_effort
+        self.cooldown, self.long_cooldown, self.clock = cooldown, long_cooldown, clock
+        self.model = getattr(primary, "model", "")
+        self._until = 0.0
+
+    def _note_failure(self, e):
+        code = getattr(e, "status_code", None)
+        reason = f"{type(e).__name__}" + (f" {code}" if code else "")
+        wait = 0 if code == 400 else self.long_cooldown if code in (401, 402, 403) else self.cooldown
+        self._until = max(self._until, self.clock() + wait)
+        print(json.dumps({"event": "chat_fallback", "model": self.model, "reason": reason, "cooldown_s": wait}), flush=True)
+        return reason
+
+    def chat(self, system, messages, tools=(), max_tokens=2048, effort=None, on_token=None) -> Reply:
+        reason, sent = "cooldown", []
+
+        def tap(piece):
+            sent.append(1)
+            on_token(piece)
+
+        if self.clock() >= self._until:
+            kw = {"on_token": tap} if on_token else {}
+            try:
+                return self.primary.chat(system, messages, tools, max_tokens=max_tokens, effort=effort, **kw)
+            except Exception as e:  # noqa: BLE001 - whatever the provider's failure looks like (SDK errors, httpx errors mid-stream)
+                reason = self._note_failure(e)
+        calltrace.record("fallback", 0, model=getattr(self.backup, "model", ""), reason=reason)
+        off = effort and str(effort).lower() in ("off", "none")
+        kw = {"on_token": on_token} if on_token and not sent else {}
+        return self.backup.chat(system, messages, tools, max_tokens=max_tokens, effort=self.off_effort if off else effort, **kw)
+
+
 def make_llm(settings):
     if not settings.chat_model:
         raise SystemExit("Set BILLRAG_CHAT_MODEL (and BILLRAG_CHAT_PROVIDER / BILLRAG_CHAT_BASE_URL if needed).")
     cls = {"anthropic": AnthropicLLM, "openai": OpenAILLM}.get(settings.chat_provider)
     if cls is None:
         raise SystemExit(f"Unknown BILLRAG_CHAT_PROVIDER={settings.chat_provider!r} (use anthropic or openai)")
-    return cls(settings.chat_model, settings.chat_base_url, settings.chat_api_key)
+    fallback = getattr(settings, "fallback_model", None)
+    if not fallback or fallback == settings.chat_model:
+        return cls(settings.chat_model, settings.chat_base_url, settings.chat_api_key)
+    # With somewhere to go, fail over quickly: one retry and a 60 s silence limit instead of 6 retries and 10 minutes.
+    # (The longest healthy call seen is a Sinhala translation of ~4,000 tokens at ~150 tokens/s, and silence is per read when streaming.)
+    kw = {"max_retries": 1, "timeout": 60} if cls is OpenAILLM else {}
+    return FallbackLLM(cls(settings.chat_model, settings.chat_base_url, settings.chat_api_key, **kw),
+                       OpenAILLM(fallback, settings.fallback_base_url, settings.fallback_api_key, timeout=120))
 
 
 def make_answer_llm(settings):

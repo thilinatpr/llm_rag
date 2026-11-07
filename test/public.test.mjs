@@ -22,10 +22,10 @@ function quotaBinding(clock) {
 function setup(extra = {}) {
   const clock = { t: Date.parse("2026-11-06T06:00:00Z"), now() { return this.t; } };
   const calls = [];
-  const state = { status: 200, verdict: true };
+  const state = { status: 200, verdict: true, headers: {} };
   const upstream = async (request, _env, opts) => {
     calls.push({ opts, body: await request.clone().text(), headers: Object.fromEntries(request.headers) });
-    return new Response(state.status === 200 ? "event: done\ndata: {}\n\n" : "busy", { status: state.status });
+    return new Response(state.status === 200 ? "event: done\ndata: {}\n\n" : "busy", { status: state.status, headers: state.headers });
   };
   const env = { AUTH: kv(), OTP_PEPPER: "pepper", PROXY_SECRET: "x".repeat(20), ALLOWED_EMAILS: "me@example.com", FROM_ADDRESS: "a@b.c",
     ASSETS: { fetch: async () => new Response("page") }, BILLRAG: {}, QUOTA: quotaBinding(clock), PUBLIC_CHAT: "on",
@@ -211,4 +211,65 @@ test("Counters: all-or-nothing, expiry, refund, Sri Lanka day", () => {
   assert.equal(slDay(Date.parse("2026-11-06T18:29:59Z")), "2026-11-06");
   assert.equal(slDay(Date.parse("2026-11-06T18:30:00Z")), "2026-11-07");
   assert.equal(secondsToSlMidnight(Date.parse("2026-11-06T18:29:00Z")), 60);
+});
+
+// Streamed replies: HTTP 200 first, so a failure arrives inside the stream (live case 2026-11-06 20:38: DeepSeek 402).
+function sse(...chunks) {
+  const enc = new TextEncoder();
+  return new ReadableStream({ start(c) { for (const x of chunks) c.enqueue(enc.encode(x)); c.close(); } });
+}
+function streaming(makeBody) {
+  const clock = { t: Date.parse("2026-11-06T06:00:00Z"), now() { return this.t; } };
+  const env = { AUTH: kv(), OTP_PEPPER: "pepper", PROXY_SECRET: "x".repeat(20), ALLOWED_EMAILS: "", FROM_ADDRESS: "a@b.c", BILLRAG: {},
+    ASSETS: { fetch: async () => new Response("page") }, QUOTA: quotaBinding(clock), PUBLIC_CHAT: "on", TURNSTILE_SECRET: "s", TURNSTILE_SITEKEY: "site" };
+  const upstream = async () => new Response(makeBody(), { status: 200, headers: { "Content-Type": "text/event-stream; charset=utf-8" } });
+  const handler = createHandler({ upstream, verify: async () => true, now: () => clock.now() });
+  const call = (path, method, body, cookie) => handler(new Request("https://bills.test" + path, { method, body: body && JSON.stringify(body),
+    headers: { "CF-Connecting-IP": "1.2.3.4", ...(cookie && { Cookie: cookie }) } }), env);
+  return async () => {
+    const start = await call("/public/start", "POST", { token: "good" });
+    const cookie = start.headers.get("Set-Cookie").split(";")[0];
+    const r = await call("/api/ask/stream", "POST", { question: "q" }, cookie);
+    const text = await r.text();
+    return { text, header: r.headers.get("X-Quota-Left"), left: (await (await call("/public/me", "GET", null, cookie)).json()).left };
+  };
+}
+
+test("a streamed answer uses one question", async () => {
+  const r = await streaming(() => sse('event: token\ndata: {"text":"x"}\n\n', 'event: done\ndata: {"answer":"x"}\n\n'))();
+  assert.equal(r.left, 9);
+  assert.equal(r.header, "9");
+  assert.ok(r.text.endsWith('event: done\ndata: {"answer":"x"}\n\n'), "bytes pass through unchanged");
+});
+
+test("a streamed failure does not use a question: error event, busy event, apology, or a stream cut off", async () => {
+  for (const [name, chunks] of Object.entries({
+    error: ['event: status\ndata: {"step":"retrieve0"}\n\n', 'event: error\ndata: {"error":"boom"}\n\n'],
+    busy: ['event: error\ndata: {"error":"busy","busy":true}\n\n'],
+    apology: ['event: unanswered\ndata: {}\n\n', 'event: done\ndata: {"answer":"sorry"}\n\n'],
+    split: ['event: sta', 'tus\ndata: {}\n\nevent: er', 'ror\ndata: {"error":"x"}\n\n'],
+    cut: ['event: token\ndata: {"text":"half an ans"}\n\n'],
+  })) {
+    const r = await streaming(() => sse(...chunks))();
+    assert.equal(r.left, 10, name);
+    assert.equal(r.text, chunks.join(""), name);
+  }
+});
+
+test("answer text that talks about errors is not a failure, because event data has no raw newlines", async () => {
+  const body = () => sse(`event: token\ndata: ${JSON.stringify({ text: "\nevent: error\n" })}\n\n`, 'event: done\ndata: {"answer":"x"}\n\n');
+  assert.equal((await streaming(body)()).left, 9);
+});
+
+test("a JSON reply that is only an apology does not use a question, and the marker does not reach the browser", async () => {
+  const t = setup();
+  const { cookie } = await t.start();
+  const ok = await t.ask(cookie);
+  assert.equal(ok.headers.get("X-Quota-Left"), "9");
+  t.state.headers = { "X-Unanswered": "1" };
+  const sorry = await t.ask(cookie);
+  assert.equal(sorry.headers.get("X-Quota-Left"), "9");
+  assert.equal(sorry.headers.get("X-Unanswered"), null);
+  t.state.headers = {};
+  assert.equal((await t.ask(cookie)).headers.get("X-Quota-Left"), "8");
 });
