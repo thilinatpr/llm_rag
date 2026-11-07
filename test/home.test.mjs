@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import worker from "../workers/home/worker.js";
 
 const env = { ASSETS: { fetch: async () => new Response("home page", { headers: { "Content-Type": "text/html" } }) } };
@@ -30,6 +30,8 @@ test("homepage has the SEO basics: description, canonical, Open Graph, valid JSO
   assert.match(html, /<meta name="description" content="[^"]{50,}"/);
   assert.ok(html.includes('<link rel="canonical" href="https://citizenlk.com/">'));
   assert.ok(html.includes('property="og:title"'));
+  assert.ok(html.includes('content="https://citizenlk.com/og.png"'));
+  assert.ok(existsSync(new URL("../site/og.png", import.meta.url)));
   const ld = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
   assert.ok(ld, "JSON-LD present");
   const graph = JSON.parse(ld[1])["@graph"];
