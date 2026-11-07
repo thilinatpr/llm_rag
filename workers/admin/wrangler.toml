@@ -62,3 +62,5 @@ BALANCE_ALERT_USD = "5"
 # The Build / Publish buttons start .github/workflows/refresh-index.yml here (src/refresh.js). Without the secret they say so.
 GITHUB_REPO = "thilinatpr/llm_rag"
 GITHUB_REF = "main"
+# The daily check emails this address once per new bill or Act it finds (src/refresh.js notifyNew). Empty = no mail.
+NEW_BILLS_EMAIL = "patprathnayaka@gmail.com"

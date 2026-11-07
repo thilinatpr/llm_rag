@@ -10,6 +10,8 @@
 // The job reports through R2 (the panel already has the bucket), so there is no inbound endpoint to protect.
 // State in KV (this Worker's own AUTH namespace): refresh:state = {check, seen, run}.
 
+import { sendMessage } from "./auth.js";
+
 export const STATE_KEY = "refresh:state";
 export const MANIFEST_KEY = "bills/indexed-keys.json"; // {at, keys[]}: documents in the live index
 export const STATUS_KEY = "refresh/status.json"; //     the job's own report (see phaseOf)
@@ -87,8 +89,26 @@ export async function readState(env) {
 }
 const saveState = (env, state) => env.AUTH.put(STATE_KEY, JSON.stringify(state));
 
+// One email to NEW_BILLS_EMAIL for documents it has not told about yet (state.notified), so a pending document is announced once, not daily.
+// A failed send is recorded and retried by the next check, because the document is only marked as told after the mail went.
+async function notifyNew(env, state, send, now) {
+  const to = env.NEW_BILLS_EMAIL;
+  const fresh = Object.entries(state.check.pending || {}).filter(([k]) => !state.notified?.[k]);
+  if (!to || !fresh.length) return;
+  const shown = fresh.slice(0, 15).map(([k, v]) => `- ${k}  ${v.title}`.slice(0, 140));
+  const text = `${plural(fresh.length)} on documents.gov.lk ${fresh.length === 1 ? "is" : "are"} not in the bill index yet:\n\n${shown.join("\n")}${fresh.length > shown.length ? `\n...and ${fresh.length - shown.length} more` : ""}\n\nSome may have no English PDF yet. Open the panel to build the index or ignore them: https://admin.citizenlk.com/admin/source/index\n`;
+  try {
+    await send(env, { from: env.FROM_ADDRESS, to, subject: `${plural(fresh.length)} on documents.gov.lk`, text });
+    state.notified = { ...(state.notified || {}), ...Object.fromEntries(fresh.map(([k]) => [k, new Date(now).toISOString()])) };
+    delete state.check.mailError;
+  } catch (e) {
+    state.check.mailError = String((e && e.message) || e);
+  }
+}
+const plural = (n) => `${n} new ${n === 1 ? "bill or Act" : "bills or Acts"}`;
+
 // The daily check. Never throws: a failure is recorded (and shown on the panel) and the last good list of pending documents is kept.
-export async function detect(env, { now = Date.now(), fetchFn = fetch } = {}) {
+export async function detect(env, { now = Date.now(), fetchFn = fetch, send = sendMessage } = {}) {
   const state = await readState(env);
   const at = new Date(now).toISOString();
   const keep = state.check?.pending || {};
@@ -107,6 +127,7 @@ export async function detect(env, { now = Date.now(), fetchFn = fetch } = {}) {
     const pending = {};
     for (const [key, v] of Object.entries(listed)) if (!done.has(key) && Object.keys(pending).length < MAX_PENDING) pending[key] = v;
     state.check = { at, listed: Object.keys(listed).length, pending };
+    await notifyNew(env, state, send, now);
   } catch (e) {
     state.check = { at: state.check?.at, failedAt: at, error: String((e && e.message) || e), pending: keep };
   }
