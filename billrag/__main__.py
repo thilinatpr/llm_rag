@@ -26,6 +26,8 @@ def main(argv=None):
     sub.add_parser("link-acts", help="recompute bill -> Act links and the section-by-section comparison (no re-parse)")
     sub.add_parser("glossary", help="mine English <-> official Sinhala titles and defined terms from the linked sections")
     sub.add_parser("meta", help="(re)build bill metadata: families, newest instance, bill type, section cross-references")
+    p = sub.add_parser("titles", help="(re)build the title index (which bill does a question name?); --eval scores the ranker")
+    p.add_argument("--eval", action="store_true", help="score the ranker on synthetic title questions instead of building")
     p = sub.add_parser("tag", help="LLM topic tags per bill (newest first, resumable); run `meta` first")
     p.add_argument("--since-year", type=int, default=2024)
     p.add_argument("--limit", type=int, default=0)
@@ -105,6 +107,12 @@ def main(argv=None):
     if a.cmd == "meta":
         from . import meta
         print(meta.build(store))
+        from . import titles
+        print(titles.build(store))
+        return 0
+    if a.cmd == "titles":
+        from . import titles
+        print(titles.evaluate(store) if a.eval else titles.build(store))
         return 0
     if a.cmd == "tag":
         from . import meta

@@ -14,7 +14,7 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 
-from . import acts, calltrace, glossary as gloss, meta, parse_si, resolve, translate
+from . import acts, calltrace, glossary as gloss, meta, parse_si, resolve, titles as title_index, translate
 from .store import ACT_REF, normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
@@ -52,6 +52,13 @@ UNNAMED = re.compile(rf"\b(?:(?:this|that)\s+(?:{_ADJ}){{0,2}}|the\s+(?:{_ADJ}){
 FOCUS_NOTE = ("\n\nNOTE: the question refers to a bill without naming it. The best-matching evidence is from {title} ({keys}): "
               "answer about THAT bill, name it in your first sentence, and lead with its clauses. Mention another bill only if "
               "it adds something the question asks for, and then say clearly that it is a different bill.")
+# "key provisions of Act No. 6 of 2026", "summarise bill 060/2026", "what does it do": no single clause matches such a question, so
+# ranked clauses alone leave the grader saying "no overview" and the answer hedges. When one instrument is named, its own overview
+# (auto summary) is always part of the evidence.
+OVERVIEW_Q = re.compile(r"\b(?:key|main|major|important|principal)\s+(?:provisions?|points?|features?|clauses?|changes?)\b|"
+                        r"\b(?:summari[sz]e|summary|overview|outline|gist|explain|describe|what\s+(?:does|is)\b.{0,40}\b(?:do|about))\b|"
+                        r"\btell\s+me\s+about\b", re.I)
+_TITLE_STOP = {"act", "bill", "amendment", "the", "of", "and", "for", "to", "in", "no", "a", "gs", "sri", "lanka"}
 LEAK = re.compile(r"<\|(?:call|start|end|channel|message|return|constrain)\|>|\bto=functions\b")
 
 EVAL_PROMPT = """You are a strict evidence grader for a question-answering system over Sri Lankan bills.
@@ -174,6 +181,8 @@ class Result:
     official: list = field(default_factory=list)  # [(bill, section)] whose official local-language text informed the answer
     glossary_hints: list = field(default_factory=list)  # "local = English" names given to the question -> English step
     glossary_terms: list = field(default_factory=list)  # English terms whose official local form the answer prompt got
+    clarify: bool = False  # the answer asks which bill was meant (nothing is kept in the chat history for it)
+    added_overview: str = ""  # bill/Act whose overview was added to the evidence for a "key provisions / summarise" question
     added_sections: list = field(default_factory=list)  # sections added to bill-level-only evidence (bill_sections)
     followed: list = field(default_factory=list)  # sections added because a kept clause refers to them (follow_section_refs)
     acts: list = field(default_factory=list)  # how bill evidence was related to Acts: {"bill", "section", "act", "act_section", "status"}
@@ -561,6 +570,45 @@ class Pipeline:
             self.on_event("bill_sections", {"bill": top.key, "sections": [f"{e.key} \u00a7{e.section}" for e in out]})
         return out
 
+    def titled_bills(self, question, evidence):
+        """The bills/Acts in the evidence whose title the question names in words ("summarise port city economic commision act"):
+        every distinctive title word must appear in the question (a close spelling counts), at least two words or one of 6+ letters.
+        Returns one key per title (the newest), those with the most matching words only; one entry = named, several = ambiguous."""
+        import difflib
+        qw = set(re.findall(r"[a-z]{3,}", question.lower()))
+        best = {}
+        for k in {e.key for e in evidence}:
+            b = self.store.bill(k) if hasattr(self.store, "bill") else None
+            if not b:
+                continue
+            title = re.sub(r",?\s*No\.?\s*\d+\s+of\s+\d{4}|\s-\s(?:Bill|GS)$", "", b["title"])
+            words = [w for w in re.findall(r"[a-z]{3,}", title.lower()) if w not in _TITLE_STOP]
+            if not words or (len(words) < 2 and len(words[0]) < 6):
+                continue
+            if all(w in qw or difflib.get_close_matches(w, qw, 1, 0.85) for w in words):
+                tn = b.get("title_norm") or title
+                if tn not in best or b["date"] > best[tn][2]:
+                    best[tn] = (k, len(words), b["date"], b["title"])
+        if not best:
+            return []
+        top = max(v[1] for v in best.values())
+        return sorted((v for v in best.values() if v[1] == top), key=lambda v: v[2], reverse=True)
+
+    def title_ranker(self):
+        """The title-index ranker, loaded once; None when the index has no title_index table (older index): then titled_bills is used."""
+        if getattr(self, "_title_ranker", 0) == 0:
+            ok = hasattr(self.store, "db") and title_index.has_index(self.store)
+            self._title_ranker = title_index.Ranker(self.store) if ok else None
+        return self._title_ranker
+
+    def which_of(self, cands, total=None):
+        """A reply that asks which bill was meant, with the candidates (no model call)."""
+        lines = [f"- {re.sub(r' - (?:Bill|GS)$', '', t)} ({k}, {d[:10]})" for k, _n, d, t in cands[:5]]
+        if (total or len(cands)) > 5:
+            lines.append(f"- ... and {(total or len(cands)) - 5} more with similar titles")
+        return ("Your question could mean more than one bill. Which did you mean?\n\n" + "\n".join(lines) +
+                "\n\nReply with the bill number (for example, the one in brackets) or the full title.")
+
     def focus_bill(self, question, evidence, keys=None):
         """For a question that says "this new bill" without naming one: the bill (all its GS/Bill versions together) whose
         evidence the grader scored highest; ties -> more total score, then newer. None if the question names a bill or the
@@ -768,6 +816,19 @@ class Pipeline:
         bare = ACT_REF.sub(" ", q)
         refs = act_refs | {normalize_ref(m) for m in re.findall(r"\d{1,3}\s*/\s*\d{4}", bare)}
         keys = [k for k in refs if k and self.store.bill(k)] or None
+        ov_key = keys[0] if keys and len(keys) == 1 else None
+        if not keys and OVERVIEW_Q.search(q):
+            ranker = self.title_ranker()
+            if ranker:  # a gist question: which bill or Act does it name? (title index, see titles.py)
+                decision, cands = ranker.rank(q)
+                if decision == "many":  # several titles fit equally: ask, before spending a search or a model call
+                    res.answer, res.enough, res.path, res.clarify = self.which_of(
+                        [(c["key"], 0, c["date"] or "", c["title"]) for c in cands], len(cands)), True, "en", True
+                    self.on_event("resolve", {"reply": True, "clarify": True, "candidates": [c["key"] for c in cands[:5]]})
+                    return res
+                if decision == "one":
+                    keys, ov_key = json.loads(cands[0]["keys"]), cands[0]["key"]
+                    self.on_event("resolve", {"titled": cands[0]["title"], "keys": keys})
         seen_ids, graded, queries = set(), [], [q]
         enough, missing = True, ""
         for rnd in range(1 + self.extra_rounds):
@@ -805,6 +866,21 @@ class Pipeline:
             res.added_sections = self.bill_sections(q, res.evidence)
             res.evidence += res.added_sections
             res.seconds["bill_sections"] = time.time() - t
+        if ov_key is None and not keys and OVERVIEW_Q.search(q) and res.evidence and not self.title_ranker():
+            named = self.titled_bills(q, res.evidence)  # named by title, not number
+            if len(named) > 1:  # two different titles fit: ask instead of guessing
+                res.answer, res.enough, res.path = self.which_of(named), True, "en"
+                res.evidence, res.clarify = [], True
+                self.on_event("resolve", {"reply": True, "clarify": True, "candidates": [v[0] for v in named]})
+                return res
+            ov_key = named[0][0] if named else None
+        if ov_key and OVERVIEW_Q.search(q) and not any(e.chunk["kind"] == "overview" and e.key == ov_key for e in res.evidence):
+            ov = self._act_overview_evidence(ov_key, 3)
+            if ov:
+                res.evidence.insert(0, ov)  # the instrument's own description first
+                res.added_overview = ov_key
+                enough, missing, res.enough = True, "", True  # the question asks for the gist, not for every clause
+                self.on_event("overview_added", {"bill": ov_key})
         res.evidence = self.apply_acts(q, res.evidence, keys, res)
         focus = res.focus = self.focus_bill(q, res.evidence, keys)
         if focus:  # its clauses first (stable sort keeps the grader's order within each group)
