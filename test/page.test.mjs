@@ -16,3 +16,13 @@ test("public/index.html: no public text names the languages the assistant answer
   const html = readFileSync(new URL("../public/index.html", import.meta.url), "utf8");
   assert.doesNotMatch(html, /Ask in Sinhala|in Sinhala, Tamil or English|Sinhala, Tamil or English/);
 });
+
+// Each service has its own subdomain, so "/" is the service itself: a wordmark linking there reloads the page instead of going home.
+test("the citizenlk wordmark goes to the homepage on every service page", async () => {
+  const { privacyPage } = await import("../src/privacy.js");
+  const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
+  const pages = { bills: read("../public/index.html"), procurement: read("../workers/procurement/public/index.html"),
+    billsPrivacy: privacyPage("bills"), procurementPrivacy: privacyPage("procurement") };
+  for (const [name, html] of Object.entries(pages)) assert.ok(html.includes('<a class="mark" href="https://citizenlk.com">'), name);
+  for (const name of ["billsPrivacy", "procurementPrivacy"]) assert.ok(pages[name].includes('<a href="/">Back to '), name);
+});

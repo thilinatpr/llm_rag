@@ -62,7 +62,7 @@ export function privacyPage(service, contact) {
   .muted { color: var(--muted); font-size: .9rem; }
   footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: .84rem; }
 </style></head><body><main>
-<a class="mark" href="/">citizen<b>lk</b></a>
+<a class="mark" href="https://citizenlk.com">citizen<b>lk</b></a>
 <h1>Privacy</h1>
 <p class="muted">${s.name} · Last updated ${UPDATED}</p>
 <p>${s.name} is an independent project, not a government service. This page says what it keeps and who else sees it.</p>
@@ -78,6 +78,7 @@ ${PROVIDERS(s.others)}
 <p>The logs of questions and answers have no fixed deletion date at the moment: they stay until they are deleted by hand. Sign-in details and daily counts expire as described above.</p>
 <h2>Your choices</h2>
 <p>You can stop using the service at any time, clear this site's data in your browser, and sign out.${write}</p>
+<p><a href="/">Back to ${s.name}</a></p>
 <footer>Not legal advice · Not a government service</footer>
 </main></body></html>`;
 }
