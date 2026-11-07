@@ -36,6 +36,8 @@ billrag/meta.py           bill metadata outside `chunks`: families, newest insta
 billrag/titles.py         title index (table `title_index`) + custom title ranker: which bill/Act does a gist question name? one / ask which / none
 src/refresh.js, scripts/refresh_r2.py, .github/workflows/refresh-index.yml   daily new-bills check + Build/Publish buttons (see "Scheduled refresh")
 billrag/resolve.py        question grounding before retrieval: greetings, abbreviation (PTSA) -> bill title matching, "closest bills"
+scripts/build_site.py     SEO: public pages (/acts/, /bills/ + sitemap-docs.xml) from the published index into site/ (git-ignored); run before every deploy of `citizenlk-home`
+src/seo.js                noindex + robots.txt wrapper for the three login-gated Workers (bills, procurement, admin)
 billrag/chatlog.py        one JSON record per chat turn -> R2 `chatlogs/` + local JSONL; `build_id()` = hash of the running code
 billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/ask/stream, /api/search, /api/stats, /healthz incl. `coverage`); secret-gated
 billrag/resources.py      CPU/memory: `snapshot()` for /api/stats, `Usage` per request -> log field `usage` (stdlib, /proc + cgroup)
