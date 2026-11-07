@@ -28,14 +28,19 @@ export const limits = (env) => ({
 export const publicOn = (env) =>
   env.PUBLIC_CHAT === "on" && !!(env.TURNSTILE_SECRET && env.TURNSTILE_SITEKEY && env.OTP_PEPPER && env.PROXY_SECRET && env.QUOTA && env.BILLRAG);
 
+// Open sign-up (members.js): any address may sign in, with Turnstile and per-network/per-address caps. Off unless every piece exists.
+export const signupOn = (env) =>
+  env.OPEN_SIGNUP === "on" && !!(env.TURNSTILE_SECRET && env.TURNSTILE_SITEKEY && env.OTP_PEPPER && env.QUOTA);
+
 const MESSAGES = {
   cookie: "You have used today's free questions. Please come back tomorrow.",
+  cookieSignup: "You have used today's free questions. Create a free account for more, or come back tomorrow.",
   ip: "Too many questions from your network today. Please come back tomorrow.",
   global: "Today's free questions are used up. Please come back tomorrow.",
   issue: "Too many new visits from your network today. Please come back tomorrow.",
 };
 
-const counter = (env) => env.QUOTA.get(env.QUOTA.idFromName("main"));
+export const counter = (env) => env.QUOTA.get(env.QUOTA.idFromName("main"));
 const clientIp = (request) => request.headers.get("CF-Connecting-IP") || "";
 
 function items(env, anonId, ip, nowMs) {
@@ -150,7 +155,7 @@ export function watchStream(body, giveBack) {
         return ctrl.close();
       }
       const text = tail + dec.decode(r.value, { stream: true });
-      if (/\nevent: (error|unanswered)\n/.test(text)) await fail();
+      if (/\nevent: (error|unanswered|free)\n/.test(text)) await fail();
       if (/\nevent: done\n/.test(text)) finished = true;
       tail = text.slice(-24);
       ctrl.enqueue(r.value);
@@ -174,7 +179,7 @@ export async function anonApi(env, request, pathname, upstream, nowMs) {
   const its = items(env, anon.id, clientIp(request), nowMs);
   const took = await counter(env).take(its);
   if (!took.ok)
-    return json({ error: MESSAGES[took.failed] || MESSAGES.global, reason: took.failed, left: 0 }, 429, {
+    return json({ error: (took.failed === "cookie" && signupOn(env) ? MESSAGES.cookieSignup : MESSAGES[took.failed]) || MESSAGES.global, reason: took.failed, left: 0 }, 429, {
       "Retry-After": String(secondsToSlMidnight(nowMs)),
     });
   // Rebuild the body: the session id is ours (a client-chosen one could join someone else's chat), only known fields pass.
@@ -182,7 +187,13 @@ export async function anonApi(env, request, pathname, upstream, nowMs) {
   if (body.answer === "fast" || body.answer === "thorough") payload.answer = body.answer;
   const forwarded = new Request(request.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   const res = await upstream(forwarded, env, { lane: "public" });
-  const left = Math.min(...took.left);
+  return settle(env, res, its, Math.min(...took.left));
+}
+
+// What happens after a counted question was sent on (public visitors and signed-in free accounts alike): a reply that gave the person nothing
+// (failure, busy, only an apology) or that costs us nothing to give (a greeting, "which bill?", a translation of the last answer: the container says
+// `free`) is given back; the streamed ones are watched as they pass.
+export function settle(env, res, its, left) {
   const giveBack = () => counter(env).refund(its);
   const streamed = res.status === 200 && res.body && (res.headers.get("Content-Type") || "").includes("text/event-stream");
   if (streamed) {
@@ -190,11 +201,10 @@ export async function anonApi(env, request, pathname, upstream, nowMs) {
     out.headers.set("X-Quota-Left", String(left));
     return out;
   }
-  // busy, down, or only an apology: the visitor got nothing, so the question is not used
-  const failed = res.status >= 500 || res.headers.get("X-Unanswered") === "1";
-  if (failed) await giveBack();
+  const failed = res.status >= 500 || res.headers.get("X-Unanswered") === "1" || res.headers.get("X-Free") === "1";
   const out = new Response(res.body, res);
   out.headers.delete("X-Unanswered");
+  out.headers.delete("X-Free");
   out.headers.set("X-Quota-Left", String(failed ? left + 1 : left));
-  return out;
+  return failed ? giveBack().then(() => out) : out;
 }

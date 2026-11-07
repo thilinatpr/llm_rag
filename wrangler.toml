@@ -50,6 +50,8 @@ enabled = true
 crons = ["17 * * * *"]
 
 [vars]
+# The session cookie is valid on every citizenlk.com subdomain (one sign-in for all services); Procurement Rules sets the same.
+COOKIE_DOMAIN = "citizenlk.com"
 # Who gets the low-credit email, and below how many US dollars. $5 is about 4 days at the public lane's daily ceiling.
 ALERT_EMAIL = "thilinatpr@gmail.com"
 BALANCE_ALERT_USD = "5"
@@ -79,9 +81,14 @@ TRANSLATE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 PUBLIC_CHAT = "on"
 TURNSTILE_SITEKEY = "0x4AAAAAAF2W2gpEdNI7gfcY"
 # Daily allowances (reset at midnight in Sri Lanka). Per visitor / per IP (backstop: mobile users share IPs) / whole public lane.
-PUBLIC_DAILY_PER_COOKIE = "10"
+PUBLIC_DAILY_PER_COOKIE = "3"
 PUBLIC_DAILY_PER_IP = "300"
 PUBLIC_DAILY_GLOBAL = "500"
 PUBLIC_COOKIES_PER_IP = "50"
+# Open sign-up (src/members.js): "on" lets any address sign in with Turnstile + daily caps per network and address, and counts a free account's
+# questions per day and month. Anyone in ALLOWED_EMAILS stays unlimited. When turning it on, also set PUBLIC_DAILY_PER_COOKIE to "3" (TODO_LAUNCH.md).
+OPEN_SIGNUP = "on"
+MEMBER_DAILY = "20"
+MEMBER_MONTHLY = "150"
 # Optional, ignored when the container is bound: proxy signed-in requests to another server instead.
 # ORIGIN = "https://billrag.example.com"

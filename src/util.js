@@ -26,3 +26,8 @@ export async function readJson(request) {
     return {};
   }
 }
+
+// A short stable id for an address, so storage keys and counters never hold the address itself.
+export async function emailId(email) {
+  return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(email))).slice(0, 16);
+}

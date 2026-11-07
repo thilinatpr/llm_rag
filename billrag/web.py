@@ -35,6 +35,7 @@ from .resources import Usage, snapshot
 
 MAX_SESSIONS = 50
 _INIT = threading.Lock()
+_TL = threading.local()  # per request thread: did the turn just answered cost us nothing (free_turn)? read by the HTTP handler
 # The page's "Answer" choice. Only these names are accepted from the browser; they map to the answer step's reasoning effort:
 # fast = "low" (first word ~1-7 s instead of ~3-27 s, measured 2026-11-06), thorough = the server default (BILLRAG_ANSWER_EFFORT,
 # unset = the model's own default). Grading and translation are not affected.
@@ -47,6 +48,12 @@ def unanswered(text):
     """The model failed twice and the reply is only an apology (Pipeline._llm), so a visitor should not pay for it."""
     from .pipeline import UNUSABLE
     return UNUSABLE in (text or "")
+
+
+def free_turn(res):
+    """A turn that used no search and no model call of ours (greeting, "which bill?", a translation of the last answer): the Worker does not
+    count it against a free account's allowance. A failed answer is given back there too (the `unanswered` event)."""
+    return bool(res.clarify or res.path == "language_switch" or (not res.evidence and not res.llm_calls and not res.queries))
 
 
 def load_page():
@@ -182,6 +189,7 @@ class App:
                 "acts": res.acts or None,
                 "direct_rejected": res.direct_rejected or None,
                 "answer_mode": mode or "default", "answer_effort": effort,
+                "free": free_turn(res),
             }
             return out, meta
         return answer
@@ -217,6 +225,7 @@ class App:
                     try:
                         kw = {k: v for k, v in (("emit", emit), ("mode", mode)) if v}
                         text, meta = responder(question, **kw)
+                        _TL.free = bool(meta.get("free"))
                         return text
                     except Exception as e:
                         err = f"{type(e).__name__}: {e}"
@@ -317,8 +326,10 @@ def make_handler(app):
                     kw = self._lane_kw()
                     if mode:
                         kw["mode"] = mode
+                    _TL.free = False
                     text = app.ask(sid, q, **kw)
-                    return self._send(200, json.dumps({"answer": text}), headers=[("X-Unanswered", "1")] if unanswered(text) else ())
+                    flags = ([("X-Unanswered", "1")] if unanswered(text) else []) + ([("X-Free", "1")] if getattr(_TL, "free", False) else [])
+                    return self._send(200, json.dumps({"answer": text}), headers=flags)
                 self._send(404, json.dumps({"error": "not found"}))
             except Busy as e:
                 self._send(503, json.dumps({"error": str(e), "busy": True}))
@@ -349,9 +360,12 @@ def make_handler(app):
                 kw = dict(lane_kw or {})
                 if mode:
                     kw["mode"] = mode
+                _TL.free = False
                 text = app.ask(sid, question, emit=emit, **kw)
                 if unanswered(text):
                     send("unanswered", {})
+                elif getattr(_TL, "free", False):
+                    send("free", {})
                 send("done", {"answer": text})
             except Busy as e:
                 send("error", {"error": str(e), "busy": True})

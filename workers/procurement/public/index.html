@@ -67,6 +67,12 @@
   .md hr { border:0; border-top:1px solid var(--line); margin:.6em 0; }
   .step { color:var(--muted); }
   .draft::after { content:" \25cf"; color:var(--sindoor); animation:blink 1s steps(2) infinite; }
+  #histPanel { position:fixed; top:56px; right:max(12px,env(safe-area-inset-right,0px)); width:min(420px,calc(100vw - 24px)); max-height:70vh; overflow:auto; z-index:5; padding:14px;
+    background:var(--lime); color:var(--ink); border:1px solid var(--line); border-radius:12px; box-shadow:0 8px 24px -8px color-mix(in srgb,var(--ink) 30%,transparent); }
+  #histPanel[hidden] { display:none; } #histPanel h3 { margin:0 0 4px; font-size:1rem; } #histPanel .hint { display:block; margin:0 0 10px; }
+  .hrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); } .hrow button.open { flex:1; min-width:0; text-align:left; background:none; border:0; padding:4px 0; font:inherit; color:inherit; cursor:pointer; }
+  .hrow .t { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .hrow small { color:var(--muted); }
+  .saved { padding:8px 12px; margin:0 0 10px; border:1px dashed var(--line); border-radius:8px; color:var(--muted); font-size:.92rem; }
   @keyframes blink { 50% { opacity:0; } }
   @media (prefers-reduced-motion: reduce) { .draft::after { animation:none; } }
 </style></head>
@@ -75,10 +81,12 @@
 <header>
   <div class="left"><a class="mark" href="https://citizenlk.com">citizen<b>lk</b></a><span class="name">Procurement Rules</span><small id="status" class="hint" title="Server status"></small></div>
   <div class="right">
+    <button class="link" id="hist" type="button" hidden aria-expanded="false">History</button>
     <button class="link" id="new" type="button">New chat</button>
     <button class="link" id="out" type="button" title="Sign out">Sign out</button>
   </div>
 </header>
+<div id="histPanel" hidden role="dialog" aria-label="Chat history"></div>
 <div id="log"></div>
 <form id="f"><div class="pill">
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
@@ -104,7 +112,58 @@ function showStart() {
   d.appendChild(chips); log.appendChild(d);
 }
 showStart();
-document.getElementById('new').onclick = () => { showStart(); q.focus(); };
+// --- chat history (src/history.js): signed-in accounts keep their chats for 30 days and can delete them. Saved after each answer.
+// Unlike Bill Assistant, this page sends its own conversation with every question, so a saved chat can be opened AND continued. ---
+const H = {on: false, full: false};
+const newId = () => Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2, 6);   // 6-40 letters/digits: the history API's id rule
+let chatId = newId();
+const turns = [];  // this page's conversation, sent back so a follow-up can be understood; the server keeps nothing
+const histPanel = document.getElementById('histPanel'), histBtn = document.getElementById('hist');
+const saved = [];  // what is stored: what the person typed and the answer, one entry per question
+document.getElementById('new').onclick = () => { chatId = newId(); turns.length = 0; saved.length = 0; showStart(); histPanel.hidden = true; q.focus(); };
+async function saveChat() {
+  if (!H.on || !saved.length) return;
+  try {
+    const r = await fetch('/history/' + chatId, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({turns: saved})});
+    if (r.status === 409) H.full = true;   // 50 chats: the panel says so; the answer on screen is unaffected
+  } catch (e) {}
+}
+async function histCall(path, method) { const r = await fetch(path, {method: method || 'GET', cache: 'no-store'}); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }
+async function renderHistory() {
+  histPanel.textContent = '';
+  const h = document.createElement('h3'); h.textContent = 'Your chats'; histPanel.appendChild(h);
+  const hint = document.createElement('small'); hint.className = 'hint';
+  hint.textContent = 'Kept for 30 days after the last question, only for you. Delete any time.' + (H.full ? ' History is full (50 chats): delete one to save new chats.' : '');
+  histPanel.appendChild(hint);
+  let list;
+  try { list = await histCall('/history'); } catch (e) { hint.textContent = 'History could not be loaded.'; return; }
+  if (!list.chats.length) { const p = document.createElement('p'); p.textContent = 'No saved chats yet.'; histPanel.appendChild(p); return; }
+  list.chats.forEach((c) => {
+    const row = document.createElement('div'); row.className = 'hrow';
+    const open = document.createElement('button'); open.type = 'button'; open.className = 'open';
+    const t = document.createElement('span'); t.className = 't'; t.textContent = c.title || 'Chat';
+    const d = document.createElement('small'); d.textContent = new Date(c.updated).toLocaleDateString(undefined, {day: 'numeric', month: 'short'}) + ' · ' + c.n + (c.n === 1 ? ' question' : ' questions');
+    open.append(t, d); open.onclick = () => openChat(c.id);
+    const del = document.createElement('button'); del.type = 'button'; del.className = 'link'; del.textContent = 'Delete'; del.setAttribute('aria-label', 'Delete chat: ' + (c.title || ''));
+    del.onclick = async () => { try { await histCall('/history/' + c.id, 'DELETE'); H.full = false; if (c.id === chatId) { saved.length = 0; turns.length = 0; chatId = newId(); } renderHistory(); } catch (e) { hint.textContent = 'Could not delete. Try again.'; } };
+    row.append(open, del); histPanel.appendChild(row);
+  });
+  const all = document.createElement('button'); all.type = 'button'; all.className = 'link'; all.textContent = 'Delete all history';
+  all.onclick = async () => { if (!confirm('Delete all your saved chats? This cannot be undone.')) return; try { await histCall('/history', 'DELETE'); saved.length = 0; turns.length = 0; chatId = newId(); H.full = false; renderHistory(); } catch (e) { hint.textContent = 'Could not delete. Try again.'; } };
+  histPanel.appendChild(all);
+}
+async function openChat(id) {
+  let chat;
+  try { chat = await histCall('/history/' + id); } catch (e) { return; }
+  histPanel.hidden = true; histBtn.setAttribute('aria-expanded', 'false');
+  chatId = id; saved.length = 0; turns.length = 0;
+  log.textContent = '';
+  const note = document.createElement('div'); note.className = 'saved'; note.textContent = 'A saved chat. You can carry on with a follow-up.'; log.appendChild(note);
+  chat.turns.forEach((t) => { add(t.q, 'me'); const a = add('', 'bot'); a.innerHTML = renderMarkdown(t.a); a.classList.add('md'); saved.push({q: t.q, a: t.a}); turns.push({question: t.q, answer: t.a}); });
+  log.scrollTop = log.scrollHeight; q.focus();
+}
+histBtn.onclick = () => { const open = histPanel.hidden; histPanel.hidden = !open; histBtn.setAttribute('aria-expanded', String(open)); if (open) renderHistory(); };
+(async function history() { try { const me = await (await fetch('/public/me', {cache: 'no-store'})).json(); if (me.user === 'member') { H.on = true; histBtn.hidden = false; } } catch (e) {} })();
 function add(text, cls) {
   const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
   log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
@@ -189,7 +248,6 @@ async function post(path, body, note) {
   if (!r.ok) throw new Error(`${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
   return j;
 }
-const turns = [];  // this page's conversation, sent back so a follow-up can be understood; the server keeps nothing
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = q.value.trim(); if (!text) return;
@@ -203,6 +261,7 @@ document.getElementById('f').addEventListener('submit', async (e) => {
     wait.classList.remove('step');
     wait.innerHTML = renderMarkdown(j.answer); wait.classList.add('md');
     turns.push({question: j.standalone || text, answer: j.answer});
+    saved.push({q: text, a: j.answer}); saveChat();
     if (j.standalone) {
       const n = document.createElement('p'); n.className = 'step';
       n.textContent = 'Read as: ' + j.standalone;

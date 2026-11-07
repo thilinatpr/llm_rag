@@ -32,6 +32,6 @@ async function upstream(request, env, opts = {}) {
 }
 
 export default {
-  fetch: noindex(createHandler({ upstream, privacy: "bills" })),
+  fetch: noindex(createHandler({ upstream, privacy: "bills", cookie: "clk_session", consent: { service: "bills", name: "Bill Assistant" } })),
   scheduled: (_event, env, ctx) => ctx.waitUntil(Promise.all([checkBalance(env), reportSettings(env)])), // hourly: see [triggers] in wrangler.toml
 };

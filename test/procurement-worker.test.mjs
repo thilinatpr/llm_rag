@@ -1,3 +1,4 @@
+import { VERSION as CONSENT_VERSION } from "../src/consent.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -94,7 +95,8 @@ test("tokens and cost go into the log, not to the browser", async () => {
   const env = { PROXY_SECRET: SECRET, BILLRAG: {}, AUTH, ALLOWED_EMAILS: "me@example.com", ASSETS: { fetch: async () => new Response("page") }, OTP_PEPPER: "p",
     LOGS: { put: async (k, v) => void puts.push(JSON.parse(v)) } };
   m.set("session:" + "a".repeat(64), "me@example.com");
-  const r = await handle(new Request("https://procurement.citizenlk.com/api/ask", { method: "POST", headers: { Cookie: "session=" + "a".repeat(64) }, body: JSON.stringify({ question: "q" }) }), env);
+  m.set("consent:me@example.com", JSON.stringify({ general: { v: CONSENT_VERSION }, procurement: { v: CONSENT_VERSION } }));
+  const r = await handle(new Request("https://procurement.citizenlk.com/api/ask", { method: "POST", headers: { Cookie: "clk_session=" + "a".repeat(64) }, body: JSON.stringify({ question: "q" }) }), env);
   assert.equal(r.status, 200, await r.clone().text());
   assert.equal(r.headers.get("X-Ask-Trace"), null);
   assert.equal(puts[0].seconds, 4.2);

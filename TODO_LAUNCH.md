@@ -70,14 +70,17 @@ Findings from the flagged Procurement answers:
 
 ## Phase 3: Launch the free account
 
-- [ ] **M** Open sign-up in place of the `ALLOWED_EMAILS` list, with abuse protection (Turnstile on sign-up, limits per address)
-- [ ] **M** One account across Bill Assistant and Procurement Rules (sign-ins are separate today)
-- [ ] **M** Per-user limits: 20/day and 150/month for Bill Assistant, 5/day for Procurement Rules
-- [ ] **M** Save 30 days of chat history, with a way for users to delete it
+- [x] **M** Open sign-up with abuse protection (Turnstile, 20 codes per network and 5 per address a day). Live and ON since 2026-11-09. Bill Assistant only; Procurement Rules stays staff-only until the owner decides
+- [x] **M** One account across Bill Assistant and Procurement Rules: one session cookie for `.citizenlk.com`, one KV, one consent record. Written 2026-11-08, not deployed (see `AGENTS.md` "One account"). Procurement Rules is open to every registered account (`OPEN_TO = "registered"`, 2026-11-09, not deployed): 5 questions a day, its own extra statements, no sign-ups of its own
+- [x] **S** Consent at first sign-in (accuracy, not legal advice, data sent to third-party providers outside Sri Lanka); Procurement Rules adds three of its own. Written 2026-11-08, not deployed. **O** Have the wording checked with the terms (Phase 2)
+- [x] **M** Per-user limits: 20/day and 150/month for Bill Assistant, 5/day for Procurement Rules (counted on the server, per service). Written, not deployed
+- [x] **M** Save 30 days of chat history, with a way for users to delete it. Both pages + the API (`src/history.js`). Written 2026-11-09, not deployed.
 - [ ] **M** Weekly new-bill email, with unsubscribe
-- [ ] **S** Don't count greetings, clarifications, translations of an earlier answer or failures against the limit
-- [ ] **S** Lower the public limit from 10 to 3 (`PUBLIC_DAILY_PER_COOKIE`) and show "sign up for more" when it runs out. Not before sign-up exists: until then "or sign in" is a dead end for visitors.
+- [x] **S** Don't count greetings, clarifications, translations of an earlier answer or failures against the limit (Bill Assistant; Procurement Rules does not send the marker yet, so there every question counts). Written, not deployed
+- [x] **S** Lower the public limit from 10 to 3 (done 2026-11-09, live with sign-up)
+- [x] (was:) Lower the public limit from 10 to 3 (`PUBLIC_DAILY_PER_COOKIE`): a config change to make together with `OPEN_SIGNUP = "on"`. The "create a free account for more" message is written and shows only while sign-up is open
 - [ ] **S** Weekly report: sign-ups, active users, people hitting limits, cost per user
+- [ ] **O** To turn sign-up on (in this order): deploy; send a test code to an address NOT in `ALLOWED_EMAILS` after setting `OPEN_SIGNUP = "on"` and `PUBLIC_DAILY_PER_COOKIE = "3"`; check the Turnstile widget on the sign-in page (its hostname list must include `bills.citizenlk.com`, it does); redeploy; read the first free account's logs
 - [ ] **O** Soft launch to about 20-50 people first, then announce it
 
 **Done when:** a month of usage shows how often people hit limits, how many sign up after hitting one, and what each user costs. If many hit the public limit and few sign up, go back to 5.
@@ -95,7 +98,7 @@ Findings from the flagged Procurement answers:
 ## Decisions needed from the owner
 
 - [ ] **Who is it for first?** Assumed here: procurement officers pay, citizens use Bill Assistant free.
-- [ ] **Open Procurement Rules to everyone with an account?** Depends on the translation review in Phase 2.
+- [ ] **Open Procurement Rules to everyone with an account?** Decided 2026-11-09: yes, to registered accounts (written, not deployed). The translation review in Phase 2 is still open; the Sinhala texts remain unreviewed
 - [ ] **Who handles the money?** Personally or through a registered business; this decides which payment providers are available.
 
 ## Timing risk
