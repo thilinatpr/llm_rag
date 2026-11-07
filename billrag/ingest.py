@@ -118,6 +118,8 @@ def ingest(data_dir: Path, db_path: Path, limit=None, workers=4, since_year=0, o
     store.commit()
     from . import meta  # families / newest instance / section cross-references (outside `chunks`)
     print(f"  meta: {meta.build(store)}", file=sys.stderr)
+    from . import titles as _titles
+    print(f"  titles: {_titles.build(store)}", file=sys.stderr)
     st = store.stats()
     print(f"Indexed {st['bills']} bills / {st['chunks']} chunks; {errors} failed; "
           f"{skipped} bills without an English PDF skipped", file=sys.stderr)
@@ -214,6 +216,8 @@ def ingest_acts(acts_dir: Path, db_path: Path, since_year=2024, workers=4, only_
             added += 1
     store.commit()
     print(f"  meta: {meta.build(store)}", file=sys.stderr)
+    from . import titles as _titles
+    print(f"  titles: {_titles.build(store)}", file=sys.stderr)
     links = acts.build(store)
     print(f"  links: {links}", file=sys.stderr)
     for k, why in skipped:

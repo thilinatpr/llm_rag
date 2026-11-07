@@ -14,7 +14,7 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 
-from . import acts, calltrace, glossary as gloss, meta, parse_si, resolve, translate
+from . import acts, calltrace, glossary as gloss, meta, parse_si, resolve, titles as title_index, translate
 from .store import ACT_REF, normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
@@ -594,9 +594,18 @@ class Pipeline:
         top = max(v[1] for v in best.values())
         return sorted((v for v in best.values() if v[1] == top), key=lambda v: v[2], reverse=True)
 
-    def which_of(self, cands):
+    def title_ranker(self):
+        """The title-index ranker, loaded once; None when the index has no title_index table (older index): then titled_bills is used."""
+        if getattr(self, "_title_ranker", 0) == 0:
+            ok = hasattr(self.store, "db") and title_index.has_index(self.store)
+            self._title_ranker = title_index.Ranker(self.store) if ok else None
+        return self._title_ranker
+
+    def which_of(self, cands, total=None):
         """A reply that asks which bill was meant, with the candidates (no model call)."""
         lines = [f"- {re.sub(r' - (?:Bill|GS)$', '', t)} ({k}, {d[:10]})" for k, _n, d, t in cands[:5]]
+        if (total or len(cands)) > 5:
+            lines.append(f"- ... and {(total or len(cands)) - 5} more with similar titles")
         return ("Your question could mean more than one bill. Which did you mean?\n\n" + "\n".join(lines) +
                 "\n\nReply with the bill number (for example, the one in brackets) or the full title.")
 
@@ -807,6 +816,19 @@ class Pipeline:
         bare = ACT_REF.sub(" ", q)
         refs = act_refs | {normalize_ref(m) for m in re.findall(r"\d{1,3}\s*/\s*\d{4}", bare)}
         keys = [k for k in refs if k and self.store.bill(k)] or None
+        ov_key = keys[0] if keys and len(keys) == 1 else None
+        if not keys and OVERVIEW_Q.search(q):
+            ranker = self.title_ranker()
+            if ranker:  # a gist question: which bill or Act does it name? (title index, see titles.py)
+                decision, cands = ranker.rank(q)
+                if decision == "many":  # several titles fit equally: ask, before spending a search or a model call
+                    res.answer, res.enough, res.path, res.clarify = self.which_of(
+                        [(c["key"], 0, c["date"] or "", c["title"]) for c in cands], len(cands)), True, "en", True
+                    self.on_event("resolve", {"reply": True, "clarify": True, "candidates": [c["key"] for c in cands[:5]]})
+                    return res
+                if decision == "one":
+                    keys, ov_key = json.loads(cands[0]["keys"]), cands[0]["key"]
+                    self.on_event("resolve", {"titled": cands[0]["title"], "keys": keys})
         seen_ids, graded, queries = set(), [], [q]
         enough, missing = True, ""
         for rnd in range(1 + self.extra_rounds):
@@ -844,8 +866,7 @@ class Pipeline:
             res.added_sections = self.bill_sections(q, res.evidence)
             res.evidence += res.added_sections
             res.seconds["bill_sections"] = time.time() - t
-        ov_key = keys[0] if keys and len(keys) == 1 else None
-        if ov_key is None and not keys and OVERVIEW_Q.search(q) and res.evidence:
+        if ov_key is None and not keys and OVERVIEW_Q.search(q) and res.evidence and not self.title_ranker():
             named = self.titled_bills(q, res.evidence)  # named by title, not number
             if len(named) > 1:  # two different titles fit: ask instead of guessing
                 res.answer, res.enough, res.path = self.which_of(named), True, "en"

@@ -33,6 +33,7 @@ billrag/config.py         all settings come from BILLRAG_* env vars (documented 
 src/chatconfig.js         which chat model/provider the container gets (CHAT_PROVIDER var: workers-ai | deepseek); pure function, tested in test/worker.test.mjs
 procurement/evaluate.py   Procurement Rules answer eval: gold in evals/procurement_eval.jsonl, no model judge
 billrag/meta.py           bill metadata outside `chunks`: families, newest instance, bill type, tags, section cross-references (`meta`, `tag`)
+billrag/titles.py         title index (table `title_index`) + custom title ranker: which bill/Act does a gist question name? one / ask which / none
 billrag/resolve.py        question grounding before retrieval: greetings, abbreviation (PTSA) -> bill title matching, "closest bills"
 billrag/chatlog.py        one JSON record per chat turn -> R2 `chatlogs/` + local JSONL; `build_id()` = hash of the running code
 billrag/web.py            `python -m billrag serve`: stdlib HTTP API (/api/ask, /api/ask/stream, /api/search, /api/stats, /healthz incl. `coverage`); secret-gated
@@ -916,6 +917,21 @@ comparing versions (`COMPARE`) keeps the bill's clause. Every passage gets a `ST
 (hand-written set, `evals/act_eval.jsonl`): 12/12 mechanical checks, but those are phrase matches: reading the answers is what found the three bugs above. Known weak spots: one run cited `Act 25/2026 §17` without that section in evidence (the citation check warned); and a pre-2024 bill can be called "not law" when it did become an Act we do not hold (319/2023 became the 2023 principal Act). Summaries: 9 Acts have none (the model returned unusable output three times; `summarize` retries them).
 
 **Production (done 2026-11-06, see "Deployed vs main"). To upload a rebuilt index:** old code cannot read `[Act ...]` citations, while new code works on an old index, so deploy code first. A container restores the index whenever it starts, so no restart is needed: an awake instance picks it up after it next sleeps. `upload_r2.py --include-index` publishes the pair safely (`publish_index`): it refuses a pair whose fingerprints differ, stages both and checks them by SHA-256, backs up the live pair to `backups/<prefix>/<UTC time>/`, then swaps by server-side copy and puts things back if the swap fails. R2 has no multi-object transaction, so the live keys disagree for 3.5-6 s (measured) during the second copy; `fetch_index.py` checks the pair after downloading and fetches again if it overlapped a swap (this half needs an image deploy to take effect). Why: on 2026-11-06 the old script uploaded the two files independently and the index failed after the vectors succeeded, leaving a pair that gives `VectorsError` on any start for 16 minutes (nothing woke; the instance was asleep). Delete old backups by hand. `data/acts` is not in R2; re-scrape it (resumable).
+
+## Gist questions: overview, title index, "which bill?" (written 2026-11-07, branch `claude/overview-questions`, NOT merged or deployed)
+
+**Why:** live question "key provisions of Act No. 6 of 2026" got "partial account only": the Act was fully indexed, but no clause matches such a question, so
+the grader kept scattered sections and never the Act's overview. `Pipeline.ask` now treats a question matching `OVERVIEW_Q` ("key provisions", "summarise",
+"explain", "tell me about", ...) specially:
+- **Named by number** (`NNN/YYYY`, `Act No. N of YYYY`): the overview (`_act_overview_evidence`) goes first and the evidence counts as enough (`added_overview`, event `overview_added`).
+- **Named by title:** `titles.Ranker` (table `title_index`, built by `python -m billrag titles` and by `meta`; one row per bill family and per Act; side table like `bill_meta`, `chunks`/vectors untouched).
+  Hand-weighted scorer: idf-weighted share of what the user SAID that is in the title (`cov_q`, must be ~1; filler like "key provisions" ignored; close spellings count), share of the title said (`cov_t`),
+  word order, year, and "act"/"bill". Decision `one` -> retrieval is restricted to that family's keys and its overview added; `many` (several titles fit equally, 2-30 of them, and the user said bill/act)
+  -> reply "Which did you mean?" with up to 5 newest candidates, before any search or model call (`Result.clarify`, nothing kept in history); `none` -> as before. An Act beats its own bill unless the user says "bill".
+  Without a `title_index` table (older index) `Pipeline.titled_bills` does a cruder version after retrieval.
+- **Measured** (`python -m billrag titles --eval`, 300-400 synthetic questions: full title, without bracketed words, a typo, with a year, lower case; gold = that title): right winner ~88%, right title among the asked candidates ~10%, confident wrong winner 1-1.5% (the
+  wrong ones are mostly a shorter, equally valid title, or a typo that lands on another title), no decision <1%. Not measured: real users' wording, Sinhala titles/aliases (not in the index yet), the 72-item answer eval (no eval question both names a bill number and matches `OVERVIEW_Q`).
+- **Production:** the index must be rebuilt and uploaded (`meta` or `titles`, then `upload_r2.py --include-index`) for the ranker; code alone falls back to `titled_bills`. `ingest` and `ingest-acts` rebuild it (so `refresh_bills.py` does too).
 
 ## Product priority: recent bills
 

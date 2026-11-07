@@ -514,6 +514,47 @@ def test_ambiguous_title_asks_which_bill(tmp_path):
     assert len(llm.calls) == 1 and not p.history  # only the grading call; nothing kept for the next turn
 
 
+def _store_with_titles(tmp_path):
+    st = make_store(tmp_path, with_gs=False)
+    extra = [("090/2026", "Alpha Fisheries Foundation (Incorporation)"), ("091/2026", "Beta Fisheries Foundation (Incorporation)"),
+             ("092/2026", "Gamma Cricket Authority")]
+    for key, title in extra:
+        parsed = parse_pages([COVER, body()], title)
+        _, tnorm = classify(title)
+        st.replace_bill({"key": key, "bill_no": int(key[:3]), "year": 2026, "date": "2026-10-01T00:00:00Z", "title": title,
+                         "title_norm": tnorm, "kind": "Bill", "long_title": parsed.cover.get("long_title"), "presented_by": None,
+                         "presented_on": None, "gazette_date": None, "printed_no": None, "n_pages": 2, "n_sections": 2,
+                         "pdf_path": "x", "summary": None}, build_chunks(
+            {"key": key, "bill_no": int(key[:3]), "year": 2026, "date": "2026-10-01T00:00:00Z", "title": title, "title_norm": tnorm,
+             "kind": "Bill", "long_title": None, "n_sections": 2, "summary": None}, parsed))
+    st.commit()
+    from billrag import titles
+    titles.build(st)
+    return st
+
+
+def test_title_ranker_one_many_none(tmp_path):
+    from billrag import titles
+    rk = titles.Ranker(_store_with_titles(tmp_path))
+    d, c = rk.rank("key provisions of the Gamma Cricket Authority bill")
+    assert d == "one" and c[0]["key"] == "092/2026"
+    d, c = rk.rank("summarise the Gamma Crikcet Autority bill")  # close spellings
+    assert d == "one" and c[0]["key"] == "092/2026"
+    d, c = rk.rank("tell me about the fisheries foundation bill")  # two titles fit equally
+    assert d == "many" and {r["key"] for r in c} == {"090/2026", "091/2026"}
+    assert rk.rank("tell me about the new bill")[0] == "none"
+
+
+def test_pipeline_uses_title_index(tmp_path):
+    st = _store_with_titles(tmp_path)
+    llm = ScriptLLM(enough=False)
+    p = Pipeline(st, Retriever(st), llm, on_event=lambda n, d: None)
+    r = p.ask("tell me about the fisheries foundation bill")
+    assert r.clarify and "090/2026" in r.answer and "091/2026" in r.answer and not llm.calls
+    r2 = Pipeline(st, Retriever(st), ScriptLLM(enough=False)).ask("Summarise the Gamma Cricket Authority bill")
+    assert r2.added_overview == "092/2026" and not r2.clarify
+
+
 def test_pipeline_happy_path_two_llm_calls(tmp_path):
     st, llm = make_store(tmp_path), ScriptLLM()
     events = []
