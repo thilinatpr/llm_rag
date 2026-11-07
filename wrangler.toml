@@ -4,7 +4,7 @@ compatibility_date = "2026-11-01"
 # Bill Assistant lives on its own subdomain; the old workers.dev address and preview URLs are off.
 workers_dev = false
 preview_urls = false
-routes = [{ pattern = "bills.citizenlk.com", custom_domain = true }]
+routes = [{ pattern = "bills.citizenlk.com", custom_domain = true }, { pattern = "admin.citizenlk.com", custom_domain = true }]
 
 # Static pages are only reachable through the Worker, so they sit behind the OTP login.
 [assets]
@@ -70,7 +70,9 @@ ALERT_EMAIL = "thilinatpr@gmail.com"
 BALANCE_ALERT_USD = "5"
 # Comma-separated. This is the only allowlist: nothing needs verifying on the Cloudflare side.
 ALLOWED_EMAILS = "thilinatpr@gmail.com"
-# Who can open the admin panel at /admin (src/admin.js). Must also be in ALLOWED_EMAILS, since it uses the same sign-in. Empty = nobody.
+# The only host that serves the admin panel (src/auth.js). It serves nothing but sign-in and the panel.
+ADMIN_HOST = "admin.citizenlk.com"
+# Who can open the admin panel (src/admin.js). Must also be in ALLOWED_EMAILS, since it uses the same sign-in. Empty = nobody.
 ADMIN_EMAILS = "thilinatpr@gmail.com"
 # Any address on a domain onboarded under Cloudflare Email -> Email Sending.
 FROM_ADDRESS = "login@tripletrackr.com"

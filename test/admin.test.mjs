@@ -59,16 +59,35 @@ test("only ADMIN_EMAILS get in; unset means nobody; signed out goes to the login
   assert.equal((await setup({ user: "other@example.com" }).call("/admin")).status, 404);
   const out = await setup({ user: null }).call("/admin");
   assert.equal(out.status, 302);
-  assert.match(out.headers.get("Location"), /\/login\?next=\/admin$/);
+  assert.match(out.headers.get("Location"), /\/login$/);
   assert.equal((await setup({ user: null }).call("/admin/public-pause", { method: "POST" })).status, 401);
 });
 
-test("the handler sends /admin to the panel for a visitor too, instead of the public page's assets", async () => {
-  const handler = createHandler({ upstream: async () => new Response("container"), admin: createAdmin({ now: () => NOW }) });
-  const env = { AUTH: kv(), ASSETS: { fetch: async () => new Response("page") }, PUBLIC_CHAT: "on" };
-  const r = await handler(new Request("https://bills.test/admin", { headers: { Accept: "text/html" } }), env);
-  assert.equal(r.status, 302);
-  assert.match(r.headers.get("Location"), /login/);
+test("the panel is only on ADMIN_HOST, and that host serves nothing else", async () => {
+  let upstreamCalls = 0, assetCalls = 0;
+  const handler = createHandler({ upstream: async () => { upstreamCalls++; return new Response("container"); }, admin: async () => new Response("panel"), now: () => NOW });
+  const env = { AUTH: kv({ [`session:${"a".repeat(64)}`]: "me@example.com" }), ALLOWED_EMAILS: "me@example.com", ADMIN_HOST: "admin.test", BILLRAG: {}, PROXY_SECRET: "s".repeat(16),
+    ASSETS: { fetch: async () => { assetCalls++; return new Response("page"); } } };
+  const call = (u, init = {}) => handler(new Request(u, { ...init, headers: { Cookie: `session=${"a".repeat(64)}`, ...init.headers } }), env);
+
+  assert.equal(await (await call("https://admin.test/admin")).text(), "panel");
+  assert.equal(await (await call("https://admin.test/admin/source/bills")).text(), "panel");
+  const root = await call("https://admin.test/");
+  assert.equal(root.status, 302);
+  assert.equal(root.headers.get("Location"), "https://admin.test/admin");
+  assert.match(await (await call("https://admin.test/login")).text(), /Sign in to the admin panel/);
+  for (const p of ["/api/ask", "/api/search", "/healthz", "/public/me", "/public/start", "/index.html", "/favicon.ico"])
+    assert.equal((await call(`https://admin.test${p}`)).status, 404, p);
+  assert.equal(upstreamCalls + assetCalls, 0);
+
+  for (const p of ["/admin", "/admin/", "/admin/source/bills"]) assert.equal((await call(`https://bills.test${p}`)).status, 404, p);
+  assert.equal((await call("https://bills.test/admin/public-pause", { method: "POST" })).status, 404);
+  assert.match(await (await call("https://bills.test/login")).text(), /Sign in to the Bill Assistant/);
+  assert.equal(await (await call("https://bills.test/")).text(), "page");
+  assert.equal(await (await call("https://bills.test/api/search")).text(), "container");
+
+  delete env.ADMIN_HOST;
+  assert.equal((await call("https://admin.test/admin")).status, 404, "unset = no panel anywhere");
 });
 
 test("actions need a same-site Origin", async () => {
