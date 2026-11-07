@@ -12,8 +12,7 @@
 import { getCookie, hex, json, readJson, safeEqual } from "./util.js";
 import { anonApi, publicMe, publicOn, publicStart, verifyTurnstile } from "./public.js";
 
-const PAUSE_KEY = "admin:public-paused"; // set by the admin panel (admin.js)
-const AUTH_PATHS = ["/login", "/login/request", "/login/verify", "/logout"];
+const PAUSE_KEY = "admin:public-paused"; // set by the admin panel (admin.js, citizenlk-admin Worker)
 const OTP_TTL = 300; // seconds a code is valid
 const RESEND_COOLDOWN = 60; // seconds between code requests per address
 const MAX_ATTEMPTS = 5;
@@ -197,22 +196,15 @@ $('f2').onsubmit = async (e) => { e.preventDefault();
 
 // upstream(request, env): optional, forwards signed-in requests (e.g. to a container). Used when env.BILLRAG is bound.
 // verify(env, token, ip, host) checks a Turnstile token; now() is the clock (both replaceable in tests).
-// admin(request, env, user): the admin panel at /admin (admin.js).
-export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null, verify = verifyTurnstile, now = () => Date.now(), admin = null } = {}) {
+// app(request, env, user): handles everything but the login routes, with user = null when signed out (the admin Worker's panel).
+// loginTitle replaces the line under the wordmark on the sign-in page.
+export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null, verify = verifyTurnstile, now = () => Date.now(), app = null, loginTitle = null } = {}) {
   return async function fetch(request, realEnv) {
     let env = realEnv;
     const url = new URL(request.url);
     const { pathname } = url;
-    // The admin panel has its own host (ADMIN_HOST), which serves sign-in and the panel and nothing else: no chat page, API or container.
-    // Its session cookie is host-only, so a Bill Assistant session does not carry over. Unset = no panel anywhere.
-    const onAdminHost = !!env.ADMIN_HOST && url.hostname === env.ADMIN_HOST;
-    const adminPath = pathname === "/admin" || pathname.startsWith("/admin/");
-    if (onAdminHost) {
-      if (pathname === "/") return Response.redirect(new URL("/admin", url).toString(), 302);
-      if (!adminPath && !AUTH_PATHS.includes(pathname)) return new Response("Not found.", { status: 404 });
-    } else if (adminPath) return new Response("Not found.", { status: 404 });
     if (pathname === "/login" && request.method === "GET")
-      return new Response(onAdminHost ? LOGIN_PAGE.replace("Sign in to the Bill Assistant", "Sign in to the admin panel") : LOGIN_PAGE, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
+      return new Response(loginTitle ? LOGIN_PAGE.replace("Sign in to the Bill Assistant", loginTitle) : LOGIN_PAGE, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
     if (pathname === "/login/request" && request.method === "POST") return requestCode(env, request, sendMail);
     if (pathname === "/login/verify" && request.method === "POST") return verifyCode(env, request);
     if (pathname === "/logout" && request.method === "POST") {
@@ -222,7 +214,7 @@ export function createHandler({ sendMail = sendMailViaCloudflare, upstream = nul
     }
 
     const user = await currentUser(env, request);
-    if (adminPath) return admin ? admin(request, env, user) : new Response("Not found.", { status: 404 });
+    if (app) return app(request, env, user);
     // The panel's pause button: a visitor is treated as if PUBLIC_CHAT were off. Cached a minute, so this is not a KV call per request.
     if (!user && env.PUBLIC_CHAT === "on" && (await env.AUTH.get(PAUSE_KEY, { cacheTtl: 60 }))) env = { ...env, PUBLIC_CHAT: "off" };
     // Public (anonymous) lane: see public.js. Off unless PUBLIC_CHAT = "on" and everything it needs is configured.
