@@ -11,6 +11,7 @@
 
 import { getCookie, hex, json, readJson, safeEqual } from "./util.js";
 import { anonApi, publicMe, publicOn, publicStart, signupOn, verifyTurnstile } from "./public.js";
+import { historyApi } from "./history.js";
 import { memberAsk, memberLeft, takeCodeRequest } from "./members.js";
 import { privacyPage } from "./privacy.js";
 import { consentPage, hasConsent, saveConsent } from "./consent.js";
@@ -259,6 +260,11 @@ export function createHandler({ sendMail = sendMailViaCloudflare, upstream = nul
     // The panel's pause button: a visitor is treated as if PUBLIC_CHAT were off. Cached a minute, so this is not a KV call per request.
     if (!user && env.PUBLIC_CHAT === "on" && (await env.AUTH.get(PAUSE_KEY, { cacheTtl: 60 }))) env = { ...env, PUBLIC_CHAT: "off" };
     // Public (anonymous) lane: see public.js. Off unless PUBLIC_CHAT = "on" and everything it needs is configured.
+    // Saved chats of a signed-in account (history.js). Only with the consent step on, i.e. the services that share an account.
+    if (consent && (pathname === "/history" || pathname.startsWith("/history/"))) {
+      if (!user) return json({ error: "Not signed in." }, 401);
+      return historyApi(env, request, user, consent.service, now());
+    }
     const free = !!(user && consent && !allowed(env, user)); // a free account (open sign-up), not staff: counted per day and month (members.js)
     if (pathname === "/public/me" && request.method === "GET") {
       if (free && env.QUOTA) return json({ enabled: publicOn(env), user: "member", free: true, left: await memberLeft(env, consent.service, user, now()) }, 200, { "Cache-Control": "no-store" });

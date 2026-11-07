@@ -75,6 +75,12 @@
   .recent .when { color:var(--muted); white-space:nowrap; }
   .step { color:var(--muted); }
   .draft::after { content:" \25cf"; color:var(--sindoor); animation:blink 1s steps(2) infinite; }
+  #histPanel { position:fixed; top:56px; right:max(12px,env(safe-area-inset-right,0px)); width:min(420px,calc(100vw - 24px)); max-height:70vh; overflow:auto; z-index:5; padding:14px;
+    background:var(--lime); color:var(--ink); border:1px solid var(--line); border-radius:12px; box-shadow:0 8px 24px -8px color-mix(in srgb,var(--ink) 30%,transparent); }
+  #histPanel[hidden] { display:none; } #histPanel h3 { margin:0 0 4px; font-size:1rem; } #histPanel .hint { display:block; margin:0 0 10px; }
+  .hrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); } .hrow button.open { flex:1; min-width:0; text-align:left; background:none; border:0; padding:4px 0; font:inherit; color:inherit; cursor:pointer; }
+  .hrow .t { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .hrow small { color:var(--muted); }
+  .saved { padding:8px 12px; margin:0 0 10px; border:1px dashed var(--line); border-radius:8px; color:var(--muted); font-size:.92rem; }
   @keyframes blink { 50% { opacity:0; } }
   @media (prefers-reduced-motion: reduce) { .draft::after { animation:none; } }
 </style></head>
@@ -88,10 +94,12 @@
       <button type="button" id="speed-fast" data-v="fast" aria-pressed="false">Fast</button>
     </span>
     <label class="opt" id="searchOpt"><input type="checkbox" id="searchOnly"> Find clauses only</label>
+    <button class="link" id="hist" type="button" hidden aria-expanded="false">History</button>
     <button class="link" id="new" type="button">New chat</button>
     <button class="link" id="out" type="button" title="Sign out">Sign out</button>
   </div>
 </header>
+<div id="histPanel" hidden role="dialog" aria-label="Chat history"></div>
 <div id="log"></div>
 <div id="gate" class="gate" hidden><p id="gateMsg"></p><div id="ts"></div></div>
 <form id="f"><div class="pill">
@@ -114,10 +122,13 @@ document.getElementById('out').onclick = async () => {
   try { await fetch('/logout', {method: 'POST'}); } catch (e) {}
   location.href = '/login';
 };
+// --- chat history (src/history.js): signed-in accounts keep their chats for 30 days and can delete them. Saved after each answer. ---
+const H = {on: false, turns: [], viewing: false};
 let session = null;
 try { session = localStorage.getItem('billrag-session'); } catch (e) {}
 function newSession() {
-  session = Math.random().toString(36).slice(2);
+  session = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2, 6);   // 6-40 letters/digits: the history API's id rule
+  H.turns = []; H.viewing = false;
   try { localStorage.setItem('billrag-session', session); } catch (e) {}
 }
 if (!session) newSession();
@@ -135,7 +146,49 @@ function showStart() {
   log.appendChild(d); renderCoverage();
 }
 showStart();
-document.getElementById('new').onclick = () => { newSession(); showStart(); q.focus(); };
+document.getElementById('new').onclick = () => { const wasViewing = H.viewing; newSession(); showStart(); if (wasViewing) setAsking(true); histPanel.hidden = true; q.focus(); };
+const histPanel = document.getElementById('histPanel'), histBtn = document.getElementById('hist');
+async function saveChat() {
+  if (!H.on || H.viewing || !H.turns.length) return;
+  try {
+    const r = await fetch('/history/' + session, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({turns: H.turns})});
+    if (r.status === 409) H.full = true;   // 50 chats: the panel says so; the answer on screen is unaffected
+  } catch (e) {}
+}
+async function histCall(path, method) { const r = await fetch(path, {method: method || 'GET', cache: 'no-store'}); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }
+async function renderHistory() {
+  histPanel.textContent = '';
+  const h = document.createElement('h3'); h.textContent = 'Your chats'; histPanel.appendChild(h);
+  const hint = document.createElement('small'); hint.className = 'hint';
+  hint.textContent = 'Kept for 30 days after the last question, only for you. Delete any time.' + (H.full ? ' History is full (50 chats): delete one to save new chats.' : '');
+  histPanel.appendChild(hint);
+  let list;
+  try { list = await histCall('/history'); } catch (e) { hint.textContent = 'History could not be loaded.'; return; }
+  if (!list.chats.length) { const p = document.createElement('p'); p.textContent = 'No saved chats yet.'; histPanel.appendChild(p); return; }
+  list.chats.forEach((c) => {
+    const row = document.createElement('div'); row.className = 'hrow';
+    const open = document.createElement('button'); open.type = 'button'; open.className = 'open';
+    const t = document.createElement('span'); t.className = 't'; t.textContent = c.title || 'Chat';
+    const d = document.createElement('small'); d.textContent = new Date(c.updated).toLocaleDateString(undefined, {day: 'numeric', month: 'short'}) + ' · ' + c.n + (c.n === 1 ? ' question' : ' questions');
+    open.append(t, d); open.onclick = () => openChat(c.id);
+    const del = document.createElement('button'); del.type = 'button'; del.className = 'link'; del.textContent = 'Delete'; del.setAttribute('aria-label', 'Delete chat: ' + (c.title || ''));
+    del.onclick = async () => { try { await histCall('/history/' + c.id, 'DELETE'); H.full = false; if (c.id === session) { H.turns = []; H.viewing = false; } renderHistory(); } catch (e) { hint.textContent = 'Could not delete. Try again.'; } };
+    row.append(open, del); histPanel.appendChild(row);
+  });
+  const all = document.createElement('button'); all.type = 'button'; all.className = 'link'; all.textContent = 'Delete all history';
+  all.onclick = async () => { if (!confirm('Delete all your saved chats? This cannot be undone.')) return; try { await histCall('/history', 'DELETE'); H.turns = []; H.full = false; renderHistory(); } catch (e) { hint.textContent = 'Could not delete. Try again.'; } };
+  histPanel.appendChild(all);
+}
+async function openChat(id) {
+  let chat;
+  try { chat = await histCall('/history/' + id); } catch (e) { return; }
+  histPanel.hidden = true; histBtn.setAttribute('aria-expanded', 'false');
+  log.textContent = '';
+  const note = document.createElement('div'); note.className = 'saved'; note.textContent = 'A saved chat, read only. Start a new chat to ask something else.'; log.appendChild(note);
+  chat.turns.forEach((t) => { add(t.q, 'me'); const a = add('', 'bot'); a.innerHTML = renderMarkdown(t.a); a.classList.add('md'); });
+  H.viewing = true; setAsking(false); log.scrollTop = 0;
+}
+histBtn.onclick = () => { const open = histPanel.hidden; histPanel.hidden = !open; histBtn.setAttribute('aria-expanded', String(open)); if (open) renderHistory(); };
 function add(text, cls) {
   const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
   log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
@@ -363,6 +416,7 @@ function verify(sitekey) {
   try { me = await (await fetch('/public/me', {cache: 'no-store'})).json(); } catch (e) {}
   if (me.enabled && me.user === 'none') return verify(me.sitekey);   // not signed in, no cookie yet
   if (me.enabled && me.user === 'anon') showAnon(me.left);
+  if (me.user === 'member') { H.on = true; histBtn.hidden = false; }
   if (me.user === 'member' && me.free) { state.free = true; quotaEl.textContent = '· ' + tr('left', me.left); }
   warm();
 })();
@@ -385,6 +439,7 @@ document.getElementById('f').addEventListener('submit', async (e) => {
       if (answer === null) answer = (await post('/api/ask', body, wait)).answer;
       wait.classList.remove('draft', 'step');
       wait.innerHTML = renderMarkdown(answer); wait.classList.add('md');
+      H.turns.push({q: text, a: answer}); saveChat();
     }
   } catch (err) { wait.classList.remove('draft', 'step', 'md'); wait.textContent = 'Error: ' + err.message; wait.classList.add('err'); }
   clearTimeout(slow);

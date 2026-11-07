@@ -7,7 +7,7 @@
 import { counter, MAX_QUESTION, settle, signupOn } from "./public.js";
 export { signupOn };
 import { secondsToSlMidnight, slDay } from "./quota.js";
-import { hex, json, readJson } from "./util.js";
+import { emailId as who, json, readJson } from "./util.js";
 
 const num = (v, d) => (v !== undefined && v !== "" && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : d);
 export const memberLimits = (env) => ({
@@ -16,9 +16,6 @@ export const memberLimits = (env) => ({
   codesPerIp: num(env.SIGNUP_CODES_PER_IP, 20),
   codesPerAddress: num(env.SIGNUP_CODES_PER_ADDRESS, 5),
 });
-
-const enc = new TextEncoder();
-const who = async (email) => hex(await crypto.subtle.digest("SHA-256", enc.encode(email))).slice(0, 16);
 
 // Code requests: per network and per address per day. Counted before the mail is sent (a failed send gives them back, see auth.js).
 export async function takeCodeRequest(env, ip, email, nowMs) {
