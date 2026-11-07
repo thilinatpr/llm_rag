@@ -48,7 +48,7 @@ enabled = true
 
 [vars]
 ALLOWED_EMAILS = "thilinatpr@gmail.com"
-FROM_ADDRESS = "login@tripletrackr.com"
+FROM_ADDRESS = "login@citizenlk.com"
 CF_ACCOUNT_ID = "e81ea992523c4e14d3d1a89f10732576"
 CHAT_MODEL = "deepseek-flash"
 CHAT_BASE_URL = "https://api.deepseek.com"

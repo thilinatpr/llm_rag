@@ -120,7 +120,7 @@ Container: restores index.sqlite + vectors.npz from R2 (gov-rag/bills/) on start
 | Container app | `gov-rag-llm-billragcontainer`, id `a03f4f3c-2efb-4e69-a1b6-c408e6f9b8dc`; class `BillragContainer`, binding `BILLRAG` |
 | Container size | `instance_type = "basic"` (1/4 vCPU, 1 GiB, 4 GB disk), `max_instances = 1`, sleeps after 15 min idle (`sleepAfter`) |
 | R2 bucket | `gov-rag`: `bills/` (PDFs, `index.sqlite`, `vectors.npz`), `chatlogs/` (conversation logs), `bills/vectors.float32.npz` (old float32 backup, delete when no longer needed) |
-| Email | zone `tripletrackr.com`; sender `login@tripletrackr.com` via the Email Service REST API (`/accounts/<id>/email/sending/send`) - no per-recipient verification in Cloudflare; `ALLOWED_EMAILS` is the only allowlist |
+| Email | zone `citizenlk.com` (Email Sending enabled 2026-11-07; bounces and DKIM on `cf-bounce.citizenlk.com`, DMARC `p=reject`, no MX on the bare domain, so mail to it is not received); sender `login@citizenlk.com` (was `login@tripletrackr.com`, still enabled for rollback) via the Email Service REST API (`/accounts/<id>/email/sending/send`) - no per-recipient verification in Cloudflare; `ALLOWED_EMAILS` is the only allowlist |
 
 **Worker vars** (`wrangler.toml`): `ALLOWED_EMAILS`, `FROM_ADDRESS`, `CF_ACCOUNT_ID`, `R2_BUCKET`; optional `CHAT_MODEL`
 (default `@cf/openai/gpt-oss-120b`), `ORIGIN` (ignored when the container is bound), `TRANSLATE` (`off`|`script`|`ai`, passed to the container as

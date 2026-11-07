@@ -56,7 +56,7 @@ BALANCE_ALERT_USD = "5"
 # Comma-separated. This is the only allowlist: nothing needs verifying on the Cloudflare side.
 ALLOWED_EMAILS = "thilinatpr@gmail.com"
 # Any address on a domain onboarded under Cloudflare Email -> Email Sending.
-FROM_ADDRESS = "login@tripletrackr.com"
+FROM_ADDRESS = "login@citizenlk.com"
 # Cloudflare account id (not secret). The API token goes in the CF_EMAIL_TOKEN secret.
 CF_ACCOUNT_ID = "e81ea992523c4e14d3d1a89f10732576"
 # R2 bucket holding the built index (index.sqlite + vectors.npz); the container restores it on start.

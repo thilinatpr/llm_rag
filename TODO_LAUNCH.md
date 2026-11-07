@@ -59,7 +59,7 @@ Findings from the flagged Procurement answers:
 - [x] **M** Privacy page for each service at `/privacy`. Needs the owner: a contact address (`PRIVACY_CONTACT`) and the retention decision below, then its "how long" section changes.
 - [ ] **S** Set a retention period for chat logs (they hold private questions, with no expiry today)
 - [ ] **O** Get the terms and "not legal advice" wording checked, ideally by a lawyer
-- [ ] **O** Send login mail from citizenlk.com instead of `tripletrackr.com` (needs dashboard access or a wider token)
+- [x] **O** Send login mail from citizenlk.com instead of `tripletrackr.com` (domain enabled 2026-11-07, sender `login@citizenlk.com`)
 
 **Done when:** the officer's review finds no serious errors, or the ones it finds are fixed.
 

@@ -52,7 +52,7 @@ crons = ["23 * * * *"]
 [vars]
 # Who can sign in, which is who can use the panel. Empty = nobody.
 ALLOWED_EMAILS = "thilinatpr@gmail.com"
-FROM_ADDRESS = "login@tripletrackr.com"
+FROM_ADDRESS = "login@citizenlk.com"
 CF_ACCOUNT_ID = "e81ea992523c4e14d3d1a89f10732576"
 # Must match wrangler.toml at the repo root (test/admin.test.mjs checks): "Check now" runs the same credit check as Bill Assistant's cron.
 ALERT_EMAIL = "thilinatpr@gmail.com"
