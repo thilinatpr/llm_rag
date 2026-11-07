@@ -201,6 +201,7 @@ function refreshItems(s, add) {
     add({ tier: "you", ...src, since: check.at, title: `${plural(nPending, "new document")} on documents.gov.lk ${nPending === 1 ? "is" : "are"} not in the index`, detail: listTitles(pending),
       actions: [{ label: "Build the index", post: "/admin/refresh-build", primary: true, confirm: "Start a build on GitHub Actions? It uses a few cents of model calls and publishes nothing: you press Publish afterwards." },
         { label: "Ignore these", post: "/admin/refresh-ignore", confirm: "Stop reporting these documents?" }] });
+  if (check?.mailError) add({ tier: "watch", ...src, since: check.at, title: "The new-bills email could not be sent", detail: `${check.mailError} It is tried again at the next check.` });
   if (check?.error) add({ tier: "watch", ...src, since: check.failedAt, title: "Cannot check documents.gov.lk for new bills", detail: `${check.error} If the site was redeployed, set DOCS_ACTION_ID (see AGENTS.md "Refreshing the index").`, actions: [{ label: "Check now", post: "/admin/refresh-check" }] });
   else if (check?.noManifest) add({ tier: "watch", ...src, title: "R2 has no list of the documents in the live index yet", detail: "Run once from the main checkout: python scripts/upload_r2.py --manifest-only", actions: [{ label: "Check now", post: "/admin/refresh-check" }] });
   else if (!check) add({ tier: "watch", ...src, title: "New bills have not been checked for yet", detail: "The daily check runs at 08:10 Sri Lanka time.", actions: [{ label: "Check now", post: "/admin/refresh-check" }] });
@@ -507,7 +508,7 @@ const ACTIONS = {
     return { text: "Public questions are back on.", log: "Resumed public questions" };
   },
   "refresh-check": async (c) => {
-    const k = await detect(c.env, { now: c.now, fetchFn: c.fetchFn });
+    const k = await detect(c.env, { now: c.now, fetchFn: c.fetchFn, send: c.send });
     const n = Object.keys(k.pending || {}).length;
     const text = k.error ? `The check failed: ${k.error}` : k.noManifest ? "R2 has no list of indexed documents yet." : n ? `${plural(n, "document")} not in the index.` : "The index has every listed document.";
     return { text, log: `Checked documents.gov.lk: ${text}` };
@@ -549,14 +550,14 @@ async function action(c, request, name) {
 }
 
 // containerState(env, bindingName) -> the container's stored state, without starting it (worker.js gives the real one).
-export function createAdmin({ containerState = null, now = () => Date.now(), balanceOptions = {}, fetchFn = fetch } = {}) {
+export function createAdmin({ containerState = null, now = () => Date.now(), balanceOptions = {}, fetchFn = fetch, send = undefined } = {}) {
   return async function admin(request, env, user) {
     const u = new URL(request.url);
     if (!user) {
       if (request.method === "GET") return Response.redirect(new URL("/login", u).toString(), 302);
       return json({ error: "Not signed in." }, 401);
     }
-    const c = { env, user, url: u, now: now(), containerState, balanceOptions, fetchFn };
+    const c = { env, user, url: u, now: now(), containerState, balanceOptions, fetchFn, send };
     const path = u.pathname.replace(/\/+$/, "");
     if (request.method === "POST" && path.startsWith("/admin/")) return action(c, request, path.slice(7));
     if (request.method !== "GET") return json({ error: "Not found." }, 404);

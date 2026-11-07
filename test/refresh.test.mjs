@@ -237,3 +237,32 @@ test("the workflow file and the Worker agree on its name and modes", () => {
   assert.match(wf, /refresh_bills\.py --report report\.json/);
   assert.ok(!/refresh_bills\.py[^\n]*--publish/.test(wf.replace(/#[^\n]*/g, "")), "the build never publishes by itself");
 });
+
+test("new documents are emailed once; a failed send is retried; no address means no mail", async () => {
+  const sent = [];
+  const send = async (_env, m) => void sent.push(m);
+  const env = { AUTH: kv(), LOGS: bucket(manifest(["001/2026"])), NEW_BILLS_EMAIL: "me@example.com", FROM_ADDRESS: "login@x" };
+  await detect(env, { now: NOW, fetchFn: site().fetchFn, send });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, "me@example.com");
+  assert.match(sent[0].subject, /3 new bills or Acts/);
+  assert.match(sent[0].text, /002\/2026 {2}Bill number 2/);
+  assert.match(sent[0].text, /admin\.citizenlk\.com/);
+  await detect(env, { now: NOW + 864e5, fetchFn: site().fetchFn, send });
+  assert.equal(sent.length, 1, "told once");
+  await detect(env, { now: NOW + 2 * 864e5, fetchFn: site({ bills: [bill(1), bill(2), bill(3), bill(4)] }).fetchFn, send });
+  assert.equal(sent.length, 2);
+  assert.match(sent[1].subject, /^1 new bill or Act/, "only the new one");
+
+  const env2 = { AUTH: kv(), LOGS: bucket(manifest([])), NEW_BILLS_EMAIL: "me@example.com" };
+  const failing = async () => { throw new Error("mail down"); };
+  assert.match((await detect(env2, { now: NOW, fetchFn: site().fetchFn, send: failing })).mailError, /mail down/);
+  assert.equal(titlesOf(await snapshot({ ...env2, BILLS_KV: kv(), AUTH: env2.AUTH }, { now: NOW })).some((t) => /email could not be sent/.test(t)), true);
+  await detect(env2, { now: NOW + 1000, fetchFn: site().fetchFn, send });
+  assert.equal(sent.length, 3, "retried after the failure");
+
+  const env3 = { AUTH: kv(), LOGS: bucket(manifest([])) };
+  await detect(env3, { now: NOW, fetchFn: site().fetchFn, send });
+  assert.equal(sent.length, 3, "no address set");
+});
+const titlesOf = (s) => todoItems(s).map((x) => x.title);
