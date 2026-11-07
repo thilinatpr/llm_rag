@@ -159,6 +159,18 @@ test("To do: a build in progress, a built index (Publish / Discard), a failed bu
   assert.match((await titles((await panel({ state: { ...pendingState, run: { at: iso(NOW - 3600e3) } } })).snap))[0], /has not reported for too long/);
 });
 
+test("To do: base Acts nobody could fetch get their own red row, whatever the build state", async () => {
+  const missing = { "15/1979": { name: "Code of Criminal Procedure Act", cited_by: ["455/2024"], why: "not on documents.gov.lk" } };
+  const { snap } = await panel({ state: pendingState, status: { state: "failed", at: iso(NOW - 30e3), error: "checks failed", base_acts_missing: missing } });
+  const row = todoItems(snap).find((x) => /not in the index/.test(x.title));
+  assert.ok(row, "a row for the missing Act");
+  assert.equal(row.level, "red");
+  assert.match(row.title, /^1 Act that bills amend is not in the index/);
+  assert.match(row.detail, /Code of Criminal Procedure Act \(15\/1979\)/);
+  const none = await panel({ state: pendingState, status: { state: "failed", at: iso(NOW - 30e3), error: "x" } });
+  assert.ok(!todoItems(none.snap).some((x) => /not in the index/.test(x.title)));
+});
+
 test("To do: after a publish the stored list is out of date, so it asks for a new check instead of offering Build", async () => {
   const { snap } = await panel({ state: pendingState, status: { state: "published", at: iso(NOW - 60e3) } });
   assert.deepEqual(titles(snap), ["A new index was published: check that nothing is still missing"]);

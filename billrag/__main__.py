@@ -1,5 +1,6 @@
 """CLI: python -m billrag {ingest,ingest-acts,link-acts,stats,search,ask,chat,serve,embed,summarize}"""
 import argparse
+from pathlib import Path
 import os
 import sys
 import time
@@ -23,6 +24,16 @@ def main(argv=None):
     p.add_argument("--since-year", type=int, default=2024)
     p.add_argument("--workers", type=int, default=4)
     p.add_argument("--only-new", action="store_true", help="leave Acts already in the index alone")
+    p.add_argument("--keys", help="comma-separated N/YYYY: only these Acts, of any year (base Acts; see base-acts)")
+    p = sub.add_parser("base-acts", help="check that every Act named as amended by an indexed bill or Act is in the index (exit 1 if one cannot be found)")
+    p.add_argument("--listing", help="documents.gov.lk acts.json (default: data/acts/acts.json): which missing Acts can be fetched")
+    p.add_argument("--json", action="store_true", help="print the result as JSON")
+    p = sub.add_parser("add-base-act", help="index one Act from a PDF you found (English text), then run `embed`")
+    p.add_argument("--pdf", required=True)
+    p.add_argument("--no", type=int, required=True, help="Act number, e.g. 15")
+    p.add_argument("--year", type=int, required=True, help="e.g. 1979")
+    p.add_argument("--title", required=True, help='without "Act, No. ..": e.g. "Code of Criminal Procedure"')
+    p.add_argument("--date", help="certified date YYYY-MM-DD if the PDF's cover has none")
     sub.add_parser("link-acts", help="recompute bill -> Act links and the section-by-section comparison (no re-parse)")
     sub.add_parser("glossary", help="mine English <-> official Sinhala titles and defined terms from the linked sections")
     sub.add_parser("meta", help="(re)build bill metadata: families, newest instance, bill type, section cross-references")
@@ -93,8 +104,27 @@ def main(argv=None):
         return 0
     if a.cmd == "ingest-acts":
         from .ingest import ingest_acts
-        out = ingest_acts(s.data_dir.parent / "acts", s.db_path, a.since_year, a.workers, a.only_new)
+        keys = {k.strip() for k in a.keys.split(",") if k.strip()} if a.keys else None
+        out = ingest_acts(s.data_dir.parent / "acts", s.db_path, a.since_year, a.workers, a.only_new, keys)
         print({k: v for k, v in out.items() if k != "skipped"})
+        return 0
+    if a.cmd == "base-acts":
+        from . import baseacts
+        res = baseacts.check(store, baseacts.load_listing(a.listing or s.data_dir.parent / "acts" / "acts.json"))
+        if a.json:
+            import json
+            print(json.dumps(res, ensure_ascii=False, indent=1))
+        else:
+            print(f"{res['required']} Acts are named as amended by indexed bills/Acts: {res['held']} held, {len(res['fetchable'])} can be fetched, "
+                  f"{len(res['waived'])} waived, {len(res['unresolved'])} NOT FOUND")
+            for label, group in (("fetchable", "fetchable"), ("waived", "waived"), ("NOT FOUND", "unresolved")):
+                for k, v in sorted(res[group].items()):
+                    print(f"  [{label}] {baseacts.describe(k, v)}")
+        return 1 if res["unresolved"] else 0
+    if a.cmd == "add-base-act":
+        from .ingest import add_base_act
+        key, n = add_base_act(s.db_path, Path(a.pdf), a.no, a.year, a.title, a.date)
+        print(f"Indexed {key}: {n} sections. Now run `python -m billrag embed`, then publish.")
         return 0
     if a.cmd == "link-acts":
         from . import acts

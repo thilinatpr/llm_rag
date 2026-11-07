@@ -127,6 +127,8 @@ def main():
     ap.add_argument("--since-year", type=int, default=0)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--metadata-only", action="store_true")
+    ap.add_argument("--keys", help="acts only: comma-separated N/YYYY (e.g. 24/2017,15/1979): download just these, whatever their year "
+                    "(base Acts: the law an indexed bill or Act amends, see billrag/baseacts.py)")
     args = ap.parse_args()
 
     src = SOURCES[args.source]
@@ -140,9 +142,13 @@ def main():
         json.dumps(bills, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"{len(bills)} {args.source} -> {out / (src['file'] + '.json')}", file=sys.stderr)
 
+    wanted = {k.strip() for k in args.keys.split(",") if k.strip()} if args.keys else None
     jobs = []
     for b in bills:
-        if args.since_year and int((b.get("date") or "0")[:4] or 0) < args.since_year:
+        if wanted is not None:
+            if f"{b.get('actNo')}/{b.get('actSubNo')}" not in wanted:
+                continue
+        elif args.since_year and int((b.get("date") or "0")[:4] or 0) < args.since_year:
             continue
         for c in b.get("contents", []):
             if c["language"] in args.langs:
@@ -165,7 +171,7 @@ def main():
                 if done % 100 == 0:
                     print(f"  {done}/{len(jobs)}", file=sys.stderr)
 
-    with csv_path(out, src["file"], args.since_year).open("w", newline="", encoding="utf-8") as fh:
+    with (out / f"{src['file']}.keys.csv" if wanted is not None else csv_path(out, src["file"], args.since_year)).open("w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["bill_no", "date", "title", "language", "original_file",
                     "remote_file", "local_path", "status"])

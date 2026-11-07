@@ -172,15 +172,48 @@ def _work_act(args):
         return None, f"{type(e).__name__}: {e}"
 
 
-def ingest_acts(acts_dir: Path, db_path: Path, since_year=2024, workers=4, only_new=False):
+def _act_row(parsed, p, title, no, year, listed_date, prev):
+    from . import acts
+    c = parsed.cover
+    return {"key": acts.act_key(no, year), "bill_no": no, "year": year, "date": (c.get("certified") or listed_date[:10]) + "T00:00:00.000Z",
+            "title": f"{re.sub(r'\s+Act$', '', title.rstrip(' ,'))} Act, No. {no} of {year}", "title_norm": norm(re.sub(r"\s+Act$", "", title)), "kind": "Act",
+            "long_title": c.get("long_title"), "presented_by": None, "presented_on": None,
+            "gazette_date": c.get("gazette_date"), "printed_no": c.get("printed_no"), "n_pages": parsed.n_pages,
+            "n_sections": sum(1 for s in parsed.sections if s.kind == "section"), "pdf_path": str(p),
+            "summary": prev["summary"] if prev else None}
+
+
+def add_base_act(db_path: Path, pdf: Path, no, year, title, date=None):
+    """Index one Act from a PDF someone found (a base Act that documents.gov.lk does not have): ingest_acts for one file.
+    `date` = certified date YYYY-MM-DD, used when the cover has none. Run `embed` afterwards."""
+    from . import acts, meta
+    from . import titles as _titles
+    parsed = parse_act_pdf(str(pdf), title, no, year)
+    if not parsed.sections:
+        raise ValueError(f"no sections found in {pdf}: is it the English text of Act {no}/{year}?")
+    store = Store(db_path)
+    row = _act_row(parsed, pdf, title, no, year, date or f"{year}-01-01", store.bill(acts.act_key(no, year)))
+    store.replace_bill(row, build_chunks(row, parsed))
+    store.commit()
+    meta.build(store)
+    _titles.build(store)
+    acts.build(store)
+    return row["key"], row["n_sections"]
+
+
+def ingest_acts(acts_dir: Path, db_path: Path, since_year=2024, workers=4, only_new=False, keys=None):
     """Add certified Acts (date >= since_year) from data/acts (scripts/scrape_bills.py --source acts) to the index, then link them to
-    their bills and link their official Sinhala text. Existing chunks keep their ids, so `embed` only has to embed the new text."""
+    their bills and link their official Sinhala text. Existing chunks keep their ids, so `embed` only has to embed the new text.
+    keys = {"24/2017", ...}: only these Acts, of any year (base Acts, see baseacts.py); since_year is then ignored."""
     from . import acts, meta
     listing = json.loads((acts_dir / "acts.json").read_text(encoding="utf-8"))
     jobs, skipped = [], []
     known = {r[0] for r in Store(db_path).db.execute("SELECT key FROM bills WHERE kind='Act'")} if only_new else set()
     for a in sorted(listing, key=lambda x: x.get("date") or "", reverse=True):
-        if int(a.get("actSubNo") or 0) < since_year:
+        if keys is not None:
+            if f"{a.get('actNo')}/{a.get('actSubNo')}" not in keys:
+                continue
+        elif int(a.get("actSubNo") or 0) < since_year:
             continue
         if a.get("actNo") and acts.act_key(a["actNo"], a["actSubNo"]) in known:
             continue
@@ -201,15 +234,9 @@ def ingest_acts(acts_dir: Path, db_path: Path, since_year=2024, workers=4, only_
             if err or not parsed or not parsed.sections:
                 skipped.append((a["actNoText"], err or "no sections found"))
                 continue
-            no, year, c = a["actNo"], a["actSubNo"], parsed.cover
+            no, year = a["actNo"], a["actSubNo"]
             key = acts.act_key(no, year)
-            prev = store.bill(key)
-            row = {"key": key, "bill_no": no, "year": year, "date": (c.get("certified") or a["date"][:10]) + "T00:00:00.000Z",
-                   "title": f"{title.rstrip(' ,')} Act, No. {no} of {year}", "title_norm": norm(title), "kind": "Act",
-                   "long_title": c.get("long_title"), "presented_by": None, "presented_on": None,
-                   "gazette_date": c.get("gazette_date"), "printed_no": c.get("printed_no"), "n_pages": parsed.n_pages,
-                   "n_sections": sum(1 for s in parsed.sections if s.kind == "section"), "pdf_path": str(p),
-                   "summary": prev["summary"] if prev else None}
+            row = _act_row(parsed, p, title, no, year, a["date"], store.bill(key))
             store.replace_bill(row, build_chunks(row, parsed))
             si = english_pdf_named(acts_dir, a["date"], a["actNoText"], "SINHALA")
             link_si(store, key, si)

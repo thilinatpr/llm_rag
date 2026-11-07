@@ -156,7 +156,9 @@ def build(store) -> dict:
     db.execute("DELETE FROM act_links")
     db.execute("DELETE FROM act_sections")
     rows = [dict(r) for r in db.execute("SELECT key, kind, date, title_norm FROM bills ORDER BY date")]
-    acts_ = [r for r in rows if r["kind"] == "Act"]
+    # Base Acts (older than ACT_SINCE, held so that an amending bill's target is in the index: baseacts.py) are never the end of a bill's
+    # journey here: a bill amending the Inland Revenue Act would otherwise be matched to the 2017 Act it amends.
+    acts_ = [r for r in rows if r["kind"] == "Act" and int(r["key"].rsplit("/", 1)[1]) >= ACT_SINCE]
     if not acts_:
         db.commit()
         return {"acts": 0, "links": 0}

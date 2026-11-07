@@ -193,6 +193,16 @@ function refreshItems(s, add) {
   else if (phase === "failed")
     add({ tier: "you", level: "red", ...src, since: status.at, title: "The last index build stopped; nothing was published", detail: squeezeText(status.error || (status.problems || []).join("; ")) || "See the run for the output.",
       actions: [{ label: "Build again", post: "/admin/refresh-build", primary: true }, ...(run ? [run] : [])] });
+  // Base Acts: the law an indexed bill or Act amends must be in the index too (billrag/baseacts.py). The ones documents.gov.lk does not have
+  // cannot be fetched, so someone has to find the text; until then a build cannot be published.
+  const baseMissing = Object.entries(status?.base_acts_missing || {});
+  if (baseMissing.length && phase !== "running" && phase !== "starting") {
+    const names = baseMissing.map(([id, v]) => `${v.name || "?"} (${id})`);
+    add({ tier: "you", level: "red", ...src, since: status.at,
+      title: `${baseMissing.length} Act${baseMissing.length === 1 ? "" : "s"} that bills amend ${baseMissing.length === 1 ? "is" : "are"} not in the index, and cannot be fetched`,
+      detail: `${names.slice(0, 12).join("; ")}${names.length > 12 ? `; and ${names.length - 12} more` : ""}. Find the English text and add it (python -m billrag add-base-act), or record why not in evals/base_acts_waived.json. The index is not published while any is missing.`,
+      actions: run ? [run] : [] });
+  }
   // A publish (or a build that found nothing to index) changes what "pending" means: the stored list is from before it.
   const outdated = phase === "idle" && ["published", "nothing_new"].includes(status?.state) && Date.parse(status.at) > Date.parse(check?.at || 0);
   if (outdated)
