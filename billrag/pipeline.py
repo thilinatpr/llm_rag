@@ -58,7 +58,7 @@ FOCUS_NOTE = ("\n\nNOTE: the question refers to a bill without naming it. The be
 OVERVIEW_Q = re.compile(r"\b(?:key|main|major|important|principal)\s+(?:provisions?|points?|features?|clauses?|changes?)\b|"
                         r"\b(?:summari[sz]e|summary|overview|outline|gist|explain|describe|what\s+(?:does|is)\b.{0,40}\b(?:do|about))\b|"
                         r"\btell\s+me\s+about\b", re.I)
-_TITLE_STOP = {"act", "bill", "amendment", "the", "of", "and", "for", "to", "in", "no", "a", "gs"}
+_TITLE_STOP = {"act", "bill", "amendment", "the", "of", "and", "for", "to", "in", "no", "a", "gs", "sri", "lanka"}
 LEAK = re.compile(r"<\|(?:call|start|end|channel|message|return|constrain)\|>|\bto=functions\b")
 
 EVAL_PROMPT = """You are a strict evidence grader for a question-answering system over Sri Lankan bills.
@@ -181,6 +181,7 @@ class Result:
     official: list = field(default_factory=list)  # [(bill, section)] whose official local-language text informed the answer
     glossary_hints: list = field(default_factory=list)  # "local = English" names given to the question -> English step
     glossary_terms: list = field(default_factory=list)  # English terms whose official local form the answer prompt got
+    clarify: bool = False  # the answer asks which bill was meant (nothing is kept in the chat history for it)
     added_overview: str = ""  # bill/Act whose overview was added to the evidence for a "key provisions / summarise" question
     added_sections: list = field(default_factory=list)  # sections added to bill-level-only evidence (bill_sections)
     followed: list = field(default_factory=list)  # sections added because a kept clause refers to them (follow_section_refs)
@@ -569,10 +570,10 @@ class Pipeline:
             self.on_event("bill_sections", {"bill": top.key, "sections": [f"{e.key} \u00a7{e.section}" for e in out]})
         return out
 
-    def titled_bill(self, question, evidence):
-        """The one bill/Act in the evidence whose title the question names in words ("summarise port city economic commision act"):
+    def titled_bills(self, question, evidence):
+        """The bills/Acts in the evidence whose title the question names in words ("summarise port city economic commision act"):
         every distinctive title word must appear in the question (a close spelling counts), at least two words or one of 6+ letters.
-        None when no title, or two different titles, match."""
+        Returns one key per title (the newest), those with the most matching words only; one entry = named, several = ambiguous."""
         import difflib
         qw = set(re.findall(r"[a-z]{3,}", question.lower()))
         best = {}
@@ -585,13 +586,19 @@ class Pipeline:
             if not words or (len(words) < 2 and len(words[0]) < 6):
                 continue
             if all(w in qw or difflib.get_close_matches(w, qw, 1, 0.85) for w in words):
-                best[k] = (len(words), b["date"], b["title_norm"] if "title_norm" in b else title)
+                tn = b.get("title_norm") or title
+                if tn not in best or b["date"] > best[tn][2]:
+                    best[tn] = (k, len(words), b["date"], b["title"])
         if not best:
-            return None
-        top = max(best, key=lambda k: best[k][:2])
-        if len({v[0] for v in best.values()}) > 1 and any(v[0] == best[top][0] and v[2] != best[top][2] for v in best.values()):
-            return None
-        return top
+            return []
+        top = max(v[1] for v in best.values())
+        return sorted((v for v in best.values() if v[1] == top), key=lambda v: v[2], reverse=True)
+
+    def which_of(self, cands):
+        """A reply that asks which bill was meant, with the candidates (no model call)."""
+        lines = [f"- {re.sub(r' - (?:Bill|GS)$', '', t)} ({k}, {d[:10]})" for k, _n, d, t in cands[:5]]
+        return ("Your question could mean more than one bill. Which did you mean?\n\n" + "\n".join(lines) +
+                "\n\nReply with the bill number (for example, the one in brackets) or the full title.")
 
     def focus_bill(self, question, evidence, keys=None):
         """For a question that says "this new bill" without naming one: the bill (all its GS/Bill versions together) whose
@@ -839,7 +846,13 @@ class Pipeline:
             res.seconds["bill_sections"] = time.time() - t
         ov_key = keys[0] if keys and len(keys) == 1 else None
         if ov_key is None and not keys and OVERVIEW_Q.search(q) and res.evidence:
-            ov_key = self.titled_bill(q, res.evidence)  # named by title, not number
+            named = self.titled_bills(q, res.evidence)  # named by title, not number
+            if len(named) > 1:  # two different titles fit: ask instead of guessing
+                res.answer, res.enough, res.path = self.which_of(named), True, "en"
+                res.evidence, res.clarify = [], True
+                self.on_event("resolve", {"reply": True, "clarify": True, "candidates": [v[0] for v in named]})
+                return res
+            ov_key = named[0][0] if named else None
         if ov_key and OVERVIEW_Q.search(q) and not any(e.chunk["kind"] == "overview" and e.key == ov_key for e in res.evidence):
             ov = self._act_overview_evidence(ov_key, 3)
             if ov:

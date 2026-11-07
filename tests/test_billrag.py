@@ -495,11 +495,23 @@ def test_overview_question_on_named_bill_adds_overview(tmp_path):
     assert r.added_overview == "086/2026" and r.enough
     assert r.evidence[0].chunk["kind"] == "overview"
     named = Pipeline(st, Retriever(st), ScriptLLM(enough=False)).ask("Summarise the Trusts Amendment bill")
-    assert named.added_overview == "086/2026"  # named by title, no number
+    assert named.added_overview == "086/2026" and not named.clarify  # named by title, no number
     vague = Pipeline(st, Retriever(st), ScriptLLM(enough=False)).ask("Summarise the amendment bill")
     assert vague.added_overview == ""  # one generic word is not a title
     other = Pipeline(st, Retriever(st), ScriptLLM()).ask("How many days does bill 086/2026 allow?")
     assert other.added_overview == ""  # a specific question is left to the ranked clauses
+
+
+def test_ambiguous_title_asks_which_bill(tmp_path):
+    st = make_store(tmp_path, with_gs=False)
+    llm = ScriptLLM(enough=False)
+    p = Pipeline(st, Retriever(st), llm, on_event=lambda n, d: None)
+    p.titled_bills = lambda q, ev: [("086/2026", 1, "2026-10-21", "Trusts (Amendment) - Bill"),
+                                    ("081/2026", 1, "2026-10-14", "Trusts (Special) - GS")]
+    r = p.ask("Summarise the trusts bill")
+    assert r.clarify and "Which did you mean?" in r.answer and "(086/2026, 2026-10-21)" in r.answer
+    assert "Trusts (Special) (081/2026" in r.answer and r.evidence == []
+    assert len(llm.calls) == 1 and not p.history  # only the grading call; nothing kept for the next turn
 
 
 def test_pipeline_happy_path_two_llm_calls(tmp_path):
