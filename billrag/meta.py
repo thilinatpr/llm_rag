@@ -17,6 +17,7 @@ amended_sections  bill_key, section_no -> action (amended | repealed | replaced 
 """
 import json
 import re
+import unicodedata
 from datetime import datetime
 
 from .store import Store
@@ -114,7 +115,7 @@ _NUM = r"\d{1,3}(?:[A-Z]{1,3}\b|[a-z]{1,2}\b|\s[A-Za-z]{1,2}(?=\s+(?:of|to|and|o
 _NUMS = rf"{_NUM}(?:\s*(?:,|and|to|-|–)\s*{_NUM})*"
 _SEC = r"(?:[Ss]e\s?c\s?t\s?i\s?o\s?ns?|Articles?)"  # "Se ction", "Secti on": a word split by the PDF; Articles of the Constitution
 _UNIT = (rf"(?:{_SEC}\s+{_NUMS}|(?:the\s+)?(?:[A-Z][a-z]+\s+)?Schedules?(?:\s+[IVX]+\b)?|(?:the\s+)?(?:Part|PART|Chapter|CHAPTER)\s+[IVXLC]+[A-Z]?|"
-         r"(?:the\s+)?(?:Preamble|long\s+title))"
+         r"(?:the\s+)?(?:\w+\s+paragraph\s+(?:of|to)\s+the\s+)?(?:Preamble|long\s+title))"
          r"(?:\s*\([^)]{0,80}\))?")  # "Chapter LXVI (sections 801 to 833 B both inclusive)"
 _OF = r"\s+(?:to|of)\s+(?:the\s+)?(?P<act>principal\s+enactment|.{3,250}?)\s+(?:is|are)\s+(?:hereby\s+)?(?:further\s+)?"
 AMEND_OPEN = re.compile(rf"^(?:The\s+)?(?P<unit>{_UNIT}){_OF}(?P<verb>amended|repealed)", re.S)
@@ -123,16 +124,37 @@ INSERT_OPEN = re.compile(r"^The\s+following\s+(?:new\s+)?(?P<what>sections?|Arti
                          r"(?:is|are)\s+(?:hereby\s+)?inserted\b(?P<rest>.{0,400})", re.S)
 # "The principal enactment is hereby amended by the substitution for the words ...", "In the principal enactment ... there shall
 # be substituted", "The sections of the principal enactment specified in Column I of the Schedule hereto are hereby amended"
-WHOLE_OPEN = re.compile(r"^(?:The\s+(?P<a>principal\s+enactment|[^.]{3,120}?(?:Act|Ordinance|Code|Law),?\s+No\.\s*\d+\s+of\s+\d{4}"
-                        r"(?:\s*\([^)]{0,120}\))?)\s+is\s+(?:hereby\s+)?amended|"
-                        r"(?:\(1\)\s*)?In\s+the\s+(?P<b>principal\s+enactment)\b.{0,200}?\bshall\s+be\s+substituted)", re.S)
+_NAMED_ACT = (r"(?:principal\s+enactment|[^.]{0,120}?(?:Act|Ordinance|Code|Law|"
+              r"Constitution(?:\s+of\s+the\s+Democratic\s+Socialist\s+Republic\s+of\s+Sri\s+Lanka)?)(?:,?\s+No\.\s*\d+\s+of\s+\d{4})?"
+              r"(?:\s*\([^)]{0,120}\))*)")
+# "The Civil Procedure Code (Chapter 101) is hereby amended by the repeal of section 205 thereof", "The Constitution ... is hereby
+# amended by- (a) amendment of Article 155G": a named Act amended at one provision
+NAMED_SEC_OPEN = re.compile(rf"^(?:\(1\)\s*)?(?:The\s+)?(?P<act>{_NAMED_ACT})\s+is\s+(?:hereby\s+)?amended\s+(?:in\s+|by\s*[-–:]?\s*(?:\(\w\)\s*)?"
+                            rf"(?:the\s+)?(?:repeal\s+of|amendment\s+of|insertion\s+.{{0,80}}?(?:after|before|in))\s+)"
+                            rf"(?P<unit>{_SEC}\s+{_NUMS})", re.S)
+WHOLE_OPEN = re.compile(rf"^(?:\(1\)\s*)?(?:The\s+(?P<a>{_NAMED_ACT})\s+is\s+(?:hereby\s+)?amended|"
+                        r"In\s+the\s+(?P<b>[^.]{0,160}?principal\s+enactment)\b.{0,200}?\bshall\s+be\s+substituted)", re.S)
+# "The heading appearing immediately before section 2 of Part I of the principal enactment is hereby repealed ...",
+# "The heading of PART II, of the principal enactment ...", "The sub-heading appearing ..."
+HEADING_OPEN = re.compile(r"^The\s+(?P<h>(?:sub-?)?heading)\s+(?P<where>.{0,120}?)\s*,?\s+(?:of|to)\s+the\s+principal\s+enactment\s+is\s+"
+                          r"(?:hereby\s+)?(?P<verb>repealed|amended)", re.S)
+# "The Capital Expenditure Column ... under the Head No. 249 of the Second Schedule to the principal enactment is hereby amended"
+SCHEDULE_PART_OPEN = re.compile(r"^The\s+.{3,220}?\b(?:of|in)\s+the\s+(?P<s>(?:[A-Z][a-z]+\s+)?Schedule(?:\s+[IVX]+)?)\s+(?:to|of)\s+the\s+"
+                                r"principal\s+enactment\s+is\s+(?:hereby\s+)?amended", re.S)
+PREVAIL = re.compile(r"^In\s+the\s+event\s+of\s+any\s+inconsistency\b.{0,120}?\bshall\s+prevail\s*\.?", re.S)
+_TYPOS = [(re.compile(r"\bherby\b"), "hereby"), (re.compile(r"\b(amend|repeal|insert)-\s+ed\b"), r"\1ed"),
+          (re.compile(r"\bAritcle\b"), "Article"), (re.compile(r"\bspeci\s?fi\s?ed\b"), "specified")]  # "speci ﬁ ed" after NFKC
+# clauses that change nothing although they talk about amendments: savings and transitional provisions
+NOT_AN_AMENDMENT = re.compile(r"^(?:\(1\)\s*)?(?:It\s+is\s+hereby\s+declared|Notwithstanding|With\s+effect\s+from|Where\b|Any\b|Nothing\b|"
+                              r"The\s+provisions\s+of\b.{0,200}?\bshall\b)", re.S | re.I)
 LISTED_OPEN = re.compile(r"^The\s+sections\s+of\s+the\s+principal\s+enactment\s+specified\s+in\s+.{0,80}?Schedule.{0,40}?"
                          r"(?:is|are)\s+(?:hereby\s+)?amended", re.S)
 EFFECT_AS = re.compile(rf"have\s+effect\s+as\s+(?P<t>(?:{_SEC}\s+{_NUMS}|(?:CHAPTER|Chapter|PART|Part)\s+[IVXLC]+[A-Z]?|"
                        rf"(?:the\s+)?[A-Z][a-z]+\s+Schedule))(?:\s+(?:of|to)\s+(?:that|the)\s+(?P<act>[^.;:]{{0,200}}?))?"
-                       r"(?:[:;.\-–—]|\s+of\s+that|\s*$)", re.S)
-INSERT_AFTER = re.compile(rf"(?:after|before|above|below)\s+(?P<t>{_SEC}\s+{_NUM}|(?:CHAPTER|Chapter|PART|Part)\s+[IVXLC]+[A-Z]?)\s+"
-                          r"(?:of|to)\s+(?:the\s+)?(?P<act>principal\s+enactment|[^,]{3,200}?)\s*(?:,|and\b)")
+                       r"(?:[:;.\-–—]|\s*\(|\s+of\s+that|\s*$)", re.S)  # "Part IVD (Sections 23kk, 23ll)"
+INSERT_AFTER = re.compile(rf"(?:after|before|above|below)\s+(?:newly\s+inserted\s+)?(?P<t>{_SEC}\s+{_NUM}|(?:CHAPTER|Chapter|PART|Part)\s+[IVXLC]+[A-Z]?)"
+                          r"(?:\s*\([^)]{0,60}\))?\s+"  # "section 130 (SHARE REGISTER)"
+                          r"(?:of|to|in)\s+(?:the\s+)?(?P<act>principal\s+enactment|[^,:]{3,200}?)\s*(?:,|:|and\b|\s[-–])")
 _LEAD = re.compile(r"^\s*(?:\d{1,3}\s*\.\s*)?")
 
 
@@ -152,14 +174,17 @@ def _act_name(raw):
 def _tidy(t):
     t = re.sub(r"\s+", " ", t).strip()
     t = re.sub(r"^the\s+", "", t)
-    t = re.sub(r"^Se\s?ction", "Section", t)
+    t = re.sub(r"^S\s?e\s?c\s?t\s?i\s?o\s?n(s?)\b", r"Section\1", t)  # "Se ction", "Secti on"
     t = re.sub(r"(\d)\s?(?!(?:and|to|of|or)\b)([A-Za-z]{1,3})\b", lambda m: m.group(1) + m.group(2).upper(), t)  # "16 A", "97a" -> 16A, 97A
     return t[0].lower() + t[1:] if t.lower().startswith("section") else t
 
 
 def amendment_of(text):
     """(action, target, act) for one clause of an amending instrument, or None if its opening words change nothing."""
-    t = _LEAD.sub("", re.sub(r"\s+", " ", text or "")).strip()[:700]
+    t = _LEAD.sub("", re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text or ""))).strip()[:700]
+    for pat, rep in _TYPOS:  # misspellings printed in the bills themselves, and words split by the PDF
+        t = pat.sub(rep, t)
+    t = re.sub(r"^\(1\)\s*(?=(?:The\s+)?(?:[Ss]ections?|Articles?)\s)", "", t)  # "(1) Section 1 of the ... Act ... is hereby amended"
     m = AMEND_OPEN.match(t)
     if m:
         verb = m.group("verb")
@@ -179,11 +204,36 @@ def amendment_of(text):
         if a:
             where = re.search(r"\b(after|before|above|below)\b", rest).group(1)
             return "inserted", f"new {m.group('what').lower()} {where} {_tidy(a.group('t'))}", _act_name(a.group("act"))
+    m = NAMED_SEC_OPEN.match(t)
+    if m:
+        verb = "repealed" if re.search(r"by\s*[-–:]?\s*(?:\(\w\)\s*)?(?:the\s+)?repeal\s+of", t[:m.start("unit")]) else "amended"
+        if verb == "repealed" and re.search(r"substitut", t[m.end():m.end() + 200]):
+            verb = "replaced"
+        return verb, _tidy(m.group("unit")), _act_name(m.group("act"))
+    m = HEADING_OPEN.match(t)
+    if m:
+        where = re.sub(r"^(?:appearing\s+)?", "", m.group("where").strip()).strip(" ,")
+        action = "replaced" if m.group("verb") == "repealed" and re.search(r"substitut", t[m.end():m.end() + 200]) else m.group("verb")
+        return action, f"{m.group('h').lower()} {where}".strip(), None
+    m = SCHEDULE_PART_OPEN.match(t)
+    if m:
+        return "amended", _tidy(m.group("s")), None
     if WHOLE_OPEN.match(t):
         return "amended", "words throughout the Act", None
     if LISTED_OPEN.match(t):
         return "amended", "the sections listed in its Schedule", None
     return None
+
+
+def margin_targets(text):
+    """Sections named in the margin notes that the PDF parser appends to a bill's last clause ("... the Sinhala text shall prevail.
+    Amendment of section 478A of the principal enactment. ..."): {"478A", ...}. Empty unless the clause is that last clause."""
+    t = re.sub(r"\s+", " ", _LEAD.sub("", text or "")).strip()
+    m = PREVAIL.match(t)
+    if not m:
+        return None
+    return {re.sub(r"\s", "", x).upper() for x in
+            re.findall(rf"(?:Amendment|Repeal|Insertion|Replacement)\s+of\s+(?:new\s+)?{_SEC}\s+(\d{{1,3}}(?:\s?[A-Z]{{1,3}}\b|[a-z]{{1,2}}\b)?)", t[m.end():])}
 
 
 def build_amended(store: Store, keys) -> int:

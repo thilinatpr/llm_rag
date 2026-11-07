@@ -572,12 +572,22 @@ class Pipeline:
         for action in ("amended", "inserted", "replaced", "repealed"):
             if groups.get(action):
                 lines.append(f"{names[action]}: " + "; ".join(groups[action]) + ".")
+        have = {re.sub(r"\s", "", x).upper() for r in rows for x in re.findall(r"\d{1,3}\s?[A-Za-z]{0,3}\b", r["target"])}
         rest, unread = [], []
         for no in sorted(secs):
             if no in by_no:
                 continue
             opening = re.sub(r"\s+", " ", meta._LEAD.sub("", secs[no])).strip()
-            if re.search(r"\b(?:amend\w*|repeal\w*|insert\w*|substitut\w*)\b", opening[:200], re.I) and "may be cited" not in opening[:80]:
+            margin = meta.margin_targets(secs[no])
+            if margin is not None:  # the "Sinhala text shall prevail" clause, with the last page's margin notes appended by the parser
+                missing = sorted(margin - have)
+                if missing:
+                    unread.append(f"§{no} (its margin notes name section(s) {', '.join(missing)}, which no clause above was read as amending)")
+                else:
+                    rest.append(f"§{no}")
+                continue
+            if (re.search(r"\b(?:amend\w*|repeal\w*|insert\w*|substitut\w*)\b", opening[:200], re.I) and "may be cited" not in opening[:80]
+                    and not meta.NOT_AN_AMENDMENT.match(opening)):
                 unread.append(f"§{no} (\"{opening[:90]}...\")")
             else:
                 rest.append(f"§{no}")

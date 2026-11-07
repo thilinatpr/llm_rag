@@ -2009,6 +2009,33 @@ def test_amendment_of_reads_only_the_opening_words():
     # a clause that only MENTIONS a section changes nothing
     assert amendment_of("(1) The Commissioner-General shall write off interest under section 157 of the principal enactment") is None
     assert amendment_of("This Act may be cited as the Tax (Amendment) Act, No. of 2026.") is None
+    # wordings and misprints seen in 2020-2026 bills
+    assert amendment_of("Secti on 23w of the principal enactment is hereby amended") == ("amended", "section 23W", None)
+    assert amendment_of("Section 54B of the principal enactment is herby amended by") == ("amended", "section 54B", None)
+    assert amendment_of("Section 26 of the principal enactment is hereby amend- ed by the insertion") == ("amended", "section 26", None)
+    assert amendment_of("(1) Section 1 of the Personal Data Protection Act, No. 9 of 2022 (hereinafter referred to as the "
+                        "“principal enactment”) is hereby amended as follows") == ("amended", "section 1", None)
+    assert amendment_of("The Civil Procedure Code (Chapter 101) is hereby amended by the repeal of section 205 thereof and substitution "
+                        "therefor of the following section") == ("replaced", "section 205", "Civil Procedure Code (Chapter 101)")
+    assert amendment_of("The Constitution of the Democratic Socialist Republic of Sri Lanka (hereinafter referred to as the "
+                        "“Constitution”) is hereby amended by- (a) amendment of Article 155G by the")[:2] == ("amended", "Article 155G")
+    assert amendment_of("The heading appearing immediately before section 2 of Part I of the principal enactment is hereby repealed "
+                        "and the following heading is substituted therefor") == \
+        ("replaced", "heading immediately before section 2 of Part I", None)
+    assert amendment_of("The following new division is hereby inserted immediately after section 130 (SHARE REGISTER) of the principal "
+                        "enactment and shall have effect as a new division of that enactment") == \
+        ("inserted", "new division after section 130", None)
+    assert amendment_of("The sections of the principal enactment speci ﬁ ed in Column I of the Schedule hereto, are hereby amended")[1] \
+        == "the sections listed in its Schedule"
+    assert amendment_of("It is hereby declared that the amendments made to sections 7, 13, and 20 a shall not apply") is None
+
+
+def test_margin_notes_on_the_last_clause_are_not_flagged_as_unread():
+    from billrag.meta import margin_targets
+    last = ("In the event of any inconsistency between the Sinhala and Tamil texts of this Act, the Sinhala text shall prevail. "
+            "Amendment of section 478A of the principal enactment. Amendment of section 485 of the principal enactment.")
+    assert margin_targets(last) == {"478A", "485"}
+    assert margin_targets("Section 8 of the principal enactment is hereby amended") is None
 
 
 def _amending_store(tmp_path):
@@ -2071,7 +2098,8 @@ def test_list_question_gets_the_complete_list_and_its_citations_verify(tmp_path)
     assert "7 clauses, of which 4 change the Tax Act, No. 1 of 2017" in text
     assert "section 8 (§2)" in text and "section 52A (§3)" in text and "section 16A (§4)" in text
     assert "157" not in text.split("Clauses that do not")[0]         # mentioned, not amended
-    assert "§1, §6" in text and "could not be read automatically" in text and "§7" in text
+    assert "§1, §6" in text and "could not be read automatically" in text
+    assert "§7 (its margin notes name section(s) 90" in text     # a margin note names an amendment no clause was read as making
     assert LIST_NOTE.strip()[:40] in llm.calls[-1]
     assert r.warnings == []                                          # §4 is cited from the list: not an unsupported citation
     assert any("list of amending clauses" in x for x in r.sources())
