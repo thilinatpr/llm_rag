@@ -88,6 +88,6 @@ export function createProcurementHandler(getStub) {
     const internal = new URL(request.url).pathname;
     if (internal === "/internal/rerank") return rerank(request, env);
     if (internal === "/internal/chat") return chat(request, env);
-    return createHandler({ privacy: "procurement", upstream: (req, e) => upstream(req, e, ctx) })(request, env);
+    return createHandler({ privacy: "procurement", cookie: "clk_session", consent: { service: "procurement", name: "Procurement Rules" }, upstream: (req, e) => upstream(req, e, ctx) })(request, env);
   };
 }

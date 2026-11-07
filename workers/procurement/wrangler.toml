@@ -14,10 +14,12 @@ directory = "./public"
 binding = "ASSETS"
 run_worker_first = true
 
-# Its own namespace: a Bill Assistant session is not a Procurement Rules session.
+# One account for every citizenlk service: the SAME namespace as Bill Assistant (gov-rag-llm-auth), so a session, a sign-in code and the
+# consent record made on either are valid on both. The session cookie is domain-wide (COOKIE_DOMAIN). Its old own namespace
+# (66d74e46b9844e81877f70856514fba7) is no longer used; sessions in it end here, so people sign in once more.
 [[kv_namespaces]]
 binding = "AUTH"
-id = "66d74e46b9844e81877f70856514fba7"
+id = "a44e7e8cc8f0444ba865ea162820193d"
 
 # Question/answer logs (see handler.js logAsk). Same bucket as Bill Assistant, own prefix.
 [[r2_buckets]]
@@ -46,7 +48,22 @@ new_sqlite_classes = ["ProcurementContainer"]
 [observability]
 enabled = true
 
+# The counters live in Bill Assistant's Durable Object (one place for the day and month counts); used once OPEN_SIGNUP is "on" here.
+[[durable_objects.bindings]]
+name = "QUOTA"
+class_name = "QuotaCounter"
+script_name = "gov-rag-llm"
+
 [vars]
+# Open to every registered account (2026-11-09): anyone who already has a citizenlk account (made on Bill Assistant) can sign in here, with
+# one extra set of statements to accept. New accounts are made on Bill Assistant, so this Worker takes no sign-ups itself (no Turnstile here).
+# Free accounts: 5 questions a day, no monthly cap. To take sign-ups here too: OPEN_SIGNUP = "on" + secret TURNSTILE_SECRET + var TURNSTILE_SITEKEY
+# for a widget that lists procurement.citizenlk.com. To close it again: remove OPEN_TO (staff in ALLOWED_EMAILS keep access).
+OPEN_TO = "registered"
+OPEN_SIGNUP = "off"
+MEMBER_DAILY = "5"
+MEMBER_MONTHLY = "none"
+COOKIE_DOMAIN = "citizenlk.com"
 ALLOWED_EMAILS = "thilinatpr@gmail.com"
 FROM_ADDRESS = "login@citizenlk.com"
 CF_ACCOUNT_ID = "e81ea992523c4e14d3d1a89f10732576"

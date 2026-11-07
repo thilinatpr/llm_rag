@@ -2620,6 +2620,36 @@ def test_a_reply_that_is_only_an_apology_is_marked_for_the_worker():
         srv.shutdown()
 
 
+def test_turns_that_cost_nothing_are_marked_free_for_the_worker():
+    from types import SimpleNamespace as R
+    from billrag import web
+
+    greeting = R(clarify=False, path="en", evidence=[], llm_calls=0, queries=[])
+    assert web.free_turn(greeting)
+    assert web.free_turn(R(clarify=True, path="en", evidence=[1], llm_calls=2, queries=["q"]))      # "which bill did you mean?"
+    assert web.free_turn(R(clarify=False, path="language_switch", evidence=[1], llm_calls=1, queries=[]))
+    assert not web.free_turn(R(clarify=False, path="en", evidence=[1], llm_calls=2, queries=["q"]))  # a real answer
+    assert not web.free_turn(R(clarify=False, path="en", evidence=[], llm_calls=2, queries=["q"]))   # searched, found nothing: it cost us
+
+    class App:
+        secret = None
+
+        def ask(self, *a, **k):
+            web._TL.free = self.free
+            return "hello"
+
+    App.free = True
+    srv, url = _serve_web(App())
+    try:
+        assert _post(url, "/api/ask")[2].get("X-Free") == "1"
+        assert "event: free" in _post(url, "/api/ask/stream")[1]
+        App.free = False
+        assert "X-Free" not in _post(url, "/api/ask")[2]
+        assert "event: free" not in _post(url, "/api/ask/stream")[1]
+    finally:
+        srv.shutdown()
+
+
 def test_questions_overlapping_on_one_store_do_not_break_sqlite(tmp_path):
     """Found by the load test: one connection shared by threads gave InterfaceError / IndexError on 11 of 24 questions at 4-8 people."""
     import threading
