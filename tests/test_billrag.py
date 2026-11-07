@@ -555,6 +555,31 @@ def test_pipeline_uses_title_index(tmp_path):
     assert r2.added_overview == "092/2026" and not r2.clarify
 
 
+def test_long_section_is_shown_as_a_window_around_the_match(tmp_path):
+    from billrag.pipeline import Evidence
+    paras = "\n".join(f"({chr(97 + i)}) clause {chr(97 + i)} " + ("word " * 100) + ("ZEBRA unique marker." if i == 8 else "") for i in range(12))
+    page = "BE it enacted by the Parliament of the Democratic Socialist\nRepublic of Sri Lanka as follows:-\n1. Short title text.\n2. Long section.\n" + paras
+    st = Store(tmp_path / "w.sqlite")
+    parsed = parse_pages([COVER, page], "Long Act")
+    row = {"key": "095/2026", "bill_no": 95, "year": 2026, "date": "2026-10-01T00:00:00Z", "title": "Long Act", "title_norm": "long act",
+           "kind": "Bill", "long_title": None, "presented_by": None, "presented_on": None, "gazette_date": None, "printed_no": None,
+           "n_pages": 2, "n_sections": 2, "pdf_path": "x", "summary": None}
+    st.replace_bill(row, build_chunks(row, parsed))
+    st.commit()
+    parts = st.section_parts("095/2026", 2)
+    assert len(parts) >= 5 and sum(len(p["text"]) for p in parts) > 3000
+    hit = next(p for p in parts if "ZEBRA" in p["text"])
+    p = Pipeline(st, Retriever(st), ScriptLLM())
+    ev = Evidence(st.chunks_by_ids([hit["id"]])[hit["id"]], 3)
+    text = p.expand(ev).chunk["text"]
+    assert "ZEBRA" in text and len(text) < 3400 and "are not shown" in text  # the matched part is kept, the gap is announced
+    assert "clause a" not in text  # the opening was left out, not the match
+    whole = p.expand(Evidence(st.chunks_by_ids([parts[0]["id"]])[parts[0]["id"]], 3)).chunk["text"]
+    assert "clause a" in whole and "not shown" not in whole  # a match inside the first 3000 characters: the old cut, no notes
+    short = Pipeline(st, Retriever(st), ScriptLLM(), ).expand(Evidence(st.chunks_by_ids([st.section_parts("095/2026", 1)[0]["id"]])[st.section_parts("095/2026", 1)[0]["id"]], 3)).chunk["text"]
+    assert "not shown" not in short  # a short section is shown whole
+
+
 def test_pipeline_happy_path_two_llm_calls(tmp_path):
     st, llm = make_store(tmp_path), ScriptLLM()
     events = []

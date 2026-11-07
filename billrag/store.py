@@ -167,6 +167,11 @@ class Store:
             return None
         return {"text": "\n".join(r["text"] for r in rows), "part": rows[0]["part"], "page": rows[0]["page"]}
 
+    def section_parts(self, key, no):
+        """The chunks of one section in reading order: [{id, text}], so a long section can be shown as a window around the part that matched."""
+        return [{"id": r["id"], "text": r["text"]} for r in self.db.execute(
+            "SELECT id, text FROM chunks WHERE bill_key=? AND section_no=? ORDER BY ord", (key, int(no)))]
+
     def outline(self, key):
         return [dict(r) for r in self.db.execute(
             "SELECT section_no, kind, MAX(heading) AS heading, MIN(substr(text,1,90)) AS head, MIN(page) AS page "
