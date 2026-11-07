@@ -2,6 +2,7 @@
 // Kept to a default export plus the Durable Object class: workerd rejects any other non-handler named export.
 import { getContainer } from "@cloudflare/containers";
 import { createHandler } from "./auth.js";
+import { checkBalance } from "./balance.js";
 
 export { BillragContainer } from "./container.js";
 export { QuotaCounter } from "./quota-do.js";
@@ -28,4 +29,7 @@ async function upstream(request, env, opts = {}) {
   }
 }
 
-export default { fetch: createHandler({ upstream }) };
+export default {
+  fetch: createHandler({ upstream }),
+  scheduled: (_event, env, ctx) => ctx.waitUntil(checkBalance(env)), // hourly: see [triggers] in wrangler.toml
+};

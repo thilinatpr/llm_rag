@@ -12,6 +12,7 @@ for _k in ("R2_BUCKET", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_K
 
 from billrag.agent import Agent, TOOLS
 from billrag.ingest import build_chunks, classify
+ROOT_FOR_SCRIPTS = __import__("pathlib").Path(__file__).resolve().parent.parent
 from billrag.llm import Reply, ToolCall, to_anthropic_messages, to_openai_messages
 from billrag.parse import match_section, parse_cover, parse_pages, split_text
 from billrag.retrieve import Retriever, rrf
@@ -2350,3 +2351,267 @@ def test_shown_text_rewrites_only_the_stored_overview_header():
         == "Bill 080/2026 — Appropriation (2026-10-07). S"
     clause = {"kind": "section", "text": "see — X - GS (GS, 2026-10-16) in the Act"}
     assert shown_text(clause) == clause["text"]                          # clause text is never touched
+
+
+# ---------------------------------------------------------------- backup model (llm.FallbackLLM)
+class _Failing:
+    model = "main"
+
+    def __init__(self, error, after_tokens=()):
+        self.error, self.after_tokens, self.calls = error, after_tokens, 0
+
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None, on_token=None):
+        self.calls += 1
+        for piece in self.after_tokens:
+            on_token(piece)
+        if self.error:
+            raise self.error
+        return llm_mod().Reply("from main")
+
+
+class _Backup:
+    model = "backup"
+
+    def __init__(self):
+        self.seen = []
+
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None, on_token=None):
+        self.seen.append({"effort": effort, "stream": on_token is not None})
+        if on_token:
+            on_token("from backup")
+        return llm_mod().Reply("from backup")
+
+
+def llm_mod():
+    from billrag import llm
+    return llm
+
+
+class _Status(Exception):
+    def __init__(self, code):
+        self.status_code = code
+
+
+def _fallback(error, **kw):
+    clock = [100.0]
+    main, backup = _Failing(error, **kw), _Backup()
+    return llm_mod().FallbackLLM(main, backup, clock=lambda: clock[0]), main, backup, clock
+
+
+def test_fallback_not_used_while_the_main_model_works():
+    f, main, backup, _ = _fallback(None)
+    assert f.chat("s", []).text == "from main" and not backup.seen and f.model == "main"
+
+
+def test_no_credit_answers_on_the_backup_and_leaves_the_main_model_alone():
+    from billrag import calltrace
+    f, main, backup, clock = _fallback(_Status(402))
+    with calltrace.tracing() as tr:
+        assert f.chat("s", [], effort="off").text == "from backup"
+        assert f.chat("s", [], effort=None).text == "from backup"
+    assert main.calls == 1  # the second call did not spend time on a provider known to be out of credit
+    assert [b["effort"] for b in backup.seen] == ["low", None]  # "reasoning off" is not sent as-is to another provider
+    assert calltrace.fallback_summary(tr.calls) == {"calls": 2, "model": "backup", "reason": "_Status 402"}
+    clock[0] += 299
+    f.chat("s", [])
+    assert main.calls == 1
+    clock[0] += 2
+    f.chat("s", [])
+    assert main.calls == 2  # tried again after the cool-down
+
+
+def test_short_outage_retries_sooner_and_one_bad_request_stops_nothing():
+    f, main, backup, clock = _fallback(_Status(503))
+    f.chat("s", [])
+    clock[0] += 61
+    f.chat("s", [])
+    assert main.calls == 2
+    f, main, backup, clock = _fallback(_Status(400))
+    f.chat("s", [])
+    f.chat("s", [])
+    assert main.calls == 2
+
+
+def test_a_stream_that_fails_at_the_start_continues_as_a_stream_and_one_that_fails_midway_does_not():
+    got = []
+    f, main, backup, _ = _fallback(ConnectionError("x"))
+    assert f.chat("s", [], on_token=got.append).text == "from backup"
+    assert got == ["from backup"] and backup.seen[0]["stream"]
+    got = []
+    f, main, backup, _ = _fallback(ConnectionError("x"), after_tokens=["half an "])
+    assert f.chat("s", [], on_token=got.append).text == "from backup"
+    assert got == ["half an "] and not backup.seen[0]["stream"]  # the checked `done` answer replaces the draft
+
+
+def test_both_models_failing_is_reported_as_a_failure():
+    import pytest
+    f, main, backup, _ = _fallback(_Status(500))
+    backup.chat = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("both down"))
+    with pytest.raises(RuntimeError):
+        f.chat("s", [])
+
+
+def test_make_llm_wraps_only_when_a_different_backup_is_configured():
+    import dataclasses
+    from billrag.config import load_settings
+    from billrag.llm import FallbackLLM, OpenAILLM, make_llm
+    s = dataclasses.replace(load_settings(), chat_provider="openai", chat_model="m", chat_base_url="http://x.test", chat_api_key="k")
+    assert isinstance(make_llm(s), OpenAILLM)
+    assert isinstance(make_llm(dataclasses.replace(s, fallback_model="m")), OpenAILLM)
+    f = make_llm(dataclasses.replace(s, fallback_model="b", fallback_base_url="http://y.test", fallback_api_key="k2"))
+    assert isinstance(f, FallbackLLM) and f.primary.client.max_retries == 1 and f.backup.model == "b"
+
+
+def _serve_web(app):
+    import threading
+    from http.server import ThreadingHTTPServer
+    from billrag.web import make_handler
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_port}"
+
+
+def _post(url, path, lane=False):
+    import json
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(url + path, data=json.dumps({"question": "q"}).encode(), method="POST",
+                                 headers={"X-Lane": "public"} if lane else {})
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status, r.read().decode(), dict(r.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode(), dict(e.headers)
+
+
+def test_visitors_never_see_provider_errors_but_members_do():
+    from billrag.web import PUBLIC_ERROR
+
+    class App:
+        secret = None
+
+        def ask(self, *a, **k):
+            raise RuntimeError("Error code: 402 - Insufficient Balance (request_id: abc)")
+
+    srv, url = _serve_web(App())
+    try:
+        for path in ("/api/ask", "/api/ask/stream"):
+            status, body, _ = _post(url, path, lane=True)
+            assert "402" not in body and PUBLIC_ERROR in body, path
+            assert "402" in _post(url, path)[1], path
+    finally:
+        srv.shutdown()
+
+
+def test_a_reply_that_is_only_an_apology_is_marked_for_the_worker():
+    from billrag.pipeline import UNUSABLE
+
+    class App:
+        secret = None
+        reply = "Sorry.\n\n⚠ " + UNUSABLE
+
+        def ask(self, *a, **k):
+            return self.reply
+
+    srv, url = _serve_web(App())
+    try:
+        assert _post(url, "/api/ask")[2].get("X-Unanswered") == "1"
+        assert "event: unanswered" in _post(url, "/api/ask/stream")[1]
+        App.reply = "A real answer."
+        assert "X-Unanswered" not in _post(url, "/api/ask")[2]
+        assert "event: unanswered" not in _post(url, "/api/ask/stream")[1]
+    finally:
+        srv.shutdown()
+
+
+def test_questions_overlapping_on_one_store_do_not_break_sqlite(tmp_path):
+    """Found by the load test: one connection shared by threads gave InterfaceError / IndexError on 11 of 24 questions at 4-8 people."""
+    import threading
+    from billrag.store import Store
+    store = Store(tmp_path / "i.sqlite")
+    for n in range(40):
+        store.replace_bill({"key": f"{n:03d}/2026", "bill_no": n, "year": 2026, "date": "2026-01-01T00:00:00.000Z", "title": f"Bill {n}", "title_norm": f"bill {n}",
+                            "kind": "Bill"},
+                           [{"kind": "section", "section_no": s, "page": 1, "text": f"terror offence penalty clause {s}", "ctx": f"terror offence penalty clause {s}"} for s in range(1, 30)])
+    store.commit()
+    errors = []
+
+    def work():
+        try:
+            for _ in range(60):
+                assert store.bm25("terror offence penalty", 20)
+                assert store.bill("001/2026")
+                assert store.section_text("001/2026", 3)
+        except Exception as e:  # noqa: BLE001 - collected for the assertion in the main thread
+            errors.append(repr(e))
+    threads = [threading.Thread(target=work) for _ in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, errors[:3]
+
+
+def _refresh():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("refresh_bills", ROOT_FOR_SCRIPTS / "scripts/refresh_bills.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_refresh_finds_only_new_documents_with_a_pdf(tmp_path):
+    import json
+    r = _refresh()
+    (tmp_path / "bills/pdfs/2026").mkdir(parents=True)
+    (tmp_path / "acts/pdfs/2026").mkdir(parents=True)
+    bills = [dict(billNo=n, billSubNo=2026, billNoText=f"{n:03d}/2026", date="2026-10-01T00:00:00.000Z", descriptionEnglish=f"Bill  {n}") for n in (1, 2, 3)]
+    (tmp_path / "bills/bills.json").write_text(json.dumps(bills))
+    for n in (1, 2):
+        (tmp_path / f"bills/pdfs/2026/{n:03d}_2026_ENGLISH.pdf").write_bytes(b"%PDF")
+    acts = [dict(actNo=5, actSubNo=2026, actNoText="5/2026", date="2026-10-01T00:00:00.000Z", descriptionEnglish="An Act"),
+            dict(actNo=0, actSubNo=2026, actNoText="0/2026", date="2026-10-01T00:00:00.000Z", descriptionEnglish="Unnumbered"),
+            dict(actNo=9, actSubNo=2020, actNoText="9/2020", date="2020-10-01T00:00:00.000Z", descriptionEnglish="Too old")]
+    (tmp_path / "acts/acts.json").write_text(json.dumps(acts))
+    (tmp_path / "acts/pdfs/2026/5_2026_ENGLISH.pdf").write_bytes(b"%PDF")
+    out = r.new_documents(tmp_path, {"001/2026"})
+    assert out == {"bills": {"002/2026": "Bill 2"}, "acts": {"Act 5/2026": "An Act"}}  # 001 is known, 003 has no PDF
+
+
+def test_refresh_refuses_to_publish_when_something_was_lost_or_cannot_be_found():
+    r = _refresh()
+    before = {"keys": {"a", "b"}, "chunks": {1, 2}, "summaries": {"a"}}
+    assert r.check_nothing_lost(before, {"keys": {"a", "b", "c"}, "chunks": {1, 2, 3}, "summaries": {"a", "c"}}) == []
+    bad = r.check_nothing_lost(before, {"keys": {"a"}, "chunks": {1, 3}, "summaries": set()})
+    assert len(bad) == 3 and "1 documents" in bad[0]
+    assert r.check_findable(lambda t, k: k == "x", {"x": "X Bill", "y": "Y Bill"}) == ["y is not found by its own title: Y Bill"]
+
+
+def test_only_new_ingest_keeps_existing_chunk_ids(tmp_path, monkeypatch):
+    import json
+    from billrag import ingest as ing
+    from billrag.store import Store
+    bills = [dict(billNo=n, billSubNo=2026, billNoText=f"{n:03d}/2026", date="2026-10-01T00:00:00.000Z", descriptionEnglish=f"Thing {n} - Bill") for n in (1, 2)]
+    (tmp_path / "bills.json").write_text(json.dumps(bills))
+    (tmp_path / "pdfs/2026").mkdir(parents=True)
+    for n in (1, 2):
+        (tmp_path / f"pdfs/2026/{n:03d}_2026_ENGLISH.pdf").write_bytes(b"%PDF")
+    db = tmp_path / "index.sqlite"
+    store = Store(db)
+    store.replace_bill({"key": "001/2026", "bill_no": 1, "year": 2026, "date": "2026-10-01T00:00:00.000Z", "title": "Thing 1", "title_norm": "thing 1", "kind": "Bill"},
+                       [{"kind": "overview", "page": 1, "text": "x", "ctx": "x"}])
+    store.commit()
+    old = [r[0] for r in store.db.execute("SELECT id FROM chunks")]
+    seen = []
+
+    class NoPool:  # the parser itself is tested elsewhere; only which documents reach it matters here
+        def __init__(self, *a): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def imap(self, fn, jobs, chunksize=1):
+            seen.extend(p for p, _ in jobs)
+            return [(None, "stub") for _ in jobs]
+    monkeypatch.setattr(ing, "Pool", NoPool)
+    ing.ingest(tmp_path, db, only_new=True)
+    assert [p.name for p in seen] == ["002_2026_ENGLISH.pdf"]
+    assert [r[0] for r in Store(db).db.execute("SELECT id FROM chunks")] == old

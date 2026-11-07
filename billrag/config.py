@@ -5,6 +5,8 @@ Chat model
   BILLRAG_CHAT_MODEL      model id (default for anthropic: claude-sonnet-5-5; required for openai)
   BILLRAG_CHAT_BASE_URL   optional endpoint override (Ollama, vLLM, LM Studio, gateways ...)
   BILLRAG_CHAT_API_KEY    optional; otherwise the SDK's own env var (ANTHROPIC_API_KEY / OPENAI_API_KEY)
+  BILLRAG_FALLBACK_MODEL  optional: an OpenAI-compatible model to use when the chat model's provider fails (llm.FallbackLLM), with
+  BILLRAG_FALLBACK_BASE_URL / BILLRAG_FALLBACK_API_KEY
 
 Embeddings (optional; without them retrieval is BM25 + structure-aware, which already works well)
   BILLRAG_EMBED_PROVIDER  default: "cloudflare" when CLOUDFLARE_API_TOKEN + an account id are set, else "none"
@@ -62,6 +64,9 @@ class Settings:
     translate_model: str | None
     cf_account_id: str | None
     cf_api_token: str | None
+    fallback_model: str | None = None
+    fallback_base_url: str | None = None
+    fallback_api_key: str | None = None
 
     @property
     def db_path(self) -> Path:
@@ -98,4 +103,7 @@ def load_settings() -> Settings:
         translate_model=e("BILLRAG_TRANSLATE_MODEL") or None,
         cf_account_id=cf_account,
         cf_api_token=cf_token,
+        fallback_model=e("BILLRAG_FALLBACK_MODEL") or None,
+        fallback_base_url=e("BILLRAG_FALLBACK_BASE_URL") or None,
+        fallback_api_key=e("BILLRAG_FALLBACK_API_KEY") or None,
     )

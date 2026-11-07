@@ -26,15 +26,27 @@ Numbers behind this (live logs and estimates, 2026-11-06; the sample is small):
 
 ## Phase 1: Make it safe to run (before any new users)
 
-- [ ] **S** Low-balance alert for DeepSeek (running out failed a real visitor's question on 2026-11-06, 20:38 UTC)
-- [ ] **M** Automatic fallback to Workers AI when DeepSeek fails
-- [ ] **S** Token and cost logging for Procurement Rules
-- [ ] **S** Check whether failed answers use up a visitor's allowance, and fix it if so
-- [ ] **M** Load test the real container (concurrency has offline tests only; Procurement Rules still answers one question at a time)
-- [ ] **M** One command to add newly published bills (scrape, ingest, summarize, embed, upload)
-- [ ] **S** Read the flagged Procurement answers (`FR 107`, `FR 704`) and the failed follow-up rewrite in `procurement-logs/`
+Written and tested 2026-11-07, not yet deployed. Details and measurements: `AGENTS.md`.
 
-**Done when:** a simulated DeepSeek failure still gets users an answer, and the load test shows how many people at once the container can handle.
+- [x] **S** Low-balance alert for DeepSeek (running out failed a real visitor's question on 2026-11-06, 20:38 UTC)
+- [x] **M** Automatic fallback to Workers AI when DeepSeek fails
+- [x] **S** Token and cost logging for Procurement Rules
+- [x] **S** Check whether failed answers use up a visitor's allowance, and fix it if so. They did; fixed.
+- [x] **M** Load test the same images at the same limits under Docker. It found a bug that failed 9 of 16 questions at 8 people at once; fixed. Procurement Rules now takes 2 at once plus a queue.
+- [x] **M** One command to add newly published bills: `scripts/refresh_bills.py`
+- [x] **S** Read the flagged Procurement answers and the failed follow-up rewrite (findings below)
+- [ ] **O** Deploy both services, then check a signed-in question and the logs
+- [ ] **O** Publish the new index: `scripts/refresh_bills.py --publish` adds bill 087/2026, Prevention of Organised Crimes. Decide whether to schedule it.
+- [ ] **O** Run `scripts/load_test.py` against the live site with a signed-in cookie (a small run: each question costs money)
+- [ ] **O** Top up DeepSeek: under $5 when this was written
+
+**Done when:** a simulated DeepSeek failure still gets users an answer (done locally), and the load test shows how many people at once the container can handle (about 8-14 at the same instant at the worst-case CPU; not yet confirmed on Cloudflare).
+
+Findings from the flagged Procurement answers:
+- `FR 107`: the regulation is in our sources, but the evidence list was full, so a pointer to it was dropped and the answer said it was missing. Fixed: pointers get their own room.
+- `FR 704`: not in our sources, and the answer only repeated what FR 113 says about it. The warning was a false alarm that told readers to doubt a sound answer. Fixed.
+- Failed rewrite: reasoning used up to 513 of the 600 tokens allowed, so a cut-off is the likely cause (not seen again in 4 tries). The fallback search then mixed two questions, and the answer drifted to money owed *to* the Government (FR 113 waivers) when the question was about money the Government owes. Rewrites now run with thinking off.
+- A later answer quoted relief measures "valid until 30th September 2026" without saying that date has passed, because answers did not know today's date. Fixed: see `procurement/README.md` "Dates". Whether the circular still covers a given contract is left to the Treasury; an officer should check that wording in the Phase 2 review.
 
 ## Phase 2: Earn trust (before opening sign-up)
 

@@ -154,6 +154,14 @@ citation warning (paragraph numbers of a one-passage circular), fixed: a whole-d
 - The amendment gazette is encoded by hand (8 rows). Recheck it if NPC publishes more amendments.
 - Supreme Court FR petition (TISL, SCFR/22/2025): status unknown.
 
+## Dates (written 2026-11-07, NOT deployed)
+Answers now get today's date (Sri Lanka time), and `sources.TIME_LIMITS` lists passages with their own end date: PF Circular 03/2026 and its amendment (30 September 2026) and the FR 113(6) delegated authority (31 March 2025). A search of all sources for "valid until"-style wording found these; **a new source with such wording must be added by hand.** Once the date has passed the passage is marked for the model and a fixed note goes under any answer that cites it, so the note does not depend on the model.
+The wording is deliberately neutral. The circular has "retrospective effect", so whether it still covers a contract is for the Treasury. A first version told the model the circular "may no longer be available": answers then said flatly that it "can no longer be used", and "Can a price adjustment clause be included in a contract under three months?" flipped to No, although para 03 states what the Guidelines already mean and concerns future bidding documents. Read the answers after changing this wording.
+Not handled: amounts or rules that end on a date not listed above, and dates inside a question ("was this allowed in August?").
+Thinking counts against `max_tokens`: that same question once used all of 2,500 twice and got "please ask again". The limit is now 5,000 and the retry runs with thinking off.
+Measured on the final wording (deepseek-flash, reranker on): 3 questions x 6: no cut-offs, no verdict words, end date stated 18/18, note 18/18; the short-contract question answered Yes 8/8 when read. Eval, 3 runs across the last two wordings: strict 1.00, 0.97, 1.00; clean 0.92-0.95. The miss (q36) and the warnings are citations of passages not shown, not about dates.
+Known weakness: an answer can still open with "Yes" and give the date only lower down (q35, FR 113(6), date in its last bullet and the note).
+
 ## Eval (`python -m procurement.evaluate`, `evals/procurement_eval.jsonl`, 2026-11-07)
 39 items: 35 officer-style questions recovered from an earlier session (the old "38 questions" were never committed, nor was any gold), the
 live payment questions of 2026-11-06 and one follow-up. Gold is written from the source; `--check-gold` fails if a required fact is not in

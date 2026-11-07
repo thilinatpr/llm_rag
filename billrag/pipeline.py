@@ -22,6 +22,7 @@ CITE = re.compile(r"[\[【](Act \d{1,3}/\d{4}|\d{3}/\d{4})(?:\s*§\s*(\d+))?")  
 REASONING = re.compile(r"^\s*analysis\s*[:\uff1a]?", re.I)
 FINAL = re.compile(r"assistant\s*final\s*[:\uff1a]?\s*|\bfinal(?:\s+answer)?\s*[:\uff1a]\s*", re.I)
 RETRY_NOTE = "\n\nReply with ONLY the final answer, in the format requested. Do not include any analysis or reasoning text."
+UNUSABLE = "the model returned reasoning or unusable text instead of an answer (twice)"  # no answer was given: see web.unanswered
 LEAK_FALLBACK = ("I could not produce a reliable written answer this time. The sources below are the passages I found; "
                  "please try asking again.")
 
@@ -278,7 +279,7 @@ class Pipeline:
         if leaked:  # (JSON replies from the grader are parsed, and retried, by evaluate())
             txt, leaked = call(user + RETRY_NOTE)
             if leaked:
-                res.warnings.append("the model returned reasoning or unusable text instead of an answer (twice)")
+                res.warnings.append(UNUSABLE)
                 return LEAK_FALLBACK
         return txt
 

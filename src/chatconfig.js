@@ -9,7 +9,11 @@
 //   Translation: a TRANSLATE_MODEL that is a Workers AI id ("@cf/...") cannot run on another provider's endpoint, so it is dropped
 //                for deepseek and the chat model translates. Embeddings, rerank and R2 always use the Cloudflare credentials.
 //   A missing DEEPSEEK_API_KEY falls back to Workers AI (the site keeps working) and says so in the Worker log.
+//   DeepSeek failing while answering (no credit, outage): the container repeats the call on Workers AI (billrag/llm.py FallbackLLM),
+//   FALLBACK_MODEL or gpt-oss-120b. Needs CLOUDFLARE_API_TOKEN, which the container has anyway; without it there is no fallback.
 export const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+const DEFAULT_WORKERS_AI_MODEL = "@cf/openai/gpt-oss-120b";
+const workersAiUrl = (env) => `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/ai/v1`;
 
 export function chatEnv(env) {
   const wanted = String(env.CHAT_PROVIDER || "workers-ai").toLowerCase();
@@ -25,6 +29,11 @@ export function chatEnv(env) {
         BILLRAG_CHAT_API_KEY: env.DEEPSEEK_API_KEY,
         BILLRAG_GRADE_EFFORT: "off",
         BILLRAG_TRANSLATE_MODEL: tm,
+        ...(env.CLOUDFLARE_API_TOKEN && {
+          BILLRAG_FALLBACK_MODEL: env.FALLBACK_MODEL || DEFAULT_WORKERS_AI_MODEL,
+          BILLRAG_FALLBACK_BASE_URL: workersAiUrl(env),
+          BILLRAG_FALLBACK_API_KEY: env.CLOUDFLARE_API_TOKEN,
+        }),
       },
     };
   }
@@ -33,8 +42,8 @@ export function chatEnv(env) {
     provider: "workers-ai",
     vars: {
       BILLRAG_CHAT_PROVIDER: "openai",
-      BILLRAG_CHAT_MODEL: env.CHAT_MODEL || "@cf/openai/gpt-oss-120b",
-      BILLRAG_CHAT_BASE_URL: `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/ai/v1`,
+      BILLRAG_CHAT_MODEL: env.CHAT_MODEL || DEFAULT_WORKERS_AI_MODEL,
+      BILLRAG_CHAT_BASE_URL: workersAiUrl(env),
       BILLRAG_CHAT_API_KEY: env.CLOUDFLARE_API_TOKEN,
       BILLRAG_TRANSLATE_MODEL: env.TRANSLATE_MODEL,
     },

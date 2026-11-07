@@ -49,14 +49,16 @@ export function buildMessage(from, to, code) {
   };
 }
 
-export async function sendMailViaCloudflare(env, to, code) {
+export const sendMailViaCloudflare = (env, to, code) => sendMessage(env, buildMessage(env.FROM_ADDRESS, to, code));
+
+export async function sendMessage(env, message) {
   if (!env.CF_ACCOUNT_ID || !env.CF_EMAIL_TOKEN || !env.FROM_ADDRESS) throw new Error("email sending is not configured");
   const url = `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/email/sending/send`;
   for (let attempt = 0; ; attempt++) {
     const res = await globalThis.fetch(url, {
       method: "POST",
       headers: { Authorization: `Bearer ${env.CF_EMAIL_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify(buildMessage(env.FROM_ADDRESS, to, code)),
+      body: JSON.stringify(message),
     });
     if (res.ok) return;
     if (res.status === 429 && attempt < 2) {

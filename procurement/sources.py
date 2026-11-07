@@ -10,6 +10,17 @@ TEXTS = Path("procurement/npc_texts")    # tracked: curated text of short NPC do
 # PG2024 §1.4(e)); everything else in the 2006 family was repealed by PG2024 §1.4(d)(ii).
 GUIDANCE = ("Non-binding guidance: Ministry of Finance guide of February 2017, written mainly for FIDIC and ICTAD works contracts and before the "
             "2024 Guidelines. The contract's own conditions and PG2024/PM2024 prevail.")
+# Passages with their own end date. They stay searchable: they still matter for what happened while they were in force. ask.py tells the model
+# and adds a note once the date has passed. Add one whenever a new source says "valid until". Found with a search for such wording, 2026-11-07.
+#   docs, until (ISO), shown as, note = the sentence for the reader; heading = only that passage; mentions = only if the answer speaks of it
+TIME_LIMITS = (
+    dict(docs=("PFC0326", "PFC0326i"), until="2026-09-30", shown="30 September 2026",
+         note="PF Circular 03/2026 and its amendment 03/2026 (i) say their provisions are valid until 30 September 2026. That date has passed and these "
+              "sources hold no later circular extending it, so check with the Treasury's Public Finance Department whether they still apply to your case. "
+              "This limit is the circular's own: it does not end rules in the Guidelines or the Manual."),
+    dict(docs=("FRA",), heading="FR 113(6)", mentions=r"113\s*\(6\)|advance\s+.?B.?\s+account", until="2025-03-31", shown="31 March 2025",
+         note="The delegated authority in FR 113(6) was valid only until 31 March 2025, which has passed, and these sources hold no later extension."),
+)
 UNOFFICIAL = ("Unofficial English translation made for this index from the Sinhala circular (no official English version is published); the Sinhala text is authoritative.")
 
 DOCS = [

@@ -7,9 +7,10 @@ actions started before 2025-01-01, and only up to the award of the contract).
 import re
 import time
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta, timezone
 
 from .index import HIERARCHICAL
-from .sources import ALL, CURRENT, DOCS, GUIDANCE, UNOFFICIAL
+from .sources import ALL, CURRENT, DOCS, GUIDANCE, TIME_LIMITS, UNOFFICIAL
 
 # "supplement N" is NOT an old-regime marker any more: NPC's Supplements 01-07 (2025-26) are current.
 OLD = re.compile(r"\b2006\b|before\s+(?:1st\s+)?jan\w*\s+2025|before\s+2025|pre-?2025|\bold\s+(?:guidelines|manual|rules)"
@@ -80,6 +81,10 @@ Rules:
   row as written and say the table should be checked on the cited page.
 - If the passages do not answer the question, say so plainly and name the closest clause given. Never fill gaps from general
   knowledge or from other countries' rules.
+- The question comes with today's date. A passage may end by saying that its stated end date has passed. If you use it, give that date and say it has
+  passed and that these sources do not say whether it can still be applied. Do NOT decide that yourself: never write that it has lapsed, expired or can
+  no longer be used, nor that it is still available (such a circular can have retrospective effect; that is for the issuing authority).
+  What a circular says the Guidelines or Manual already mean, or what it says about future bidding documents, is not ended by this date: answer those as written.
 - This explains the rules; it is not legal advice. Do not add disclaimers beyond one short line when the answer depends on facts
   the question does not give."""
 
@@ -152,6 +157,8 @@ def xrefs(doc, text):
     return list(dict.fromkeys(out))
 
 
+MAX_FR_POINTER = 3  # regulations added because a passage points at them; they get their own room: on a full list "see F.R.107" was lost
+
 def gather(index, question, k=8, docs=CURRENT, max_units=10, max_chars=3500, first=()):
     """Top-k chunks -> whole clauses/sections, each guideline clause paired with its manual section(s) and vice versa."""
     units, seen = [], set()
@@ -213,9 +220,9 @@ def gather(index, question, k=8, docs=CURRENT, max_units=10, max_chars=3500, fir
     for u in list(units):
         for n in dict.fromkeys(FR_REF.findall(u["text"] + " " + (u["note"] or ""))):
             if (u["doc"], u["ref"]) != ("FR", n):
-                add("FR", n, cap=max_units + 3)
+                add("FR", n, cap=max_units + 3 + MAX_FR_POINTER, max_chars=2000)
             for sup in index.supplements_for("FR", n):  # by heading: FRA 113(3) and 113(6) are separate units
-                add(sup["doc"], sup["ref"], sup["heading"], cap=max_units + 3)
+                add(sup["doc"], sup["ref"], sup["heading"], cap=max_units + 3 + MAX_FR_POINTER, max_chars=2000)
     amended = {u["ref"] for u in units if u["doc"] == "FRA"}
     for u in units:  # both texts shown: say plainly which one is in force
         if u["doc"] == "FR" and u["ref"] in amended:
@@ -240,12 +247,43 @@ def render(units):
     return "\n\n---\n\n".join(out)
 
 
+def today_in_sri_lanka():
+    return (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).date()
+
+
+def limits_passed(units, today):
+    """The TIME_LIMITS whose date is before `today` and that apply to a shown passage -> [(limit, its units)]."""
+    out = []
+    for lim in TIME_LIMITS:
+        hit = [u for u in units if u["doc"] in lim["docs"] and (u["heading"] or "").startswith(lim.get("heading", ""))]
+        if hit and date.fromisoformat(lim["until"]) < today:
+            out.append((lim, hit))
+    return out
+
+
+def lapsed_notes(answer, units, today):
+    """The reader's notes for what the answer actually relies on. As with translations, this must never depend on the model remembering."""
+    cited = {_CANON.get(d.lower(), d) for d, _, _ in CITE.findall(answer)}
+    return [lim["note"] for lim, _ in limits_passed(units, today)
+            if cited & set(lim["docs"]) and (not lim.get("mentions") or re.search(lim["mentions"], answer, re.I))]
+
+
+def bracketed(answer, at):
+    return answer.rfind("[", 0, at) > answer.rfind("]", 0, at)
+
+
 def verify(answer, units):
     """Citations that point at no passage shown to the model. A citation may name a sub-clause of a shown clause
-    (2.7 shown, 2.7.1 cited) only if that number occurs in the clause text, or a parent of a shown clause."""
+    (2.7 shown, 2.7.1 cited) only if that number occurs in the clause text, or a parent of a shown clause.
+    Not a citation: naming, without brackets, a regulation that a shown passage itself names. FR 113 says "see F.R.704" and that regulation
+    is not in our sources; repeating this was flagged as unsupported on a live answer (2026-11-06), which told the reader to doubt it."""
     bad = []
-    for doc, ref, fr in CITE.findall(answer):
+    named = {n for u in units for n in FR_REF.findall(u["text"])}
+    for m in CITE.finditer(answer):
+        doc, ref, fr = m.groups()
         doc, ref = _CANON.get(doc.lower(), doc), ref or fr
+        if doc == "FR" and ref in named and not bracketed(answer, m.start()):
+            continue
         ok = any(u["doc"] == doc and (not ref or not u["ref"] or u["ref"] == ref or u["ref"].startswith(ref + ".")
                                       or (ref.startswith(u["ref"] + ".") and ref in u["text"])) for u in units)
         if not ok:
@@ -291,15 +329,17 @@ def clean_history(history):
     return out
 
 
-def condense(llm, question, history, effort="low"):
+def condense(llm, question, history, effort="off"):
     """A follow-up as a standalone question, one model call. Returns (question, warning). On failure it searches on the last question
-    plus the follow-up: "It's not conclusive" alone retrieved appeal clauses and got an off-topic answer."""
+    plus the follow-up: "It's not conclusive" alone retrieved appeal clauses and got an off-topic answer.
+    Thinking off: measured on the live failure (deepseek-flash, 2026-11-07), reasoning used 323-513 of the old 600 tokens with effort low, while
+    the rewrite itself is 17-39 tokens. Hitting the limit returns no question at all ("unusable model output", then a muddled search)."""
     fallback = f"{history[-1]['question']} {question}"
     from billrag.pipeline import strip_reasoning
     hist = "\n".join(f"Q: {t['question']}\nA: {t['answer']}" for t in history)
     try:
         reply = llm.chat("You rewrite questions.", [{"role": "user", "content": CONDENSE.format(history=hist, question=question)}],
-                         max_tokens=600, effort=effort)
+                         max_tokens=1000, effort=effort)
     except Exception as e:
         return fallback, f"follow-up not rewritten: {type(e).__name__}"
     text, leaked = strip_reasoning(reply.text)
@@ -309,14 +349,15 @@ def condense(llm, question, history, effort="low"):
     return text, None
 
 
-def ask(index, llm, question, k=8, effort="low", docs=None, history=None):
+def ask(index, llm, question, k=8, effort="low", docs=None, history=None, today=None):
     from billrag.pipeline import strip_reasoning
     t = time.time()
+    today = today or today_in_sri_lanka()
     res = Answer(question)
     history = clean_history(history)
     query = question
     if history:
-        query, warn = condense(llm, question, history, effort)
+        query, warn = condense(llm, question, history)
         if warn:
             res.warnings.append(warn)
         elif query != question:
@@ -327,9 +368,15 @@ def ask(index, llm, question, k=8, effort="low", docs=None, history=None):
     if not res.evidence:
         res.answer = "I could not find anything about this in the Procurement Guidelines or Manual."
         return res
-    user = f"Question: {query}\n\nPassages:\n\n{render(res.evidence)}"
+    for lim, hit in limits_passed(res.evidence, today):
+        for u in hit:
+            u["note"] = " ".join(filter(None, [u["note"], f"The stated end date, {lim['shown']}, has passed; no later extension is among these sources."]))
+    # the date goes in the question, not in SYSTEM: a date in the long fixed prefix would defeat the provider's prompt cache every day
+    user = f"Question: {query}\n\nToday's date: {today.isoformat()}\n\nPassages:\n\n{render(res.evidence)}"
+    # Thinking counts against max_tokens: a question that sets two sources against each other used all of 2,500 on it, twice, and got no answer
+    # (deepseek-flash, 2026-11-07). So more room, and the retry does not think: an answer without it beats "please ask again".
     for attempt in range(2):
-        reply = llm.chat(SYSTEM, [{"role": "user", "content": user}], max_tokens=2500, effort=effort)
+        reply = llm.chat(SYSTEM, [{"role": "user", "content": user}], max_tokens=5000, effort=effort if attempt == 0 else "off")
         answer, leaked = strip_reasoning(reply.text)
         why = ("reasoning instead of an answer" if leaked else broken(answer)
                or ("cut off at the token limit" if reply.truncated else None))
@@ -350,6 +397,8 @@ def ask(index, llm, question, k=8, effort="low", docs=None, history=None):
     guide = sorted({_CANON.get(d.lower(), d) for d, _, _ in CITE.findall(res.answer)} & NON_BINDING)
     if guide:  # as with translations, this must never depend on the model remembering
         res.answer += "\n\n" + NON_BINDING_NOTE.format(docs=" and ".join(guide))
+    for note in lapsed_notes(res.answer, res.evidence, today):
+        res.answer += "\n\nNote: " + note
     bad = verify(res.answer, res.evidence)
     if bad:
         res.warnings.append("unsupported citations: " + ", ".join(bad))

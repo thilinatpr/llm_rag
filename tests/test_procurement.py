@@ -513,3 +513,171 @@ def test_eval_gold_is_well_formed_and_scoring_handles_typography():
     item = dict(id="x", question="q", gold=["PM2024 §2.9"], facts=["seven years"])
     r = score(item, Answer("q", answer="up to seven\u202fyears [PM2024 §2.9.1].", warnings=["unsupported citations: FR 1"]))
     assert r["strict"] and r["cited"] and not r["clean"]
+
+
+def test_naming_a_regulation_a_passage_names_is_not_an_unsupported_citation():
+    from procurement.ask import verify
+    units = [dict(doc="FR", ref="113", text="Secretaries may authorize waivers arising out of liquidated damages - see F.R.704")]
+    assert verify("Secretaries may authorise such waivers (FR 704) [FR 113].", units) == []  # what live answers do
+    assert verify("Liquidated damages can be waived [FR 704].", units) == ["FR 704"]  # a citation still has to be shown
+    assert verify("See FR 705 for this.", units) == ["FR 705"]  # no passage names this one
+
+
+def test_a_regulation_a_passage_points_at_is_still_shown_when_the_list_is_full(tmp_path, monkeypatch):
+    from procurement.ask import gather
+    idx = _index(tmp_path, monkeypatch)
+    many = [dict(doc="PG2024", ref=f"9.{n}", heading="H", part=0) for n in range(13)]
+    chunks = {c["ref"]: c for c in many}
+    monkeypatch.setattr(idx, "search", lambda q, k=8, docs=None: many)
+    monkeypatch.setattr(idx, "manual_for", lambda ref, doc="PM2024": [])
+    monkeypatch.setattr(idx, "supplements_for", lambda doc, ref: [])
+    monkeypatch.setattr(idx, "chain", lambda doc, ref: [])
+
+    def clause(doc, ref, heading=None):
+        if doc == "FR" and ref == "107":
+            return [dict(heading="Accounting", chapter="", page=1, part=0, text="F.R.107 text", note=None)]
+        if doc == "PG2024" and ref in chunks:
+            return [dict(heading="H", chapter="", page=1, part=0, text="Dealt with in terms of F.R.107." if ref == "9.0" else "x", note=None)]
+        return []
+    monkeypatch.setattr(idx, "clause", clause)
+    units = gather(idx, "q")
+    assert len([u for u in units if u["doc"] == "PG2024"]) == 10
+    assert ("FR", "107") in [(u["doc"], u["ref"]) for u in units]
+
+
+def test_rewriting_a_follow_up_does_not_spend_its_tokens_on_reasoning():
+    from procurement.ask import condense
+
+    class LLM:
+        def chat(self, system, messages, max_tokens=0, effort=None, **kw):
+            self.effort, self.limit = effort, max_tokens
+            return Reply("How are unpaid contract liabilities dealt with?")
+    llm = LLM()
+    q, warn = condense(llm, "And unpaid ones?", [{"question": "Q", "answer": "A"}])
+    assert (q, warn, llm.effort) == ("How are unpaid contract liabilities dealt with?", None, "off") and llm.limit >= 1000
+
+
+def test_server_logs_cost_refuses_when_full_and_uses_the_workers_backup(tmp_path, monkeypatch):
+    import json as _json
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from billrag.gate import Gate
+    from billrag.llm import FallbackLLM
+    from procurement import serve
+    idx = _index(tmp_path, monkeypatch)
+    secret = "s" * 32
+    seen = {}
+
+    class WorkerStub(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.update(_json.loads(self.rfile.read(int(self.headers["Content-Length"]))), secret=self.headers["X-Proxy-Secret"])
+            out = _json.dumps({"text": "Backup says [PG2024 §1.2].", "stop": "stop", "usage": {"prompt_tokens": 7, "completion_tokens": 3}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+    worker = ThreadingHTTPServer(("127.0.0.1", 0), WorkerStub)
+    threading.Thread(target=worker.serve_forever, daemon=True).start()
+
+    class NoCredit:
+        model = "deepseek-flash"
+
+        def chat(self, *a, **k):
+            e = RuntimeError("Insufficient Balance")
+            e.status_code = 402
+            raise e
+    llm = FallbackLLM(NoCredit(), serve.WorkerChat(f"http://127.0.0.1:{worker.server_port}/internal/chat", secret))
+    gate = Gate(1, 0, 1, 0, 0)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), serve.make_handler(serve.App(idx, llm, secret, gate)))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def ask():
+        req = urllib.request.Request(f"http://127.0.0.1:{srv.server_port}/api/ask", data=_json.dumps({"question": "emergency procurement"}).encode(),
+                                     headers={"X-Proxy-Secret": secret})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, _json.load(r), r.headers
+        except urllib.error.HTTPError as e:
+            return e.code, _json.load(e), e.headers
+    try:
+        code, out, headers = ask()
+        assert code == 200 and out["answer"] == "Backup says [PG2024 §1.2]." and seen["secret"] == secret
+        trace = _json.loads(headers["X-Ask-Trace"])
+        assert trace["fallback"]["reason"] == "RuntimeError 402"
+        chat = [c for c in trace["calls"] if c["kind"] == "chat"]
+        assert chat[0]["model"] == "@cf/openai/gpt-oss-120b" and chat[0]["in"] == 7 and chat[0]["out"] == 3
+        assert trace["cost"]["chat_calls"] == 1 and "seconds" in trace
+        gate.acquire()  # someone else holds the only place and the queue is 0 long
+        code, out, headers = ask()
+        assert code == 503 and out["busy"] and headers["Retry-After"]
+        gate.release()
+    finally:
+        srv.shutdown()
+        worker.shutdown()
+
+
+def _relief_unit(doc="PFC0326", heading="Special measures"):
+    return dict(doc=doc, ref="", heading=heading, chapter="", page=None, label=f"[{doc}]", text="valid until 30th September 2026", note=None, chain=[])
+
+
+def test_a_circular_past_its_date_gets_a_note_only_once_the_date_has_passed():
+    from datetime import date
+    from procurement.ask import lapsed_notes
+    units, answer = [_relief_unit()], "Relief is available [PFC0326]."
+    assert lapsed_notes(answer, units, date(2026, 9, 30)) == []  # its last day
+    notes = lapsed_notes(answer, units, date(2026, 10, 1))
+    assert len(notes) == 1 and "30 September 2026" in notes[0] and "Public Finance Department" in notes[0]
+    assert lapsed_notes("Relief is available [PFC0326i].", [_relief_unit("PFC0326i")], date(2026, 11, 7)) == notes  # the amendment changed no end date
+    assert lapsed_notes("The rule is in [PG2024 §5.16].", units, date(2026, 11, 7)) == []  # shown but not relied on
+
+
+def test_a_limit_on_one_passage_does_not_mark_the_others_of_that_regulation():
+    from datetime import date
+    from procurement.ask import lapsed_notes, limits_passed
+    other, limited = _relief_unit("FRA", "FR 113(3) - Other write-offs"), _relief_unit("FRA", "FR 113(6) - Write-off of loans and advances")
+    today = date(2026, 11, 7)
+    assert limits_passed([other], today) == []
+    assert lapsed_notes("Arrears may be written off [FRA 113].", [other, limited], today) == []  # same label, and the answer is about (3)
+    assert "31 March 2025" in lapsed_notes('Under FR 113(6) the balance may be written off [FRA 113].', [other, limited], today)[0]
+
+
+def test_ask_gives_the_model_the_date_marks_the_passage_and_adds_the_note(tmp_path, monkeypatch):
+    from datetime import date
+    from procurement import ask as ask_mod
+    idx = _index(tmp_path, monkeypatch)
+    monkeypatch.setattr(ask_mod, "gather", lambda *a, **k: [_relief_unit()])
+    llm = FakeLLM("Relief is available [PFC0326].")
+    res = ask_mod.ask(idx, llm, "Is there relief?", today=date(2026, 11, 7))
+    assert "Today's date: 2026-11-07" in llm.calls[-1] and "The stated end date, 30 September 2026, has passed" in llm.calls[-1]
+    assert res.answer.startswith("Relief is available [PFC0326].") and "That date has passed" in res.answer and res.warnings == []
+    llm = FakeLLM("Relief is available [PFC0326].")
+    res = ask_mod.ask(idx, llm, "Is there relief?", today=date(2026, 8, 1))
+    assert "stated end date" not in llm.calls[-1] and res.answer == "Relief is available [PFC0326]."
+
+
+def test_every_time_limit_names_real_documents_and_a_real_date():
+    from datetime import date
+    from procurement.sources import DOCS, TIME_LIMITS
+    ids = {d["id"] for d in DOCS}
+    for lim in TIME_LIMITS:
+        assert set(lim["docs"]) <= ids and date.fromisoformat(lim["until"]) and lim["shown"] in lim["note"]
+
+
+def test_an_answer_cut_off_while_thinking_is_retried_without_thinking(tmp_path, monkeypatch):
+    from procurement import ask as ask_mod
+    idx = _index(tmp_path, monkeypatch)
+    monkeypatch.setattr(ask_mod, "gather", lambda *a, **k: [_relief_unit("PG2024", "H")])
+
+    class LLM:
+        efforts = []
+
+        def chat(self, system, messages, max_tokens=0, effort=None, **kw):
+            self.efforts.append(effort)
+            return Reply("", [], "length") if len(self.efforts) == 1 else Reply("Yes [PG2024].", [], "stop")
+    r = ask_mod.ask(idx, LLM(), "q")
+    assert LLM.efforts == ["low", "off"] and r.answer == "Yes [PG2024]." and "cut off" in r.warnings[0]

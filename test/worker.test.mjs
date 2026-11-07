@@ -155,3 +155,14 @@ test("chat provider: deepseek without its secret falls back to Workers AI", () =
     assert.match(warned, /DEEPSEEK_API_KEY/);
   } finally { console.warn = warn; }
 });
+
+test("chat provider: DeepSeek gets Workers AI as its backup, never the other way round", () => {
+  const base = { CF_ACCOUNT_ID: "acc", CLOUDFLARE_API_TOKEN: "cf-token" };
+  const ds = chatEnv({ ...base, CHAT_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "k" }).vars;
+  assert.equal(ds.BILLRAG_FALLBACK_MODEL, "@cf/openai/gpt-oss-120b");
+  assert.equal(ds.BILLRAG_FALLBACK_BASE_URL, "https://api.cloudflare.com/client/v4/accounts/acc/ai/v1");
+  assert.equal(ds.BILLRAG_FALLBACK_API_KEY, "cf-token");
+  assert.equal(chatEnv({ ...base, CHAT_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "k", FALLBACK_MODEL: "@cf/x/y" }).vars.BILLRAG_FALLBACK_MODEL, "@cf/x/y");
+  assert.equal(chatEnv(base).vars.BILLRAG_FALLBACK_MODEL, undefined);
+  assert.equal(chatEnv({ CF_ACCOUNT_ID: "acc", CHAT_PROVIDER: "deepseek", DEEPSEEK_API_KEY: "k" }).vars.BILLRAG_FALLBACK_MODEL, undefined);
+});

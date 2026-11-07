@@ -1,4 +1,4 @@
-"""Admission control for the web server: at most `slots` questions run at once, a bounded FIFO queue waits behind them.
+"""Admission control for the web server: at most `slots` questions run at once, a bounded FIFO queue waits behind them. Load test on 1/4 vCPU: AGENTS.md "Load test".
 
 Most of a question's time is spent waiting on the hosted model, so several can overlap on one small container. More than
 `slots` at once would only stretch every CPU-bound step (1/4 vCPU), so the rest queue in arrival order. A full queue, or a wait

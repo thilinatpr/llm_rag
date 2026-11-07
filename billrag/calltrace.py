@@ -129,12 +129,21 @@ def cost_summary(calls):
             "chat_calls": len(chat), "priced_calls": len(priced), "peak": is_peak()}
 
 
+def fallback_summary(calls):
+    """Did this turn use the backup model? {"calls": n, "model": backup, "reason": first reason}, or None. The backup's calls are in
+    `calls` under its own model; Workers AI has no price here, so `cost.usd` does not include them."""
+    used = [c for c in calls or [] if c.get("kind") == "fallback"]
+    return {"calls": len(used), "model": used[0].get("model"), "reason": used[0].get("reason")} if used else None
+
+
 def summary(records):
     """Per step: model calls, seconds, output tokens and output tokens/second, from many log records' `calls` lists.
     Returns rows (step, kind, model, n, median s, max s, median out, median out/s, total retries), slowest median first."""
     groups = {}
     for calls in records:
         for c in calls or []:
+            if c.get("kind") == "fallback":
+                continue
             groups.setdefault((c.get("step") or "-", c.get("kind"), c.get("model") or ""), []).append(c)
     med = lambda v: sorted(v)[len(v) // 2] if v else None
     rows = []
