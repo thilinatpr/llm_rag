@@ -2874,3 +2874,27 @@ def test_a_partial_scrape_cannot_replace_the_full_csv_in_r2(tmp_path):
     assert mod.csv_path(Path("d"), "bills", 2025) == Path("d/bills.since-2025.csv")
     upload = (ROOT_FOR_SCRIPTS / "scripts/upload_r2.py").read_text(encoding="utf-8")
     assert '("bills.json", "bills.csv")' in upload and "rglob(\"*.csv\")" not in upload  # upload_r2 sends only these by name
+
+
+# ---- read-time cleanup of parser noise in clause text (pipeline.strip_noise)
+def test_strip_noise_removes_margin_notes_printer_and_running_header_only():
+    from billrag.pipeline import shown_text, strip_noise
+    t = ("shall be required to be registered under this Act, if- Amendment of section 7 of the principal enactment. Amendment of "
+         "section 10 of the principal enactment.\n(a) at the end of any taxable period the value has exceeded nine million rupees; or")
+    assert strip_noise(t) == ("shall be required to be registered under this Act, if-\n(a) at the end of any taxable period the value "
+                              "has exceeded nine million rupees; or")
+    last = ("In the event of any inconsistency between the Sinhala and Tamil texts of this Act, the Sinhala text shall prevail. "
+            "Short title. Amendment of section 36 of Act, No. 35 of 2018. Sinhala text to prevail in case of inconsistency. "
+            "Department of Government Printing, Sri Lanka.")
+    assert strip_noise(last) == ("In the event of any inconsistency between the Sinhala and Tamil texts of this Act, the Sinhala text "
+                                 "shall prevail.")
+    header = "the Commission.”. Replacement of Article 109 of the Constitution 25Twentieth Amendment to the Constitution\n(2) The"
+    assert strip_noise(header, "Twentieth Amendment to the Constitution - Bill") == "the Commission.”.\n(2) The"
+    # kept: a real sentence that mentions an amendment, the bill's title inside text, a Schedule after the last clause
+    keep = ["The amendment of section 7 of the principal enactment shall not apply to pending cases.",
+            "This Act may be cited as the Twentieth Amendment to the Constitution Act.\n(2) Next",
+            "the Sinhala text shall prevail. Column I Column II Section Offence 137 Wearing the dress one hundred rupees"]
+    for k in keep:
+        assert strip_noise(k, "Twentieth Amendment to the Constitution - Bill") == k
+    c = {"kind": "section", "text": last, "title": "X - Bill"}
+    assert shown_text(c).endswith("shall prevail.") and c["text"] == last   # stored text untouched

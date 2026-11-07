@@ -9,6 +9,7 @@
 Typical cost: 2 LLM calls (3 with a follow-up round, +1 to condense a follow-up question in a chat).
 """
 import json
+import os
 import re
 import time
 import unicodedata
@@ -177,13 +178,46 @@ def version_tag(c):
 _HEAD = re.compile(r"\u2014 (.*?)(?: - (?:GS|Bill))? \((GS|Bill|Act|Other), (\d{4}-\d\d-\d\d)\)")
 
 
+# ---- read-time cleanup of what the PDF parser leaves inside clause text (the stored text and the vectors are not changed).
+# Only spans recognised as noise are removed; anything else stays, because Schedules, forms and tables follow the last clause in
+# the same chunk and are real law. Measured on the production index: see AGENTS.md "Read-time cleanup".
+PRINTER = re.compile(r"\s*(?:PRINTED\s+AT\s+THE\s+)?DEPARTMENT\s+OF\s+GOVERNMENT\s+PRINTING(?:\s*,\s*SRI\s+LANKA)?\s*\.?", re.I)
+_MN_UNIT = (r"(?:new\s+)?(?:[Ss]ections?|Articles?|Chapters?|CHAPTERS?|Parts?|PARTS?|(?:the\s+)?(?:[A-Z][a-z]+\s+)?Schedules?|"
+            r"(?:the\s+)?long\s+title|(?:the\s+)?[Pp]reamble)")
+_MN_ANCHOR = (r"(?:(?:of|to|in)\s+(?:the\s+)?principal\s+enactment|of\s+(?:the\s+)?Act\s*,?\s*No\.\s*\d+\s+of\s+\d{4}|"
+              r"of\s+(?:the\s+)?Constitution|of\s+(?:the\s+)?\(?Chapter\s+\d+\)?)")
+# one margin note: "Amendment of section 7 of the principal enactment", "Insertion of new section 15B in the principal enactment"
+MARGIN_NOTE = re.compile(rf"(?:Amendment|Repeal|Insertion|Replacement|Substitution)\s+of\s+{_MN_UNIT}[^.\n;:\u201c\u201d\"]{{0,60}}?\s+{_MN_ANCHOR}[ \t]*\.?")
+# a run of them, after the end of a sentence or line, and not running on into lower-case text (that would be a real sentence)
+MARGIN_RUN = re.compile(rf"(?<=[.;:\u201d\"\-\u2013\u2014])(?P<run>(?:\s*(?:{MARGIN_NOTE.pattern}|Short\s+title\.?|Sinhala\s+text\s+to\s+prevail\s+in\s+case\s+of\s+"
+                        rf"inconsistency\.?))*\s*{MARGIN_NOTE.pattern}(?:\s*(?:{MARGIN_NOTE.pattern}|Short\s+title\.?|Sinhala\s+text\s+to\s+prevail"
+                        rf"\s+in\s+case\s+of\s+inconsistency\.?))*)(?=\s*(?:$|\n|[\u201c\"(]|[A-Z]))")
+PREVAIL_NOTE = re.compile(r"(?<=[.;:\u201d\"])\s*Sinhala\s+text\s+to\s+prevail\s+in\s+case\s+of\s+inconsistency\s*\.?")
+
+
+CLEAN_TEXT = os.environ.get("BILLRAG_CLEAN_TEXT", "1") != "0"  # 0 = show clause text exactly as stored (comparison, kill switch)
+
+
+def strip_noise(text, title=""):
+    """Clause text without the printer's line, margin notes and the running page header (the bill's title at a line end)."""
+    if not CLEAN_TEXT:
+        return text
+    t = PRINTER.sub(" ", text or "")
+    short = re.sub(r"\s*-\s*(?:Bill|GS)\s*$", "", title or "").strip()
+    if len(short) >= 12:  # the running header: "25Twentieth Amendment to the Constitution", "... (Amendment)" before a line break
+        t = re.sub(rf"(?<=[.;:\u201d\"\s])\s*\d{{0,3}}\s*{re.escape(short)}(?!\s*(?:Act|Bill|Ordinance|Law|,))\s*(?=\n|$)", "", t)
+    t = MARGIN_RUN.sub(" ", t)
+    t = PREVAIL_NOTE.sub(" ", t)
+    return re.sub(r"[ \t]+(?=\n)", "", re.sub(r"[ \t]{2,}", " ", t)).strip()
+
+
 def shown_text(c):
-    """The chunk text as the answering model reads it. A bill-level (overview) chunk starts with a stored header like
-    'Bill 084/2026 \u2014 The X - GS (GS, 2026-10-16).'; its internal codes get the same plain words as version_tag. Stored text
-    (and so the vectors) is not changed. Clause text is returned as is."""
+    """The chunk text as the answering model (and the grader) reads it. A bill-level (overview) chunk starts with a stored header like
+    'Bill 084/2026 \u2014 The X - GS (GS, 2026-10-16).'; its internal codes get the same plain words as version_tag. Clause text
+    loses the parser's noise (strip_noise). Stored text (and so the vectors) is not changed."""
     t = c["text"]
     if c.get("kind") != "overview":
-        return t
+        return strip_noise(t, c.get("title", "")) if c.get("kind") in CLAUSE_KINDS else t
     return _HEAD.sub(lambda m: f"\u2014 {m.group(1)} ({KIND_LABEL[m.group(2)] + ', ' if m.group(2) in KIND_LABEL else ''}{m.group(3)})", t, count=1)
 
 
@@ -364,7 +398,7 @@ class Pipeline:
             if c["kind"] == "overview":
                 tag, txt = "[BILL-LEVEL] ", shown_text(c)[:650]
             else:
-                tag, txt = "", c["text"][:750]
+                tag, txt = "", shown_text(c)[:750]
             where = f"§{c['section_no']}" if c.get("section_no") is not None else c["kind"]
             blocks.append(f"[{i}] {tag}{c['bill_key']} {where} — {version_tag(c)}\n{txt}")
         prompt = EVAL_PROMPT.format(question=question, candidates="\n\n".join(blocks))
