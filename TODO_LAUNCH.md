@@ -70,14 +70,15 @@ Findings from the flagged Procurement answers:
 
 ## Phase 3: Launch the free account
 
-- [x] **M** Open sign-up with abuse protection (Turnstile, 20 codes per network and 5 per address a day). Written 2026-11-08, OFF (`OPEN_SIGNUP = "off"`), not deployed. Bill Assistant only; Procurement Rules stays staff-only until the owner decides
+- [x] **M** Open sign-up with abuse protection (Turnstile, 20 codes per network and 5 per address a day). Live and ON since 2026-11-09. Bill Assistant only; Procurement Rules stays staff-only until the owner decides
 - [x] **M** One account across Bill Assistant and Procurement Rules: one session cookie for `.citizenlk.com`, one KV, one consent record. Written 2026-11-08, not deployed (see `AGENTS.md` "One account"). Procurement Rules is open to every registered account (`OPEN_TO = "registered"`, 2026-11-09, not deployed): 5 questions a day, its own extra statements, no sign-ups of its own
 - [x] **S** Consent at first sign-in (accuracy, not legal advice, data sent to third-party providers outside Sri Lanka); Procurement Rules adds three of its own. Written 2026-11-08, not deployed. **O** Have the wording checked with the terms (Phase 2)
 - [x] **M** Per-user limits: 20/day and 150/month for Bill Assistant, 5/day for Procurement Rules (counted on the server, per service). Written, not deployed
 - [x] **M** Save 30 days of chat history, with a way for users to delete it. Both pages + the API (`src/history.js`). Written 2026-11-09, not deployed.
 - [ ] **M** Weekly new-bill email, with unsubscribe
 - [x] **S** Don't count greetings, clarifications, translations of an earlier answer or failures against the limit (Bill Assistant; Procurement Rules does not send the marker yet, so there every question counts). Written, not deployed
-- [ ] **S** Lower the public limit from 10 to 3 (`PUBLIC_DAILY_PER_COOKIE`): a config change to make together with `OPEN_SIGNUP = "on"`. The "create a free account for more" message is written and shows only while sign-up is open
+- [x] **S** Lower the public limit from 10 to 3 (done 2026-11-09, live with sign-up)
+- [x] (was:) Lower the public limit from 10 to 3 (`PUBLIC_DAILY_PER_COOKIE`): a config change to make together with `OPEN_SIGNUP = "on"`. The "create a free account for more" message is written and shows only while sign-up is open
 - [ ] **S** Weekly report: sign-ups, active users, people hitting limits, cost per user
 - [ ] **O** To turn sign-up on (in this order): deploy; send a test code to an address NOT in `ALLOWED_EMAILS` after setting `OPEN_SIGNUP = "on"` and `PUBLIC_DAILY_PER_COOKIE = "3"`; check the Turnstile widget on the sign-in page (its hostname list must include `bills.citizenlk.com`, it does); redeploy; read the first free account's logs
 - [ ] **O** Soft launch to about 20-50 people first, then announce it
