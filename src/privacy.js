@@ -17,6 +17,7 @@ const SERVICES = {
   bills: {
     name: "Bill Assistant",
     keep: [
+      "<b>Page counts:</b> when you open this page we count that a person looked at it, how far they scrolled and which site sent them (for example a search engine or a link someone shared), with your country. There is no cookie, no ID, no IP address and nothing you type in the count, and nothing is counted if your browser sends Do Not Track or Global Privacy Control.",
       "<b>Your questions and the answers.</b> Each is saved in a log with its time, the bills it cited, how long it took and what it cost. The record carries a random chat ID, not your name, email or IP address. If a question contains something that identifies you, the log contains it too.",
       "<b>If you use it without signing in:</b> a cookie with a random ID (30 days) counts your free questions. Your IP address is used for a daily count that stops one network taking every free question; that count is deleted within a day or so.",
       "<b>If you sign in:</b> your email address is used to send a one-time code and is kept with your session for 7 days (the session cookie works on every citizenlk.com address). The code is stored only in scrambled form, for 5 minutes. The list of invited addresses is kept for as long as you have access.",
@@ -32,6 +33,7 @@ const SERVICES = {
   procurement: {
     name: "Procurement Rules",
     keep: [
+      "<b>Page counts:</b> when you open this page we count that a person looked at it, how far they scrolled and which site sent them (for example a search engine or a link someone shared), with your country. There is no cookie, no ID, no IP address and nothing you type in the count, and nothing is counted if your browser sends Do Not Track or Global Privacy Control.",
       "<b>Your questions and the answers.</b> Each is saved in a log with its time, the passages it used, how long it took and what it cost. The record does not carry your name, email or IP address. If a question contains something that identifies you, the log contains it too. A copy of each question and answer also goes to the service's system logs at Cloudflare.",
       "<b>Your sign-in:</b> use your citizenlk account (created on Bill Assistant). Your email address is used to send a one-time code and is kept with your session for 7 days (the session cookie works on every citizenlk.com address). The code is stored only in scrambled form, for 5 minutes.",
       "<b>Your daily count:</b> the number of questions you have asked today is counted against a scrambled form of your email address, and kept for about a day.",

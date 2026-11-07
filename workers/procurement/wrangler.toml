@@ -71,3 +71,8 @@ CHAT_MODEL = "deepseek-flash"
 CHAT_BASE_URL = "https://api.deepseek.com"
 RERANK_URL = "https://procurement.citizenlk.com/internal/rerank"
 CHAT_FALLBACK_URL = "https://procurement.citizenlk.com/internal/chat"
+
+# Anonymous visitor counts (src/events.js); the admin panel reads them. Counting is off until the EV_KEY secret exists (or OTP_PEPPER, on the services).
+[[analytics_engine_datasets]]
+binding = "EVENTS"
+dataset = "citizenlk_events"

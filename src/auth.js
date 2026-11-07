@@ -11,6 +11,7 @@
 
 import { getCookie, hex, json, readJson, safeEqual } from "./util.js";
 import { anonApi, publicMe, publicOn, publicStart, signupOn, verifyTurnstile } from "./public.js";
+import { countEvents, counted } from "./events.js";
 import { historyApi } from "./history.js";
 import { memberAsk, memberLeft, takeCodeRequest } from "./members.js";
 import { privacyPage } from "./privacy.js";
@@ -232,6 +233,9 @@ export function createHandler({ sendMail = sendMailViaCloudflare, upstream = nul
     let env = realEnv;
     const url = new URL(request.url);
     const { pathname } = url;
+    // Anonymous visitor counts (events.js): the beacon endpoint is open to anyone, and the page gets its counter wherever it is served from.
+    if (pathname === "/e" && realEnv.EVENTS) return countEvents(request, realEnv);
+    if (realEnv.EVENTS && realEnv.ASSETS) env = { ...realEnv, ASSETS: { fetch: async (req) => counted(await realEnv.ASSETS.fetch(req), req, realEnv) } };
     if (pathname === "/login" && request.method === "GET") {
       let page = loginTitle ? LOGIN_PAGE.replace("Sign in to the Bill Assistant", loginTitle) : LOGIN_PAGE;
       if (signupOn(env)) page = openLoginPage(page, env.TURNSTILE_SITEKEY);

@@ -1,4 +1,6 @@
 // citizenlk.com homepage: the static page in site/, no login and no container. www redirects to the bare domain.
+import { countEvents, counted } from "../../src/events.js";
+
 export const HOME = "citizenlk.com";
 const SECURITY_HEADERS = {
   "Strict-Transport-Security": "max-age=31536000",
@@ -14,7 +16,8 @@ export default {
       url.hostname = HOME;
       return Response.redirect(url.toString(), 301);
     }
-    const asset = await env.ASSETS.fetch(request);
+    if (url.pathname === "/e") return countEvents(request, env); // anonymous visitor counts (src/events.js)
+    const asset = await counted(await env.ASSETS.fetch(request), request, env);
     const response = new Response(asset.body, asset);
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) response.headers.set(name, value);
     return response;

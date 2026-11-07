@@ -92,3 +92,8 @@ MEMBER_DAILY = "20"
 MEMBER_MONTHLY = "150"
 # Optional, ignored when the container is bound: proxy signed-in requests to another server instead.
 # ORIGIN = "https://billrag.example.com"
+
+# Anonymous visitor counts (src/events.js); the admin panel reads them. Counting is off until the EV_KEY secret exists (or OTP_PEPPER, on the services).
+[[analytics_engine_datasets]]
+binding = "EVENTS"
+dataset = "citizenlk_events"

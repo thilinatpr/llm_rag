@@ -1,6 +1,7 @@
 # The admin panel. Deploy: npx wrangler deploy -c workers/admin/wrangler.toml
 # Secrets (npx wrangler secret put NAME -c workers/admin/wrangler.toml):
 #   OTP_PEPPER (its own random value), CF_EMAIL_TOKEN (login mail), DEEPSEEK_API_KEY ("Check now" on the credit),
+#   CF_API_TOKEN (Account > Account Analytics: Read; the Visitors page reads Analytics Engine with it),
 #   GITHUB_DISPATCH_TOKEN (fine-grained token for GITHUB_REPO only, permission Actions: read and write: the Build and Publish buttons)
 name = "citizenlk-admin"
 main = "worker.js"
