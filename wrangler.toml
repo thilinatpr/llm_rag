@@ -81,13 +81,13 @@ TRANSLATE_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 PUBLIC_CHAT = "on"
 TURNSTILE_SITEKEY = "0x4AAAAAAF2W2gpEdNI7gfcY"
 # Daily allowances (reset at midnight in Sri Lanka). Per visitor / per IP (backstop: mobile users share IPs) / whole public lane.
-PUBLIC_DAILY_PER_COOKIE = "10"
+PUBLIC_DAILY_PER_COOKIE = "3"
 PUBLIC_DAILY_PER_IP = "300"
 PUBLIC_DAILY_GLOBAL = "500"
 PUBLIC_COOKIES_PER_IP = "50"
 # Open sign-up (src/members.js): "on" lets any address sign in with Turnstile + daily caps per network and address, and counts a free account's
 # questions per day and month. Anyone in ALLOWED_EMAILS stays unlimited. When turning it on, also set PUBLIC_DAILY_PER_COOKIE to "3" (TODO_LAUNCH.md).
-OPEN_SIGNUP = "off"
+OPEN_SIGNUP = "on"
 MEMBER_DAILY = "20"
 MEMBER_MONTHLY = "150"
 # Optional, ignored when the container is bound: proxy signed-in requests to another server instead.
