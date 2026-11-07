@@ -1,6 +1,7 @@
 // Entrypoint. workerd accepts only the default handler and the Durable Object class as exports (see AGENTS.md runbook).
 import { Container, getContainer } from "@cloudflare/containers";
 import { createProcurementHandler } from "./handler.js";
+import { noindex } from "../../src/seo.js";
 
 const PORT = 8000;
 
@@ -32,5 +33,5 @@ export class ProcurementContainer extends Container {
   }
 }
 
-const handle = createProcurementHandler((env) => getContainer(env.BILLRAG));
+const handle = noindex(createProcurementHandler((env) => getContainer(env.BILLRAG)));
 export default { fetch: handle };

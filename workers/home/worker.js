@@ -1,7 +1,7 @@
 // citizenlk.com homepage: the static page in site/, no login and no container. www redirects to the bare domain.
 import { countEvents, counted } from "../../src/events.js";
 
-export const HOME = "citizenlk.com";
+const HOME = "citizenlk.com";
 const SECURITY_HEADERS = {
   "Strict-Transport-Security": "max-age=31536000",
   "X-Content-Type-Options": "nosniff",
