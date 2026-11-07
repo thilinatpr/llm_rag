@@ -58,6 +58,7 @@ FOCUS_NOTE = ("\n\nNOTE: the question refers to a bill without naming it. The be
 OVERVIEW_Q = re.compile(r"\b(?:key|main|major|important|principal)\s+(?:provisions?|points?|features?|clauses?|changes?)\b|"
                         r"\b(?:summari[sz]e|summary|overview|outline|gist|explain|describe|what\s+(?:does|is)\b.{0,40}\b(?:do|about))\b|"
                         r"\btell\s+me\s+about\b", re.I)
+_TITLE_STOP = {"act", "bill", "amendment", "the", "of", "and", "for", "to", "in", "no", "a", "gs"}
 LEAK = re.compile(r"<\|(?:call|start|end|channel|message|return|constrain)\|>|\bto=functions\b")
 
 EVAL_PROMPT = """You are a strict evidence grader for a question-answering system over Sri Lankan bills.
@@ -568,6 +569,30 @@ class Pipeline:
             self.on_event("bill_sections", {"bill": top.key, "sections": [f"{e.key} \u00a7{e.section}" for e in out]})
         return out
 
+    def titled_bill(self, question, evidence):
+        """The one bill/Act in the evidence whose title the question names in words ("summarise port city economic commision act"):
+        every distinctive title word must appear in the question (a close spelling counts), at least two words or one of 6+ letters.
+        None when no title, or two different titles, match."""
+        import difflib
+        qw = set(re.findall(r"[a-z]{3,}", question.lower()))
+        best = {}
+        for k in {e.key for e in evidence}:
+            b = self.store.bill(k) if hasattr(self.store, "bill") else None
+            if not b:
+                continue
+            title = re.sub(r",?\s*No\.?\s*\d+\s+of\s+\d{4}|\s-\s(?:Bill|GS)$", "", b["title"])
+            words = [w for w in re.findall(r"[a-z]{3,}", title.lower()) if w not in _TITLE_STOP]
+            if not words or (len(words) < 2 and len(words[0]) < 6):
+                continue
+            if all(w in qw or difflib.get_close_matches(w, qw, 1, 0.85) for w in words):
+                best[k] = (len(words), b["date"], b["title_norm"] if "title_norm" in b else title)
+        if not best:
+            return None
+        top = max(best, key=lambda k: best[k][:2])
+        if len({v[0] for v in best.values()}) > 1 and any(v[0] == best[top][0] and v[2] != best[top][2] for v in best.values()):
+            return None
+        return top
+
     def focus_bill(self, question, evidence, keys=None):
         """For a question that says "this new bill" without naming one: the bill (all its GS/Bill versions together) whose
         evidence the grader scored highest; ties -> more total score, then newer. None if the question names a bill or the
@@ -812,13 +837,16 @@ class Pipeline:
             res.added_sections = self.bill_sections(q, res.evidence)
             res.evidence += res.added_sections
             res.seconds["bill_sections"] = time.time() - t
-        if keys and len(keys) == 1 and OVERVIEW_Q.search(q) and not any(e.chunk["kind"] == "overview" and e.key == keys[0] for e in res.evidence):
-            ov = self._act_overview_evidence(keys[0], 3)
+        ov_key = keys[0] if keys and len(keys) == 1 else None
+        if ov_key is None and not keys and OVERVIEW_Q.search(q) and res.evidence:
+            ov_key = self.titled_bill(q, res.evidence)  # named by title, not number
+        if ov_key and OVERVIEW_Q.search(q) and not any(e.chunk["kind"] == "overview" and e.key == ov_key for e in res.evidence):
+            ov = self._act_overview_evidence(ov_key, 3)
             if ov:
                 res.evidence.insert(0, ov)  # the instrument's own description first
-                res.added_overview = keys[0]
+                res.added_overview = ov_key
                 enough, missing, res.enough = True, "", True  # the question asks for the gist, not for every clause
-                self.on_event("overview_added", {"bill": keys[0]})
+                self.on_event("overview_added", {"bill": ov_key})
         res.evidence = self.apply_acts(q, res.evidence, keys, res)
         focus = res.focus = self.focus_bill(q, res.evidence, keys)
         if focus:  # its clauses first (stable sort keeps the grader's order within each group)

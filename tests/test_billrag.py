@@ -494,6 +494,10 @@ def test_overview_question_on_named_bill_adds_overview(tmp_path):
     r = p.ask("What are the key provisions of bill 086/2026?")
     assert r.added_overview == "086/2026" and r.enough
     assert r.evidence[0].chunk["kind"] == "overview"
+    named = Pipeline(st, Retriever(st), ScriptLLM(enough=False)).ask("Summarise the Trusts Amendment bill")
+    assert named.added_overview == "086/2026"  # named by title, no number
+    vague = Pipeline(st, Retriever(st), ScriptLLM(enough=False)).ask("Summarise the amendment bill")
+    assert vague.added_overview == ""  # one generic word is not a title
     other = Pipeline(st, Retriever(st), ScriptLLM()).ask("How many days does bill 086/2026 allow?")
     assert other.added_overview == ""  # a specific question is left to the ranked clauses
 
