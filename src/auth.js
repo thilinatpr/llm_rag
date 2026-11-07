@@ -12,6 +12,7 @@
 import { getCookie, hex, json, readJson, safeEqual } from "./util.js";
 import { anonApi, publicMe, publicOn, publicStart, verifyTurnstile } from "./public.js";
 
+const PAUSE_KEY = "admin:public-paused"; // set by the admin panel (admin.js)
 const OTP_TTL = 300; // seconds a code is valid
 const RESEND_COOLDOWN = 60; // seconds between code requests per address
 const MAX_ATTEMPTS = 5;
@@ -189,14 +190,16 @@ $('f1').onsubmit = async (e) => { e.preventDefault();
   try { const j = await post('/login/request', { email: $('email').value }); msg(j.message); $('f2').hidden = false; $('code').focus(); }
   catch (x) { msg(x.message, true); } };
 $('f2').onsubmit = async (e) => { e.preventDefault();
-  try { await post('/login/verify', { email: $('email').value, code: $('code').value }); location.href = '/'; }
+  try { await post('/login/verify', { email: $('email').value, code: $('code').value }); location.href = location.search === '?next=/admin' ? '/admin' : '/'; }
   catch (x) { msg(x.message, true); } };
 </script></body></html>`;
 
 // upstream(request, env): optional, forwards signed-in requests (e.g. to a container). Used when env.BILLRAG is bound.
 // verify(env, token, ip, host) checks a Turnstile token; now() is the clock (both replaceable in tests).
-export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null, verify = verifyTurnstile, now = () => Date.now() } = {}) {
-  return async function fetch(request, env) {
+// admin(request, env, user): the admin panel at /admin (admin.js).
+export function createHandler({ sendMail = sendMailViaCloudflare, upstream = null, verify = verifyTurnstile, now = () => Date.now(), admin = null } = {}) {
+  return async function fetch(request, realEnv) {
+    let env = realEnv;
     const url = new URL(request.url);
     const { pathname } = url;
     if (pathname === "/login" && request.method === "GET")
@@ -210,6 +213,9 @@ export function createHandler({ sendMail = sendMailViaCloudflare, upstream = nul
     }
 
     const user = await currentUser(env, request);
+    if (admin && (pathname === "/admin" || pathname.startsWith("/admin/"))) return admin(request, env, user);
+    // The panel's pause button: a visitor is treated as if PUBLIC_CHAT were off. Cached a minute, so this is not a KV call per request.
+    if (!user && env.PUBLIC_CHAT === "on" && (await env.AUTH.get(PAUSE_KEY, { cacheTtl: 60 }))) env = { ...env, PUBLIC_CHAT: "off" };
     // Public (anonymous) lane: see public.js. Off unless PUBLIC_CHAT = "on" and everything it needs is configured.
     if (pathname === "/public/me" && request.method === "GET") return publicMe(env, request, !!user, now());
     if (pathname === "/public/start" && request.method === "POST")

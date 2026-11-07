@@ -48,6 +48,7 @@ Dockerfile, docker/entrypoint.sh, requirements-serve.txt   the container image (
 wrangler.toml             Worker + assets + KV + container + Durable Object config; test/worker.test.mjs = Node tests (`npm test`)
 scripts/refresh_bills.py  one command for newly published bills: copy live index -> scrape -> only the new documents -> checks -> `--publish`
 scripts/load_test.py      how many people at once (closed loop), also a stub chat model (`--stub-model`, `--fail 402`); rows in evals/load_test_*.jsonl
+src/admin.js, admin-stats.js   the admin panel at /admin: To do list, tiles, one page per source, question reader (see "Admin panel")
 src/balance.js            hourly DeepSeek credit check (cron on `gov-rag-llm`) -> email to ALERT_EMAIL below BALANCE_ALERT_USD
 scripts/read_chatlogs.py  download + summarise the chat logs from R2;  scripts/shrink_vectors.py = float16 vectors (half the RAM)
 evals/answer_model_comparison/   per-model answer-eval rows and reports (see "Answer model comparison")
@@ -119,7 +120,7 @@ Container: restores index.sqlite + vectors.npz from R2 (gov-rag/bills/) on start
 | R2 bucket | `gov-rag`: `bills/` (PDFs, `index.sqlite`, `vectors.npz`), `chatlogs/` (conversation logs), `bills/vectors.float32.npz` (old float32 backup, delete when no longer needed) |
 | Email | zone `tripletrackr.com`; sender `login@tripletrackr.com` via the Email Service REST API (`/accounts/<id>/email/sending/send`) - no per-recipient verification in Cloudflare; `ALLOWED_EMAILS` is the only allowlist |
 
-**Worker vars** (`wrangler.toml`): `ALLOWED_EMAILS`, `FROM_ADDRESS`, `CF_ACCOUNT_ID`, `R2_BUCKET`; optional `CHAT_MODEL`
+**Worker vars** (`wrangler.toml`): `ALLOWED_EMAILS`, `ADMIN_EMAILS`, `FROM_ADDRESS`, `CF_ACCOUNT_ID`, `R2_BUCKET`; optional `CHAT_MODEL`
 (default `@cf/openai/gpt-oss-120b`), `ORIGIN` (ignored when the container is bound), `TRANSLATE` (`off`|`script`|`ai`, passed to the container as
 `BILLRAG_TRANSLATE`; currently `ai`), `TRANSLATE_MODEL` (-> `BILLRAG_TRANSLATE_MODEL`; currently `@cf/meta/llama-3.3-70b-instruct-fp8-fast`).
 **Worker secrets** (`npx wrangler secret put NAME`): `OTP_PEPPER`, `CF_EMAIL_TOKEN` (Email Sending), `PROXY_SECRET` (shared with the
@@ -324,6 +325,15 @@ them as private. Records before the first logging deploy do not exist.
 
 Worker-side errors (`upstream_failed`, with path, ms, error) go to Workers Logs (dashboard: Workers & Pages -> gov-rag-llm -> Logs;
 `[observability] enabled = true`), and container logs are enabled too.
+
+### Admin panel (`src/admin.js`, `src/admin-stats.js`, `test/admin.test.mjs`; written 2026-11-07, NOT deployed)
+`https://bills.citizenlk.com/admin`, modelled on LankaWatch's control panel (`sri-lanka-ds-boundaries/docs/control-panel.md`): home is a **To do** list, most urgent first (People affected, Waiting for you, Watching), each row with its own button and gone when the cause is; then tiles; then `/admin/source/<id>` per source (`bills`, `procurement`, `money`, `public`, `containers`, `index`). `/admin/questions` and `/admin/q/<log key>` read the logs; `/admin/audit` lists buttons pressed. Server-rendered, no build step; pages update when loaded (no auto-refresh).
+- **Who:** the normal sign-in, then `ADMIN_EMAILS` (var; must also be in `ALLOWED_EMAILS`; unset = nobody). Anyone else signed in gets 404. Actions are POST with an `Origin` check.
+- **Never wakes a container** and spends no model call: `getState()` reads stored state, the credit is the last result of `checkBalance` (KV `admin:balance`), the public count is `QuotaCounter.peek`.
+- **Numbers:** rollups at R2 `admin-rollups/<service>/<day>.json` (`LOGS` binding) remember the last log key counted and read only newer ones, within a budget of R2 calls per view; the hourly cron moves them too. A day over for 2 days is closed. The newest minute is left for later, because a log is written just after its key's time and `startAfter` would skip it for good. Rollups hold counts and keys, never words. Deleting a rollup recounts it. Days are UTC (the log folders), times are Sri Lanka time.
+- **Log records are untrusted** (anyone can type a question): everything is escaped, and the CSP allows only that response's nonce. Keep both; a test posts a `<script>` question.
+- **Pause public questions:** KV `admin:public-paused`, read in `auth.js` for signed-out requests (cached 60 s, so it can take a minute to reach every location). Treats visitors as `PUBLIC_CHAT = "off"`; members are unaffected.
+- **Checked** (offline only): Node tests; a real Chromium run at 1280 and 400 px against copies of the real logs (no CSP violations, no sideways scroll, pause and resume pressed); its counts matched an independent Python count of the same records. **Not checked on Cloudflare:** the cross-Worker `PROCUREMENT` binding, `getState()` over RPC, real R2. Not built from LankaWatch's panel: Web Push, phone install (PWA), a People page. No check for new bills on documents.gov.lk, so the index row only knows its age.
 
 ### Runbook (symptom -> likely cause -> fix)
 | Symptom | Cause / fix |

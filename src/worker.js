@@ -1,6 +1,8 @@
 // Worker entrypoint: the login gate (auth.js) in front of the Python UI container.
 // Kept to a default export plus the Durable Object class: workerd rejects any other non-handler named export.
 import { getContainer } from "@cloudflare/containers";
+import { createAdmin } from "./admin.js";
+import { refreshStats } from "./admin-stats.js";
 import { createHandler } from "./auth.js";
 import { checkBalance } from "./balance.js";
 
@@ -29,7 +31,10 @@ async function upstream(request, env, opts = {}) {
   }
 }
 
+// Reads the stored state only: this does not start a sleeping container or reset its idle timer.
+const containerState = (env, binding) => getContainer(env[binding]).getState();
+
 export default {
-  fetch: createHandler({ upstream }),
-  scheduled: (_event, env, ctx) => ctx.waitUntil(checkBalance(env)), // hourly: see [triggers] in wrangler.toml
+  fetch: createHandler({ upstream, admin: createAdmin({ containerState }) }),
+  scheduled: (_event, env, ctx) => ctx.waitUntil(Promise.all([checkBalance(env), refreshStats(env)])), // hourly: see [triggers] in wrangler.toml
 };

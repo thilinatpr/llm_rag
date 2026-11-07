@@ -15,7 +15,7 @@ async function notify(env, key, subject, text, send) {
 }
 
 // -> {state: "off" | "ok" | "low" | "check_failed", ...}, also written to the Worker log.
-export async function checkBalance(env, { fetchFn = globalThis.fetch, send = sendMessage } = {}) {
+export async function checkBalance(env, { fetchFn = globalThis.fetch, send = sendMessage, nowIso = () => new Date().toISOString() } = {}) {
   if (!env.DEEPSEEK_API_KEY || !env.ALERT_EMAIL) return { state: "off" };
   const limit = Number(env.BALANCE_ALERT_USD ?? 5);
   let out;
@@ -49,5 +49,10 @@ export async function checkBalance(env, { fetchFn = globalThis.fetch, send = sen
     }
   }
   console.log(JSON.stringify({ event: "balance_check", ...out }));
+  // The admin panel reads the last result from here, so it never spends a call to DeepSeek on a page view.
+  const { mailed: _mailed, mailError: _mailError, ...last } = out;
+  let lowSince = null;
+  if (out.state === "low") lowSince = JSON.parse((await env.AUTH.get("admin:balance")) || "{}").lowSince || nowIso();
+  await env.AUTH.put("admin:balance", JSON.stringify({ ...last, at: nowIso(), lowSince }));
   return out;
 }

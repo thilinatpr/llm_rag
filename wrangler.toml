@@ -41,6 +41,21 @@ new_sqlite_classes = ["BillragContainer"]
 tag = "v2"
 new_sqlite_classes = ["QuotaCounter"]
 
+# Read-only look at Procurement Rules' container for the admin panel (src/admin.js): no calls reach the container itself.
+[[durable_objects.bindings]]
+name = "PROCUREMENT"
+class_name = "ProcurementContainer"
+script_name = "citizenlk-procurement"
+
+# Chat logs and the index files, for the admin panel; it writes only admin-rollups/ (src/admin-stats.js).
+[[r2_buckets]]
+binding = "LOGS"
+bucket_name = "gov-rag"
+
+# The running Worker version, shown at the foot of the panel.
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
 # Keep Worker logs (incl. upstream_failed errors) so problems can be read after the fact.
 [observability]
 enabled = true
@@ -55,6 +70,8 @@ ALERT_EMAIL = "thilinatpr@gmail.com"
 BALANCE_ALERT_USD = "5"
 # Comma-separated. This is the only allowlist: nothing needs verifying on the Cloudflare side.
 ALLOWED_EMAILS = "thilinatpr@gmail.com"
+# Who can open the admin panel at /admin (src/admin.js). Must also be in ALLOWED_EMAILS, since it uses the same sign-in. Empty = nobody.
+ADMIN_EMAILS = "thilinatpr@gmail.com"
 # Any address on a domain onboarded under Cloudflare Email -> Email Sending.
 FROM_ADDRESS = "login@tripletrackr.com"
 # Cloudflare account id (not secret). The API token goes in the CF_EMAIL_TOKEN secret.
