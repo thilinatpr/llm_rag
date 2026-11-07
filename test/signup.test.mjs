@@ -151,3 +151,26 @@ test("the public lane tells a visitor to sign up only when sign-up is open", asy
   assert.match(await mk({}), /free account/);
   assert.doesNotMatch(await mk({ OPEN_SIGNUP: "off" }), /free account/);
 });
+
+test("Procurement Rules is open to registered accounts only: no second sign-up, the shared session works, 5 a day, unknown addresses get nothing", async () => {
+  // One KV for both services, like production: an account made on Bill Assistant exists for Procurement Rules.
+  const bills = setup();
+  const proc = setup({ OPEN_SIGNUP: "off", OPEN_TO: "registered", MEMBER_DAILY: "5", MEMBER_MONTHLY: "none", AUTH: bills.env.AUTH, QUOTA: bills.env.QUOTA }, "procurement");
+  assert.equal((await proc.call("/login/request", { method: "POST", body: { email: "new@example.com" } })).status, 200);
+  assert.equal(proc.sent.length, 0);                                    // not registered anywhere: silent, like any unknown address
+  const { cookie } = await bills.join("new@example.com");               // registers (terms accepted on Bill Assistant)
+  assert.equal((await proc.ask(cookie)).status, 403);                   // the shared cookie works, but Procurement Rules' own extra statements come first
+  await proc.call("/consent", { method: "POST", cookie, body: { ids: required("procurement").map((i) => i.id) } });
+  for (let i = 0; i < 5; i++) assert.equal((await proc.ask(cookie)).status, 200);
+  assert.equal((await proc.ask(cookie)).status, 429);
+  assert.equal((await bills.ask(cookie)).status, 200);                  // Bill Assistant's own counter is separate
+  // signing in on Procurement Rules directly also works for a registered address
+  bills.env.AUTH.m.delete("cool:new@example.com");                      // the 60-second resend wait, which the test KV does not expire
+  await proc.call("/login/request", { method: "POST", body: { email: "new@example.com" } });
+  assert.equal(proc.sent.length, 1);
+  const page = await (await proc.call("/login")).text();
+  assert.ok(page.includes("No account yet?") && !page.includes("cf-turnstile"));
+  // closing it again: the registered account can no longer use this service
+  proc.env.OPEN_TO = undefined;
+  assert.equal((await proc.ask(cookie)).status, 401);
+});

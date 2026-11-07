@@ -71,7 +71,7 @@ Findings from the flagged Procurement answers:
 ## Phase 3: Launch the free account
 
 - [x] **M** Open sign-up with abuse protection (Turnstile, 20 codes per network and 5 per address a day). Written 2026-11-08, OFF (`OPEN_SIGNUP = "off"`), not deployed. Bill Assistant only; Procurement Rules stays staff-only until the owner decides
-- [x] **M** One account across Bill Assistant and Procurement Rules: one session cookie for `.citizenlk.com`, one KV, one consent record. Written 2026-11-08, not deployed (see `AGENTS.md` "One account"). Still open: each service keeps its own `ALLOWED_EMAILS`, so Procurement Rules stays owner-only until sign-up is open
+- [x] **M** One account across Bill Assistant and Procurement Rules: one session cookie for `.citizenlk.com`, one KV, one consent record. Written 2026-11-08, not deployed (see `AGENTS.md` "One account"). Procurement Rules is open to every registered account (`OPEN_TO = "registered"`, 2026-11-09, not deployed): 5 questions a day, its own extra statements, no sign-ups of its own
 - [x] **S** Consent at first sign-in (accuracy, not legal advice, data sent to third-party providers outside Sri Lanka); Procurement Rules adds three of its own. Written 2026-11-08, not deployed. **O** Have the wording checked with the terms (Phase 2)
 - [x] **M** Per-user limits: 20/day and 150/month for Bill Assistant, 5/day for Procurement Rules (counted on the server, per service). Written, not deployed
 - [x] **M** Save 30 days of chat history, with a way for users to delete it. Both pages + the API (`src/history.js`). Written 2026-11-09, not deployed.
@@ -97,7 +97,7 @@ Findings from the flagged Procurement answers:
 ## Decisions needed from the owner
 
 - [ ] **Who is it for first?** Assumed here: procurement officers pay, citizens use Bill Assistant free.
-- [ ] **Open Procurement Rules to everyone with an account?** Depends on the translation review in Phase 2.
+- [ ] **Open Procurement Rules to everyone with an account?** Decided 2026-11-09: yes, to registered accounts (written, not deployed). The translation review in Phase 2 is still open; the Sinhala texts remain unreviewed
 - [ ] **Who handles the money?** Personally or through a registered business; this decides which payment providers are available.
 
 ## Timing risk

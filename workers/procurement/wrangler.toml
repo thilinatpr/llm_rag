@@ -55,8 +55,11 @@ class_name = "QuotaCounter"
 script_name = "gov-rag-llm"
 
 [vars]
-# Free accounts are NOT open here yet (depends on the translation review, TODO_LAUNCH.md). To open: OPEN_SIGNUP = "on" and the secret
-# TURNSTILE_SECRET + var TURNSTILE_SITEKEY for a widget on procurement.citizenlk.com. Free accounts: 5 questions a day, no monthly cap.
+# Open to every registered account (2026-11-09): anyone who already has a citizenlk account (made on Bill Assistant) can sign in here, with
+# one extra set of statements to accept. New accounts are made on Bill Assistant, so this Worker takes no sign-ups itself (no Turnstile here).
+# Free accounts: 5 questions a day, no monthly cap. To take sign-ups here too: OPEN_SIGNUP = "on" + secret TURNSTILE_SECRET + var TURNSTILE_SITEKEY
+# for a widget that lists procurement.citizenlk.com. To close it again: remove OPEN_TO (staff in ALLOWED_EMAILS keep access).
+OPEN_TO = "registered"
 OPEN_SIGNUP = "off"
 MEMBER_DAILY = "5"
 MEMBER_MONTHLY = "none"

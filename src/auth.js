@@ -32,8 +32,13 @@ export function allowed(env, email) {
   return String(env.ALLOWED_EMAILS || "").split(",").map(normalizeEmail).filter(Boolean).includes(email);
 }
 
-// May this address sign in? Staff (ALLOWED_EMAILS) always; anyone when open sign-up is on.
-const mayJoin = (env, email) => allowed(env, email) || signupOn(env);
+// May this address sign in here? Staff (ALLOWED_EMAILS) always; anyone when open sign-up is on; and with OPEN_TO = "registered" any address that already
+// has an account, i.e. has accepted the terms on a service that is open (consent record in the shared KV). That is how Procurement Rules is open to
+// registered users without taking sign-ups of its own: nobody new can get in from here, so it needs no person-check.
+async function mayJoin(env, email) {
+  if (allowed(env, email) || signupOn(env)) return true;
+  return env.OPEN_TO === "registered" && !!(await env.AUTH.get(`consent:${email}`));
+}
 
 export function newCode() {
   const n = new Uint32Array(1);
@@ -88,7 +93,7 @@ async function requestCode(env, request, sendMail, verify, nowMs) {
   if (!isEmail(email)) return json({ error: "Enter a valid email address." }, 400);
   // Same response whether or not the address is allowed, so the form can't be used to probe the allowlist.
   const reply = json({ ok: true, message: "If that address is allowed, a code is on its way." });
-  if (!mayJoin(env, email)) return reply;
+  if (!(await mayJoin(env, email))) return reply;
   if (signupOn(env)) {
     // Open sign-up: a person-check first, then per-network and per-address daily caps. The same for staff, so the replies never tell the lists apart.
     const ip = request.headers.get("CF-Connecting-IP") || "";
@@ -115,7 +120,7 @@ async function verifyCode(env, request, name) {
   const email = normalizeEmail(body.email);
   const code = String(body.code || "").trim();
   const bad = () => json({ error: "Invalid or expired code." }, 401);
-  if (!isEmail(email) || !/^\d{6}$/.test(code) || !mayJoin(env, email)) return bad();
+  if (!isEmail(email) || !/^\d{6}$/.test(code) || !(await mayJoin(env, email))) return bad();
   const raw = await env.AUTH.get(`otp:${email}`);
   if (!raw) return bad();
   const rec = JSON.parse(raw);
@@ -137,7 +142,7 @@ async function currentUser(env, request, name) {
   const sid = getCookie(request, name);
   if (!sid || !/^[0-9a-f]{64}$/.test(sid)) return null;
   const email = await env.AUTH.get(`session:${sid}`);
-  return email && mayJoin(env, email) ? email : null;
+  return email && (await mayJoin(env, email)) ? email : null;
 }
 
 export const LOGIN_PAGE = `<!doctype html>
@@ -230,6 +235,8 @@ export function createHandler({ sendMail = sendMailViaCloudflare, upstream = nul
     if (pathname === "/login" && request.method === "GET") {
       let page = loginTitle ? LOGIN_PAGE.replace("Sign in to the Bill Assistant", loginTitle) : LOGIN_PAGE;
       if (signupOn(env)) page = openLoginPage(page, env.TURNSTILE_SITEKEY);
+      else if (env.OPEN_TO === "registered")
+        page = page.replace("Access is by invitation for now.", 'Sign in with your citizenlk account. No account yet? <a href="https://bills.citizenlk.com/login" style="color:inherit">Create a free one</a> first.');
       return new Response(page, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
     }
     if (privacy && pathname === "/privacy" && request.method === "GET") // readable before signing in or starting a chat
