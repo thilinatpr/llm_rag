@@ -35,8 +35,10 @@ Written and tested 2026-11-07, not yet deployed. Details and measurements: `AGEN
 - [x] **M** Load test the same images at the same limits under Docker. It found a bug that failed 9 of 16 questions at 8 people at once; fixed. Procurement Rules now takes 2 at once plus a queue.
 - [x] **M** One command to add newly published bills: `scripts/refresh_bills.py`
 - [x] **S** Read the flagged Procurement answers and the failed follow-up rewrite (findings below)
-- [ ] **O** Deploy both services, then check a signed-in question and the logs
-- [ ] **O** Publish the new index: `scripts/refresh_bills.py --publish` adds bill 087/2026, Prevention of Organised Crimes. Decide whether to schedule it.
+- [x] **O** Deploy both services (live 2026-11-07 05:43 UTC)
+- [ ] **O** Ask a question on each site and check the logs (no question has reached the new code yet)
+- [x] **O** Publish the new index (2026-11-07 06:12 UTC; adds the presented version of Prevention of Organised Crimes, 087/2026)
+- [ ] **O** Decide whether to schedule `scripts/refresh_bills.py --publish`
 - [ ] **O** Run `scripts/load_test.py` against the live site with a signed-in cookie (a small run: each question costs money)
 - [ ] **O** Top up DeepSeek: under $5 when this was written
 
