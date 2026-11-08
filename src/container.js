@@ -9,7 +9,7 @@ const PORT_READY_TIMEOUT_MS = 300_000;
 
 export class BillragContainer extends Container {
   defaultPort = PORT;
-  sleepAfter = "15m"; // stop (and stop paying for memory) after 15 idle minutes
+  sleepAfter = "5m"; // stop (and stop paying for memory) after 5 idle minutes
 
   constructor(ctx, env) {
     super(ctx, env);
