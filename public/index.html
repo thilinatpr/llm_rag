@@ -283,6 +283,8 @@ async function warm() {
   }
   setStatus('\u25cf server not responding');
 }
+// The container is started by the first keystroke, not by opening the page: visitors who only look (and bots) no longer keep it awake.
+q.addEventListener('input', warm, {once: true});
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // A dropped connection (TypeError) usually means the container was asleep and is starting; wait until it answers, then retry once.
 async function waitUntilUp(note) {
@@ -406,7 +408,7 @@ function verify(sitekey) {
       const r = await fetch('/public/start', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({token})});
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { gateMsg.textContent = (j.reason && typeof tr(j.reason) === 'string' && tr(j.reason)) || tr('failed'); gateMsg.className = 'err'; return; }
-      gate.hidden = true; showAnon(j.left); setAsking(true); q.focus(); warm();
+      gate.hidden = true; showAnon(j.left); setAsking(true); q.focus();
     } catch (e) { fail(); }
   }, 'error-callback': fail, 'expired-callback': fail});
   document.head.appendChild(s);
@@ -418,7 +420,6 @@ function verify(sitekey) {
   if (me.enabled && me.user === 'anon') showAnon(me.left);
   if (me.user === 'member') { H.on = true; histBtn.hidden = false; }
   if (me.user === 'member' && me.free) { state.free = true; quotaEl.textContent = '· ' + tr('left', me.left); }
-  warm();
 })();
 document.getElementById('f').addEventListener('submit', async (e) => {
   e.preventDefault();
