@@ -3,11 +3,13 @@
 # only green (Python + Node tests run first), and only when the owner asked for it.
 #   gh workflow run deploy.yml -f target=bills      (Bill Assistant: Worker gov-rag-llm + its container)
 #   gh workflow run deploy.yml -f target=admin      (admin panel Worker, no container)
+#   gh workflow run deploy.yml -f target=procurement   (Procurement Rules: Worker + container; its index comes from R2, see
+#                                                     scripts/procurement_index.py: upload it after every `python -m procurement build`)
 #   gh run watch
 # Afterwards record it in AGENTS.md "Deployed vs main" (the job summary prints the commit, build id and Worker version).
 # Repo secret CLOUDFLARE_API_TOKEN needs Workers Scripts: Edit, Workers KV Storage: Edit, Containers: Edit, Zone: Read.
-# Not here: Procurement Rules (its image bakes data/procurement/index.sqlite, which is not in the repo) and the homepage
-# (needs scripts/build_site.py on the published index first).
+# Procurement also needs the R2 secrets (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET) to fetch its index.
+# Not here: the homepage (needs scripts/build_site.py on the published index first).
 name: Deploy
 
 on:
@@ -16,7 +18,7 @@ on:
       target:
         description: "What to deploy"
         type: choice
-        options: [bills, admin]
+        options: [bills, admin, procurement]
         default: bills
 
 concurrency:
@@ -33,6 +35,10 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: e81ea992523c4e14d3d1a89f10732576
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
     steps:
       - name: Refuse without a token or off main
         run: |
@@ -49,14 +55,18 @@ jobs:
       - run: pip install -r requirements-billrag.txt pytest boto3  # boto3: tests of the R2 scripts import it
       - run: python -m pytest tests -q
       - run: npm ci && npm test
+      - name: Fetch Procurement Rules' index from R2 (checked by SHA-256)
+        if: inputs.target == 'procurement'
+        run: python scripts/procurement_index.py fetch
       - uses: docker/setup-buildx-action@v3
-        if: inputs.target == 'bills'
+        if: inputs.target == 'bills' || inputs.target == 'procurement'
       - name: Deploy
         run: |
           set -o pipefail
           case "${{ inputs.target }}" in
             bills) npx wrangler deploy 2>&1 | tee deploy.log ;;
             admin) npx wrangler deploy -c workers/admin/wrangler.toml 2>&1 | tee deploy.log ;;
+            procurement) npx wrangler deploy -c workers/procurement/wrangler.toml 2>&1 | tee deploy.log ;;
           esac
       - name: Summary
         if: always()

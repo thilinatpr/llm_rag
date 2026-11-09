@@ -996,7 +996,9 @@ In the answer: the law guidance is added to the system prompt only when law pass
 and bill citations against what was received; the cited documents' notes are appended by code; Sources say "from Bill Assistant"; if Bill
 Assistant cannot be reached, a fixed line points to it and the log has `law.error`. Log field `law` {asked, passages, seconds, error}.
 **To turn on:** `LAW_SECRET` secret on `gov-rag-llm` and `citizenlk-procurement` (same value), deploy Bill Assistant (route + `/api/evidence`)
-and Procurement Rules (Worker + container; its image bakes `data/procurement/index.sqlite`). Without the secret/binding it answers as before
+and Procurement Rules (`gh workflow run deploy.yml -f target=procurement`: the job fetches `data/procurement/index.sqlite` from R2
+`procurement/index.sqlite`, checked by SHA-256; after every `python -m procurement build` on the owner's machine run
+`scripts/procurement_index.py upload`; first upload 2026-11-09, 17,145,856 bytes, sha256 7a186bd0b03c...). Without the secret/binding it answers as before
 plus the pointer line. Tested offline (Python + Node) and `/api/evidence` over HTTP on a local server; not on Cloudflare (service binding, cold start).
 
 ## Gist questions: overview, title index, "which bill?" (written 2026-11-07, branch `claude/overview-questions`, NOT merged or deployed)

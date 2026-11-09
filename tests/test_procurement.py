@@ -738,3 +738,17 @@ def test_procurement_only_question_does_not_call_bill_assistant(tmp_path, monkey
     law = FakeLaw(LAW_REPLY)
     r = pa.ask(idx, FakeLLM("Use it in exceptional circumstances [PG2024 §1.2]."), "When can emergency procurement be used?", law=law)
     assert not law.asked and not r.law and "Bill Assistant" not in r.answer
+
+
+def test_procurement_image_copies_every_module_the_server_imports():
+    """The Dockerfile lists procurement modules one by one: a new module (law.py, 2026-11-09) left out of it fails only on Cloudflare."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    copy = next(ln for ln in (root / "workers/procurement/Dockerfile").read_text().splitlines() if ln.startswith("COPY procurement/"))
+    shipped = set(re.findall(r"procurement/(\w+)\.py", copy))
+    imported = set()
+    for mod in shipped:
+        src = (root / "procurement" / f"{mod}.py").read_text()
+        imported |= set(re.findall(r"from \.(\w+) import|from \. import (\w+)", src) and
+                        [m for pair in re.findall(r"from \.(\w+) import|from \. import (\w+)", src) for m in pair if m])
+    assert imported <= shipped, sorted(imported - shipped)
