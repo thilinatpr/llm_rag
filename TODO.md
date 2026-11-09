@@ -96,6 +96,11 @@ warnings, and the grader kept the right SSCL clauses (scores 2-3). The causes ar
   question restricts, and missing keys are dropped, `pipeline.py` `_ask`).
 
 ## Acts
+- [ ] **Closing words after a list are joined to its last paragraph** (`parse.Section.text`, every Act and bill). In s.5(1) of 46/1992
+      "..., unless such person is registered ..." applies to (a)-(c) but is stored at the end of (c); the same for "shall be guilty of an
+      offence" after a list of offences. A model usually reads it right, but the structure is wrong. A fix (keep a line break before
+      flush-left text that follows the last list item) changes chunk text for most documents, so it needs a full re-ingest + embed
+      (on GitHub, see refresh-index.yml) and an eval run before and after.
 - [x] Certified Acts 2024+ in the index, linked to their bills, compared section by section (`billrag/acts.py`; see AGENTS.md). Not live.
 - [ ] Refresh: new Acts need scrape -> `ingest-acts` -> `summarize` -> `embed` -> upload, like new bills.
 - [ ] Older Acts (2015-2023, ~245): principal Acts of today's amendments, and "did this bill pass?" for older bills.

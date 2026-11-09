@@ -173,6 +173,10 @@ class App:
             note = machine_note(res.lang, res.path, res.answer)
             if note:
                 out += "\n\n*" + note + "*"
+            if res.base_note:  # fixed: an Act as originally enacted, later amendments not included
+                out += "\n\n*" + res.base_note + "*"
+            if res.scan_note:  # fixed, not left to the model: the text came from a scan (OCR + manual review)
+                out += "\n\n*" + res.scan_note + "*"
             if res.evidence:
                 out += "\n\nSources:\n" + "\n".join("  " + x for x in res.sources())
             meta = {
@@ -188,6 +192,7 @@ class App:
                 "added_sections": [f"{e.key} \u00a7{e.section}" for e in res.added_sections] or None,
                 "acts": res.acts or None, "amend_list": res.amend_list or None,
                 "direct_rejected": res.direct_rejected or None,
+                "transcribed": sorted(res.transcribed) or None, "base_note": bool(res.base_note) or None,
                 "answer_mode": mode or "default", "answer_effort": effort,
                 "free": free_turn(res),
             }

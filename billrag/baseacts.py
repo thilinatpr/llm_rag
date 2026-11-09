@@ -113,3 +113,55 @@ def problem(res: dict) -> str | None:
     names = "; ".join(f"{v['name'] or '?'} ({k})" for k, v in sorted(res["unresolved"].items()))
     return (f"{len(res['unresolved'])} base Act(s) named by indexed bills/Acts are not in the index and cannot be fetched: {names}. "
             f"Find the text and add it (python -m billrag add-base-act), or record why not in evals/base_acts_waived.json")
+
+
+# ---- what answers say about a base Act's text (owner, 2026-11-09): it is the Act as enacted, not as it reads today.
+def _readable(key):
+    m = re.match(r"Act (\d+)/(\d{4})$", key)
+    return f"Act No. {m.group(1)} of {m.group(2)}" if m else f"bill {key}"
+
+
+def amended_by(store, act_key) -> list:
+    """Keys of indexed Acts and bills whose long title says they amend, repeal or replace this Act (Acts first, oldest first)."""
+    ident = act_key[4:] if act_key.startswith("Act ") else act_key
+    rows = store.db.execute("SELECT key, kind, date, long_title FROM bills WHERE key != ? ORDER BY date", (act_key,)).fetchall()
+    hits = [(r["kind"] != "Act", r["date"], r["key"]) for r in rows if ident in references(r["long_title"])]
+    return [k for _bill, _d, k in sorted(hits)]
+
+
+def is_base(store, key) -> bool:
+    """An Act older than the ones indexed as they pass (acts.ACT_SINCE): in the index because later laws amend it."""
+    from . import acts
+    m = re.match(r"Act \d+/(\d{4})$", key or "")
+    return bool(m) and int(m.group(1)) < acts.ACT_SINCE
+
+
+def as_enacted(store, key) -> str:
+    """One sentence: this is the text as enacted in YEAR, and what the index holds that amends it."""
+    b = store.bill(key) if hasattr(store, "bill") else None
+    year = key.rsplit("/", 1)[1]
+    title = (b or {}).get("title") or key
+    later = amended_by(store, key)
+    acts_ = [_readable(k) for k in later if k.startswith("Act ")]
+    bills = [_readable(k) for k in later if not k.startswith("Act ")]
+    said = []
+    if acts_:
+        said.append("amended since by " + ", ".join(acts_[:6]) + (f" and {len(acts_) - 6} more" if len(acts_) > 6 else ""))
+    if bills:
+        said.append("bills to amend it: " + ", ".join(bills[:4]) + (f" and {len(bills) - 4} more" if len(bills) > 4 else ""))
+    since = ("; " + "; ".join(said)) if said else "; it may have been amended since"
+    return f"{title} is the text as enacted in {year}{since}."
+
+
+NOTE_TAIL = ("This text does not include later amendments, so rates, amounts, thresholds and dates taken from it may be out of date: "
+             "check the amending Acts or a current consolidated text.")
+STATUS_TAIL = (" This passage is the Act as originally enacted and does not include later amendments: do not state its rates, amounts, "
+               "thresholds or dates as current; say they may have been changed and name the amending Acts in the evidence, if any.")
+
+
+def note(store, evidence_keys):
+    """Fixed note under an answer whose evidence includes a base Act (shown by web.py, not left to the model); None if none."""
+    keys = [k for k in dict.fromkeys(evidence_keys) if is_base(store, k)]
+    if not keys:
+        return None
+    return " ".join(as_enacted(store, k) for k in keys) + " " + NOTE_TAIL

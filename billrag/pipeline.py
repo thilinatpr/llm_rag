@@ -15,7 +15,7 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 
-from . import acts, calltrace, glossary as gloss, meta, parse_si, resolve, titles as title_index, translate
+from . import acts, baseacts, calltrace, glossary as gloss, meta, parse_si, resolve, titles as title_index, transcribed, translate
 from .parse import plain_title
 from .store import ACT_REF, normalize_ref
 
@@ -242,6 +242,9 @@ class Result:
     glossary_hints: list = field(default_factory=list)  # "local = English" names given to the question -> English step
     glossary_terms: list = field(default_factory=list)  # English terms whose official local form the answer prompt got
     clarify: bool = False  # the answer asks which bill was meant (nothing is kept in the chat history for it)
+    transcribed: set = field(default_factory=set)  # evidence documents whose text was transcribed from a scan (OCR + manual review)
+    scan_note: str = ""  # the fixed note shown under such an answer (transcribed.NOTE), "" when none
+    base_note: str = ""  # fixed note when the evidence includes an Act as originally enacted (baseacts.note), "" when none
     added_overview: str = ""  # bill/Act whose overview was added to the evidence for a "key provisions / summarise" question
     added_sections: list = field(default_factory=list)  # sections added to bill-level-only evidence (bill_sections)
     followed: list = field(default_factory=list)  # sections added because a kept clause refers to them (follow_section_refs)
@@ -260,7 +263,8 @@ class Result:
             where = (f"§{e.section}" if e.section is not None else
                      "list of amending clauses" if c["kind"] == "amendments" else c["kind"])
             official = " - official Sinhala text used" if (e.key, e.section) in self.official else ""
-            out.append(f"[{e.key} {where}, p.{c['page']}] {version_tag(c)}{official}")
+            scan = transcribed.SOURCE_TAG if e.key in self.transcribed else ""
+            out.append(f"[{e.key} {where}, p.{c['page']}] {version_tag(c)}{official}{scan}")
         return out
 
 
@@ -816,6 +820,11 @@ class Pipeline:
         through the translation layer."""
         target = translate.language_switch(question) if self.last is not None and self.translate_mode != "off" else None
         res = self.switch_language(question, target) if target else self.ask_translated(question)
+        if hasattr(self.store, "db") and res.evidence:
+            keys = [e.key for e in res.evidence]
+            res.transcribed = {k for k in keys if transcribed.is_transcribed(self.store, k)}
+            res.scan_note = transcribed.note(self.store, keys) or ""
+            res.base_note = baseacts.note(self.store, keys) or ""
         self.last = res
         return res
 

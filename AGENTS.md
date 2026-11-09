@@ -33,6 +33,7 @@ billrag/config.py         all settings come from BILLRAG_* env vars (documented 
 src/chatconfig.js         which chat model/provider the container gets (CHAT_PROVIDER var: workers-ai | deepseek); pure function, tested in test/worker.test.mjs
 procurement/evaluate.py   Procurement Rules answer eval: gold in evals/procurement_eval.jsonl, no model judge
 billrag/meta.py           bill metadata outside `chunks`: families, newest instance, bill type, tags, section cross-references (`meta`, `tag`), what each amending clause changes
+billrag/transcribed.py    Acts transcribed from scans (table transcribed_docs) + the fixed answer note; billrag/ocr.py = manual OCR helper; sources/base_acts/ = reviewed texts
 billrag/titles.py         title index (table `title_index`) + custom title ranker: which bill/Act does a gist question name? one / ask which / none
 src/refresh.js, scripts/refresh_r2.py, .github/workflows/refresh-index.yml   daily new-bills check + Build/Publish buttons (see "Scheduled refresh")
 billrag/resolve.py        question grounding before retrieval: greetings, abbreviation (PTSA) -> bill title matching, "closest bills"
@@ -948,6 +949,20 @@ comparing versions (`COMPARE`) keeps the bill's clause. Every passage gets a `ST
 - **Base Acts are not link targets:** `acts.build` only treats Acts from `ACT_SINCE` on as the end of a bill's journey, so a 2026 amendment is never "linked" to the 2017 Act it amends (tested; trial: 0 links to base Acts).
 - **Measured on the local index (2026-11-08):** 79 Acts are named by 2024+ bills (the local copy has no Acts, so the Acts that amend are not counted; the live index may name more). 36 are listed with an English PDF on documents.gov.lk (1980 on). 43 are not: 22 chapter-numbered Ordinances/Acts (Medical Ordinance, Trusts, Exchange, ... never listed), ~16 pre-1980 or unlisted (Code of Criminal Procedure 15/1979, Judicature Act 2/1978, Rent Act 7/1972, Banking Act 30/1988, ...), 5 listed without English. **Trial on a private copy, fetch + parse of the 35 fetchable:** 30 parsed (Inland Revenue 24/2017: 203 sections, 360 chunks); 5 did not: 14/2002 VAT, 56/2000, 46/1992, 14/1990 are scanned images (no text layer: need OCR), 7/2007 Companies Act has text but fails the cover check. So after a first run about 48 of the 79 (43 + 5) would still need the owner to find or waive them.
 - **NOT measured:** retrieval and answer quality with ~30 more (mostly old, long) Acts in `chunks` (the refresh's MRR floor 0.80 will test it, but nobody has run it); embedding cost of the new text; `meta`/`titles` effects (title index grew by ~30). Nothing was published or embedded in the trial.
+
+## Scanned Acts: reviewed transcriptions (`sources/base_acts/`, `billrag/transcribed.py`, `billrag/ocr.py`; written 2026-11-09, NOT deployed)
+
+Some base Acts exist only as scans (no text layer): Inland Trust Receipts 14/1990, and probably VAT 14/2002, 46/1992, 56/2000, 47/1980.
+**Owner's rule: these are handled by hand in a session, never inside the automated refresh.** Procedure (see `sources/base_acts/README.md`):
+two independent readings (`ocr.py`: Tesseract with pages straightened and margin notes split by position; plus a vision reading of the
+page images), every disagreement settled on a zoomed crop, every number/date/paragraph label checked, print errors kept as printed, the
+owner accepts the text. On 14/1990 (1,930 words) the readings disagreed in 61 places; Tesseract read "No. 14 of 1980" (84% confident) and
+"Law, No. 18 of 1975" (13): OCR confidence cannot certify a figure, which is why OCR output is never indexed unreviewed.
+`refresh_bills.py` adds any reviewed text the index lacks (`add-base-act --text`, before the base-Act fetch; a pending one counts as
+work). Table `transcribed_docs` marks them; an answer whose evidence includes one gets a fixed note (not left to the model): "The text
+of X was read from a scanned copy by OCR and checked by hand, so a small reading error is still possible. Before a high-stakes decision,
+check the wording against the official printed document." The model's STATUS line and the Sources line (" - transcribed from a scan")
+say the same; log field `transcribed`. A later PDF ingest of the same Act clears the mark.
 
 ## Gist questions: overview, title index, "which bill?" (written 2026-11-07, branch `claude/overview-questions`, NOT merged or deployed)
 

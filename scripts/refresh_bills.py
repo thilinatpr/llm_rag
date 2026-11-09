@@ -89,6 +89,35 @@ def base_acts(run, work, bills_dir):
     return ids
 
 
+TRANSCRIPTS = ROOT / "sources" / "base_acts"
+
+
+def pending_transcripts(bills_dir, folder=None):
+    """[(key, meta, text path)] of the reviewed transcriptions in sources/base_acts whose Act the index does not hold and that the
+    owner has accepted (`accepted_by` in the .json; a transcription waiting for review is left out)."""
+    folder = Path(folder or TRANSCRIPTS)
+    have = {r[0] for r in Store(bills_dir / "index.sqlite").db.execute("SELECT key FROM bills WHERE kind='Act'")}
+    out = []
+    for meta_path in sorted(folder.glob("*.json")):
+        m = json.loads(meta_path.read_text(encoding="utf-8"))
+        key, text = f"Act {m['no']}/{m['year']}", meta_path.with_suffix(".txt")
+        if key not in have and text.exists() and m.get("accepted_by"):  # only texts the owner has read and accepted
+            out.append((key, m, text))
+    return out
+
+
+def add_transcripts(run, bills_dir, folder=None):
+    """Add each reviewed transcription in sources/base_acts (made by hand, see its README) whose Act the index does not hold.
+    No OCR here: the text was read and accepted in a manual session. Returns the Act keys added."""
+    added = []
+    for key, m, text in pending_transcripts(bills_dir, folder):
+        run("-m", "billrag", "add-base-act", "--text", str(text), "--no", str(m["no"]), "--year", str(m["year"]), "--title", m["title"],
+            *(["--date", m["date"]] if m.get("date") else []), *(["--reviewed", m["reviewed"]] if m.get("reviewed") else []),
+            step=f"add reviewed transcription {key}")
+        added.append(key)
+    return added
+
+
 def reclassify_kinds(bills_dir):
     """`python -m billrag reclassify` in effect: kind + title_norm re-read from the stored titles, then meta/titles rebuilt. Returns the changed keys.
     Changes only `bills` rows (no chunk text, so no embedding); idempotent, so after the first run it returns []."""
@@ -196,7 +225,7 @@ def run_refresh(a, report):
         new = new_documents(work, before["keys"])
         report.update(new_bills=new["bills"], new_acts=new["acts"])
         print(f"\nNew: {len(new['bills'])} bills {sorted(new['bills'])}, {len(new['acts'])} Acts {sorted(new['acts'])}", file=sys.stderr)
-        if not new["bills"] and not new["acts"] and not reclassified and not a.force:
+        if not new["bills"] and not new["acts"] and not reclassified and not pending_transcripts(bills_dir) and not a.force:
             print("Nothing new. The live index is unchanged.", file=sys.stderr)
             report.update(base_acts_missing={k: {"name": v["name"], "cited_by": v["cited_by"], "why": v["why"]} for k, v in base_check(work, bills_dir)["unresolved"].items()})  # only reported: nothing is published
             report.update(state="nothing_new", unindexed=sorted(listing_keys(work, a.since_year) - before["keys"]))
@@ -205,6 +234,8 @@ def run_refresh(a, report):
         if new["bills"]:
             run("-m", "billrag", "ingest-si", "--since-year", str(a.since_year), "--keys", ",".join(new["bills"]), step="link official Sinhala text")
         run("-m", "billrag", "ingest-acts", "--only-new", "--since-year", str(max(a.since_year, ACTS_SINCE)), step="parse new Acts, link bills to Acts")
+        manual_added = add_transcripts(run, bills_dir)  # reviewed transcriptions of scanned Acts (sources/base_acts), before fetching
+        report.update(transcripts_added=manual_added)
         base_added = base_acts(run, work, bills_dir)  # every Act that an indexed bill or Act amends must be in the index too
         if new["acts"] or new["bills"] or reclassified:
             run("-m", "billrag", "link-acts", step="recompute bill -> Act links")
