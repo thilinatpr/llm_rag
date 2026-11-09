@@ -137,6 +137,7 @@ def _refresh():
     spec = importlib.util.spec_from_file_location("refresh_bills", ROOT / "scripts" / "refresh_bills.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    mod.CONSOLIDATIONS = ROOT / "tests" / "no-consolidations"  # the owner's accepted consolidations must not change these tests
     return mod
 
 
