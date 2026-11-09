@@ -3034,3 +3034,19 @@ def test_reviewed_transcriptions_have_no_words_split_across_lines():
     root = ROOT_FOR_SCRIPTS / "sources" / "base_acts"
     for f in sorted(root.glob("*.txt")):
         assert not re.findall(r"[a-z]-\n[a-z]", f.read_text(encoding="utf-8")), f.name  # "pres-\ncribed": search would miss "prescribed"
+
+
+def test_base_act_note_says_as_enacted_and_names_the_amending_acts(tmp_path):
+    from billrag import acts, baseacts
+    st, key, _ = _add_itr(tmp_path)
+    assert baseacts.is_base(st, key) and not baseacts.is_base(st, "Act 25/2026") and not baseacts.is_base(st, "086/2026")
+    assert "it may have been amended since" in baseacts.as_enacted(st, key)  # nothing in the index amends it yet
+    st.db.execute("INSERT INTO bills(key, bill_no, year, date, title, title_norm, kind, long_title) VALUES(?,?,?,?,?,?,?,?)",
+                  ("Act 3/2025", 3, 2025, "2025-02-01T00:00:00Z", "Inland Trust Receipts (Amendment) Act, No. 3 of 2025",
+                   "inland trust receipts amendment", "Act", "to amend the Inland Trust Receipts Act, No. 14 of 1990"))
+    st.commit()
+    assert baseacts.amended_by(st, key) == ["Act 3/2025"]
+    note = baseacts.note(st, ["086/2026", key])
+    assert note.startswith("Inland Trust Receipts Act, No. 14 of 1990 is the text as enacted in 1990; amended since by Act No. 3 of 2025.")
+    assert "may be out of date" in note and baseacts.note(st, ["086/2026"]) is None
+    assert "as originally enacted" in acts.status_lines(st, key, 3)

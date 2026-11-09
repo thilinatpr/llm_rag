@@ -18,7 +18,7 @@ from collections import Counter
 from datetime import datetime
 from difflib import SequenceMatcher
 
-from . import transcribed
+from . import baseacts, transcribed
 
 ACT_SINCE = 2024  # Acts indexed from this year: a bill older than this may have become an Act we do not hold
 LINK_TITLE = 0.8  # a similar title needs this title similarity and LINK_TEXT shared text
@@ -285,7 +285,8 @@ def status_lines(store, key, section=None):
                 + (f" It came from bill {', '.join(came)}." if came else "")
                 + " An amending Act states changes; it is not the amended Act's current text, and a number mentioned inside a clause "
                   "does not say which Act is being amended."
-                + (transcribed.STATUS if transcribed.is_transcribed(store, key) else ""))
+                + (transcribed.STATUS if transcribed.is_transcribed(store, key) else "")
+                + ((" " + baseacts.as_enacted(store, key) + baseacts.STATUS_TAIL) if baseacts.is_base(store, key) else ""))
     a = act_for_bill(store, key)
     if not a:
         return no_act_status(store, b)
