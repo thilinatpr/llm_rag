@@ -17,15 +17,27 @@ from pathlib import Path
 CHECK_SINCE = "2024-01-01"  # documents dated from here must have their base Acts: the ones people ask about
 WAIVED_FILE = Path(__file__).resolve().parent.parent / "evals" / "base_acts_waived.json"
 _AMENDING = re.compile(r"\b(amend|repeal|replace)", re.I)
-_NUMBERED = re.compile(r"(Act|Ordinance)\s*,?\s*No\.?\s*(\d+)\s*(?:of|,)\s*(\d{4})")
-_CHAPTER = re.compile(r"((?:(?:[A-Z][\w'’&-]*|and|of)\s+){0,8}(?:Act|Ordinance))\s*\(Chapter\s+(\d+)\)")
+# re.I: certified Acts print the long title in capitals ("AN ACT TO AMEND THE ... ACT, NO. 25 OF 2022"); without it, the base Acts that
+# Acts amend were never counted and amended_by found only bills (live SSCL answer, 2026-11-09)
+_NUMBERED = re.compile(r"(Act|Ordinance)\s*,?\s*No\.?\s*(\d+)\s*(?:of|,)\s*(\d{4})", re.I)
+_CHAPTER = re.compile(r"((?:(?:[A-Z][\w'’&-]*|and|AND|of|OF)\s+){0,8}(?:Act|ACT|Ordinance|ORDINANCE))\s*\((?:Chapter|CHAPTER)\s+(\d+)\)")
 _NAME_START = re.compile(r"(?:\bamend(?:ed)?\s+|\brepeal\s+|\breplace\s+|\band\s+(?=the\s)|\bthe\s+)", re.I)
 
 
 def _name(segment: str) -> str:
     """The Act's name from the text before 'Act, No. ..': what follows the last 'the' / 'amend' / 'and the'."""
     parts = _NAME_START.split(segment)
-    return re.sub(r"\s+", " ", parts[-1]).strip(" ,;")
+    name = re.sub(r"\s+", " ", parts[-1]).strip(" ,;")
+    return _tidy(name)
+
+
+def _tidy(name: str) -> str:
+    """'SOCIAL SECURITY CONTRIBUTION LEVY' -> 'Social Security Contribution Levy' (names from upper-case long titles)."""
+    if name.upper() != name:
+        return name
+    small = {"of", "and", "the", "for", "in", "to", "on", "by"}
+    cap = lambda w: re.sub(r"[A-Za-z]", lambda m: m.group(0).upper(), w.lower(), count=1)  # "(RESPONSIBILITY)" -> "(Responsibility)"
+    return " ".join(w.lower() if i and w.lower() in small else cap(w) for i, w in enumerate(name.split()))
 
 
 def references(long_title: str) -> dict:
@@ -36,10 +48,10 @@ def references(long_title: str) -> dict:
     out, last = {}, 0
     for m in _NUMBERED.finditer(lt):
         name = _name(lt[last:m.start()])
-        out[f"{int(m.group(2))}/{m.group(3)}"] = f"{name} {m.group(1)}".strip()
+        out[f"{int(m.group(2))}/{m.group(3)}"] = f"{name} {_tidy(m.group(1))}".strip()
         last = m.end()
     for m in _CHAPTER.finditer(lt):
-        out.setdefault(f"Chapter {m.group(2)}", re.sub(r"^(?:and|of)\s+", "", m.group(1)))
+        out.setdefault(f"Chapter {m.group(2)}", _name(re.sub(r"^(?:and|of)\s+", "", m.group(1), flags=re.I)))
     return out
 
 
@@ -161,7 +173,10 @@ STATUS_TAIL = (" This passage is the Act as originally enacted and does not incl
 
 def note(store, evidence_keys):
     """Fixed note under an answer whose evidence includes a base Act (shown by web.py, not left to the model); None if none."""
-    keys = [k for k in dict.fromkeys(evidence_keys) if is_base(store, k)]
+    from . import consolidated
+    present = set(evidence_keys)
+    # the consolidation's own note already says to check the certified Act and its amendments: one note per Act is enough
+    keys = [k for k in dict.fromkeys(evidence_keys) if is_base(store, k) and consolidated.for_act(store, k) not in present]
     if not keys:
         return None
     return " ".join(as_enacted(store, k) for k in keys) + " " + NOTE_TAIL
