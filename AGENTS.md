@@ -524,6 +524,20 @@ the independent-judge eval. The index in R2 was re-uploaded 2026-11-06 10:08 UTC
 code). `main` also has later commits (procurement prototype, worktree script) that touch no deployed code. Check `git log origin/main`
 against the `build` seen in the latest chat log before telling the owner a change is live.
 
+## Adding a source or another service: lessons (2026-11-09)
+Learned the hard way in one session (law link, IRD consolidation, Procurement answer length). Apply them before calling a new source or service done.
+- **Precedence between versions is code, never search order.** `Act 25/2022 §3` and `Cons 25/2022 §3` score almost alike; the retriever put the Act first and every live SSCL lookup got the 2022 text with the "as enacted" note (fixed by `lawlink._consolidated`). Wherever one text exists in two versions (enacted vs consolidated, bill vs Act, English vs official Sinhala), write the rule that picks one and a test whose retriever ranks the wrong one first.
+- **A regression test must fail on the old code.** The first test for that fix passed on the buggy code, because the fixture's Act sections had no search entries and were never returned. Run a new test against the old code before trusting it.
+- **Check labels end to end on a real rendered output.** Title, `version_tag` and the Sources ending each added "IRD consolidated text": the live line said it three times. Each part looked right alone.
+- **Reproduce on the real index (`fetch_index.py`), not only fixtures.** The ordering bug showed only with the production scores.
+- **A cross-service feature has two ends; read both logs.** Procurement logged `law: {asked: true, passages: 4}` (looked healthy) while Bill Assistant sent the wrong version. Check `procurement-logs/` for the answer and `chatlogs/` `type: evidence` for what was sent.
+- **Know which deploy a fix needs.** The law-link fix lives in Bill Assistant's container but shows in Procurement Rules' answers: deploy `bills`, not `procurement`.
+- **Give every service the same core log fields.** Procurement records have no `build` or `evidence`, so `read_chatlogs.py` listed every answer under "found nothing" and nothing proves which container answered. A new service logs build id, evidence keys and timings from day one.
+- **Prompt changes: before and after in the same session, more than one run, then live answers.** The answer-length rule was measured on 2 + 2 eval runs and replays (57-80 words), yet one live answer was 186 words. Wording limits ("at most 2 bullets") are followed only partly; a worked example is the next step, checked with the eval.
+- **The eval is a regression check, not an accuracy score.** Procurement strict stayed 1.00 while answers lacked the change-in-law test and used the wrong Act version; reading live answers found both. Turn each live failure into a gold item.
+- **Record every deploy at once, with the previous version.** The 12:44 UTC Procurement deploy was not recorded, so its Worker version is lost as a rollback target.
+- **"Rollout completed" is not "works".** Call a change live only after a real question shows it in the logs (build id and the expected output).
+
 ## Rules
 
 - **Secrets:** never write credentials (R2, API keys) into the repo, docs, commits or logs. Read them from env vars
