@@ -46,7 +46,7 @@ jobs:
           cache-dependency-path: requirements-billrag.txt
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
-      - run: pip install -r requirements-billrag.txt pytest
+      - run: pip install -r requirements-billrag.txt pytest boto3  # boto3: tests of the R2 scripts import it
       - run: python -m pytest tests -q
       - run: npm ci && npm test
       - uses: docker/setup-buildx-action@v3
