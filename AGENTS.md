@@ -994,7 +994,7 @@ STATUS line and cleaned section text, plus the fixed notes (consolidated / as en
 search and WAITS for a sleeping Bill Assistant (up to 240 s; owner: wait for cold starts, do not keep it warm); the page says so after 10 s.
 In the answer: the law guidance is added to the system prompt only when law passages are present; `law.verify` checks `[Act ..]`, `[Cons ..]`
 and bill citations against what was received; the cited documents' notes are appended by code; Sources say "from Bill Assistant"; if Bill
-Assistant cannot be reached, a fixed line points to it and the log has `law.error`. Log field `law` {asked, passages, seconds, error}.
+Assistant cannot be reached, a fixed line points to it and the log has `law.error`. Log field `law` {asked, passages, seconds, error}. **Consolidated text wins (fix 2026-11-09, NOT deployed):** a certified Act's section that its IRD consolidation also holds is swapped for the consolidated section in code (`lawlink._consolidated`); before, search order decided, and on build `f83d92d5` every live SSCL lookup returned `Act 25/2022` (s.3, s.19, s.28, s.29) with the "as enacted in 2022" note although `Cons 25/2022` was held. On the live index the same question now returns `Cons 25/2022` s.3, s.19, s.29, s.28 and the IRD note.
 **To turn on:** `LAW_SECRET` secret on `gov-rag-llm` and `citizenlk-procurement` (same value), deploy Bill Assistant (route + `/api/evidence`)
 and Procurement Rules (`gh workflow run deploy.yml -f target=procurement`: the job fetches `data/procurement/index.sqlite` from R2
 `procurement/index.sqlite`, checked by SHA-256; after every `python -m procurement build` on the owner's machine run
