@@ -759,3 +759,45 @@ def test_a_document_named_in_prose_is_not_an_unsupported_citation():
     ans = "The 2006 rules apply, but no PG2006/PM2006 passage is among the sources given [PM2024 §9.1]."
     assert pa.verify(ans, units) == []
     assert pa.verify("See [PG2006 §2.1].", units) == ["PG2006 §2.1"]     # a bracketed citation is still checked
+
+
+def test_a_date_before_2025_next_to_award_or_tender_is_the_old_regime():
+    from procurement.ask import is_old_regime
+    for q in ("A contract was awarded in 2021. Payments made in 2024. Now contractor asks for sscl payments. Can we pay",
+              "tender invited in March 2023, how to evaluate", "bids were opened in 2019", "2021 tender evaluation",
+              "we signed in 2019 a works contract"):
+        assert is_old_regime(q), q
+    for q in ("what is the threshold for shopping", "Contract awarded in 2025, payments in 2024 advance",
+              "payments made in 2024 under contract signed 2025", "bidding in 2026 and 2024 prices"):
+        assert not is_old_regime(q), q
+
+
+def test_search_scope_line_says_what_was_looked_at():
+    from procurement.ask import scope_line
+    assert "NOT searched" in scope_line(False, []) and "Say nothing about the 2006 rules unless" in scope_line(False, [])
+    assert "no 2006 passage matched" in scope_line(True, [dict(doc="PG2024")])
+    assert "2006 passages are included" in scope_line(True, [dict(doc="PM2006")])
+
+
+def test_model_bidding_documents_are_capped_and_always_labelled(tmp_path, monkeypatch):
+    from procurement import ask as A
+    from procurement.sources import BY_ID
+    assert A.TEMPLATES == {"SBDW", "SBDG"} and "SBDW" in A.CURRENT and BY_ID["SBDG"]["kind"] == "template"
+    idx = _index(tmp_path, monkeypatch)
+    hits = [dict(doc="SBDG", ref=r, heading="h", part=0) for r in ("14", "16", "30")]
+    monkeypatch.setattr(idx, "search", lambda *a, **k: hits)
+    monkeypatch.setattr(idx, "clause", lambda doc, ref, heading=None: [dict(heading="h", chapter="", page=None, note=None, part=0, text="t")])
+    assert [u["doc"] for u in A.gather(idx, "q", docs=A.CURRENT)].count("SBDG") == A.MAX_TEMPLATE
+    monkeypatch.setattr(idx, "search", lambda *a, **k: hits[2:])
+    r = A.ask(idx, FakeLLM("Adjusted under the standard conditions [SBDG §30]."), "q", docs=A.CURRENT)
+    assert "model standard bidding document" in r.answer and "non-binding guidance" not in r.answer
+
+
+def test_sbd_texts_parse_into_the_clauses_we_cite():
+    from procurement import parse
+    from procurement.sources import BY_ID
+    for doc, refs in (("SBDW", {"45", "47"}), ("SBDG", {"14", "16", "30"})):
+        chunks, _ = parse.parse_curated(BY_ID[doc]["file"].read_text(encoding="utf-8"), doc)
+        assert {c["ref"] for c in chunks} == refs
+    w, _ = parse.parse_curated(BY_ID["SBDW"]["file"].read_text(encoding="utf-8"), "SBDW")
+    assert "taxation" in next(c for c in w if c["ref"] == "45")["text"]
