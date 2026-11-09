@@ -3005,10 +3005,14 @@ def test_refresh_adds_pending_transcriptions_once(tmp_path):
     r = _refresh()
     st = make_store(tmp_path)
     (tmp_path / "i.sqlite").rename(tmp_path / "index.sqlite")
-    pend = r.pending_transcripts(tmp_path)
-    assert [k for k, _m, _t in pend] == ["Act 14/1990"]
+    src = tmp_path / "base_acts"
+    src.mkdir()
+    for no, year, accepted in ((14, 1990, "owner"), (46, 1992, None)):  # only the accepted one may be added
+        (src / f"{no}-{year}.txt").write_text("text", encoding="utf-8")
+        (src / f"{no}-{year}.json").write_text(json.dumps({"no": no, "year": year, "title": "X", "accepted_by": accepted}), encoding="utf-8")
+    assert [k for k, _m, _t in r.pending_transcripts(tmp_path, src)] == ["Act 14/1990"]
     ran = []
-    assert r.add_transcripts(lambda *cmd, step=None: ran.append(cmd), tmp_path) == ["Act 14/1990"]
+    assert r.add_transcripts(lambda *cmd, step=None: ran.append(cmd), tmp_path, src) == ["Act 14/1990"]
     assert ran[0][:4] == ("-m", "billrag", "add-base-act", "--text") and "14" in ran[0] and "1990" in ran[0]
 
 
