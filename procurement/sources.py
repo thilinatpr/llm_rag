@@ -21,6 +21,8 @@ TIME_LIMITS = (
     dict(docs=("FRA",), heading="FR 113(6)", mentions=r"113\s*\(6\)|advance\s+.?B.?\s+account", until="2025-03-31", shown="31 March 2025",
          note="The delegated authority in FR 113(6) was valid only until 31 March 2025, which has passed, and these sources hold no later extension."),
 )
+TEMPLATE = ("Our own summary of a model standard bidding document (a template, not a rule, and not the publisher's wording): the contract's own "
+            "conditions decide the case. The Guidelines and Manual prevail.")
 UNOFFICIAL = ("Unofficial English translation made for this index from the Sinhala circular (no official English version is published); the Sinhala text is authoritative.")
 
 DOCS = [
@@ -80,6 +82,12 @@ DOCS += [
          title="Guide to Project Management and Contract Management for Infrastructure Development Projects (Works), Ministry of "
                "Finance, February 2017: payment certification, withholding payments, the Engineer's functions",
          file=TEXTS / "GPMCM.md"),
+    dict(id="SBDW", kind="template", status="current", issued="2007-01-01", effective="2007-01-01", parser="curated", note=TEMPLATE,
+         title="Standard Bidding Document, Procurement of Works (ICTAD/SBD/01, Second Edition, January 2007), conditions of contract: "
+               "change in law (cl. 45) and price adjustment (cl. 47)", file=TEXTS / "SBDW.md"),
+    dict(id="SBDG", kind="template", status="current", issued="2006-01-01", effective="2006-01-01", parser="curated", note=TEMPLATE,
+         title="Standard Bidding Document, Procurement of General Goods, National Competitive Bidding (NPA/Goods/SBD 01), general conditions "
+               "of contract: contract price (cl. 14), taxes and duties (cl. 16), change in laws and regulations (cl. 30)", file=TEXTS / "SBDG.md"),
     dict(id="LCC2026", kind="guidance", status="current", issued="2026-06-30", effective="2026-06-30", parser="numbered",
          title="Detailed Guidance Note on Assessment of Life Cycle Cost / Total Cost of Ownership, NPC (2026)",
          file=NPC / "procurement-notices" / "DGNOAOLC_com.pdf"),

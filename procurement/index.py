@@ -31,7 +31,11 @@ ACRONYMS = {"PC": "Procurement Committee", "BEC": "Bid Evaluation Committee", "A
 
 # Words users type that the documents never use, any case: no passage says "IPC", they say "interim payment".
 _IPC = "interim payment certificate certified certification"
-QUERY_TERMS = {"ipc": _IPC, "ipcs": _IPC, "block": "withhold withholding", "blocks": "withhold withholding", "stop": "withhold withholding"}
+# A new tax or levy and a contract price meet in the "change in law" clause of the standard bidding documents (SBDW 45, SBDG 30), which
+# never says SSCL or VAT: the user's words need the clause's own.
+_LAW = "change law legislation levy duties price adjustment"
+QUERY_TERMS = {"ipc": _IPC, "ipcs": _IPC, "block": "withhold withholding", "blocks": "withhold withholding", "stop": "withhold withholding",
+               "sscl": _LAW, "vat": _LAW, "nbt": _LAW, "levy": _LAW, "levies": _LAW, "tax": _LAW, "taxes": _LAW}
 HIERARCHICAL = {"PG2024", "PM2024", "PG2006", "PM2006"}  # documents whose refs nest by dots
 
 

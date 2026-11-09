@@ -10,15 +10,30 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
 from .index import HIERARCHICAL
-from .sources import ALL, CURRENT, DOCS, GUIDANCE, TIME_LIMITS, UNOFFICIAL
+from .sources import ALL, CURRENT, DOCS, GUIDANCE, TEMPLATE, TIME_LIMITS, UNOFFICIAL
 
 # "supplement N" is NOT an old-regime marker any more: NPC's Supplements 01-07 (2025-26) are current.
 OLD = re.compile(r"\b2006\b|before\s+(?:1st\s+)?jan\w*\s+2025|before\s+2025|pre-?2025|\bold\s+(?:guidelines|manual|rules)"
                  r"|\bNPA\b|national\s+procurement\s+agency|transition|\bTEC\b|\bCAPC\b", re.I)
+# A year before 2025 next to the words for starting a procurement ("awarded in 2021", "tender of 2019", "bids invited in March 2023") puts
+# the question under the 2006 rules up to award. "contract" or "payment" alone does not: a 2025 contract can be paid in 2026 and mention 2024.
+_START = r"(?:award\w*|tender\w*|bid(?:s|ding|der\w*)?|advertis\w+|invit\w+|signed|procurement\s+(?:was\s+|were\s+)?(?:start|began|begun|initiat|commenc)\w*)"
+_PRE = r"\b(?:19\d\d|20(?:[01]\d|2[0-4]))\b"
+OLD_BY_DATE = re.compile(rf"{_START} +(?:[a-z]+ +){{0,3}}?{_PRE}|{_PRE} +(?:[a-z]+ +)?{_START}", re.I)  # words only: a comma or a digit ends the link
+
+
+def is_old_regime(query):
+    """The question is about the 2006 regime: it says so (OLD) or it dates the start of the procurement before 2025 (OLD_BY_DATE)."""
+    return bool(OLD.search(query) or OLD_BY_DATE.search(query))
+
+
 _IDS = "|".join(sorted((d["id"] for d in DOCS), key=len, reverse=True))
 _CANON = {d["id"].lower(): d["id"] for d in DOCS}
 TRANSLATED = {d["id"] for d in DOCS if d.get("note") == UNOFFICIAL}  # our own translations of Sinhala-only circulars (FRA, PFC0120)
 NON_BINDING = {d["id"] for d in DOCS if d.get("note") == GUIDANCE}
+TEMPLATES = {d["id"] for d in DOCS if d.get("note") == TEMPLATE}  # model bidding documents (SBDW, SBDG)
+TEMPLATE_NOTE = ("Note: {docs} {verb} our own summary of a model standard bidding document, not its wording and not a rule. Check the clause "
+                 "numbers cited in the document itself and in your own contract: the conditions of your own contract decide the case.")
 NON_BINDING_NOTE = ("Note: {docs} is non-binding guidance from 2017, written before the 2024 Guidelines; "
                     "the contract's own conditions and PG2024/PM2024 prevail.")
 TRANSLATION_NOTE = ("Note: {docs} {verb} an unofficial English translation of Sinhala Treasury circulars made for this tool; "
@@ -66,6 +81,13 @@ Sources:
   guidance on contract administration, written mainly for FIDIC/ICTAD contracts and before the 2024 Guidelines: when you rely on it, say
   it is guidance; it never overrides PG2024, PM2024 or the contract. NPC's own Contract Management Guidelines (PG2024 §1.4(c), §9.1) are
   not among these sources: if a question turns on them or on the contract's conditions, say so.
+- SBDW = our summary of clauses of the model Standard Bidding Document for Works (ICTAD, 2007), cited [SBDW §45]; SBDG = our summary of
+  clauses of the model Standard Bidding Document for General Goods, NCB (NPA), cited [SBDG §30]. They are summaries of TEMPLATES for the
+  conditions of contract that many contracts copy, not the publishers' text: never put them in quotation marks, say "the standard conditions
+  provide (summary of clause 45)" and tell the reader to check that clause number in the document and in their own contract, whose conditions
+  decide. A tax or levy introduced after the bid date is the contractor's own cost unless the contract's change-in-law or price-adjustment
+  clause covers it: when such a clause is among the passages, give the test (law after the base date, covers taxes or levies, notice and
+  procedure in the contract) instead of only saying "check your contract".
 - LCC2026 = NPC Guidance Note on Life Cycle Cost / Total Cost of Ownership. ESM2026 = NPC Sector Specific Procurement Manual
   2026 for investor selection in electricity generation, storage, transmission and ancillary services (from 22.10.2026).
 
@@ -145,6 +167,7 @@ def window(parts, hit, max_chars):
 XREF = re.compile(r"\b(guidelines?|(?:sub-?)?clauses?|paragraphs?|paras?\.?|sections?)\s+"
                   r"(\d{1,2}(?:\.\d{1,2}){1,3}(?:\s*(?:,|and|or|&)\s*\d{1,2}(?:\.\d{1,2}){1,3})*)", re.I)
 MAX_XREF = 3  # extra clauses added through pointers, in all
+MAX_TEMPLATE = 2  # model bidding documents per question, counted apart from guidance
 MAX_GUIDE = 2  # non-binding passages per question: a live test filled every slot with them and the answer invented the rules
 GUIDE_BINDING = (("PM2024", "9.1"), ("PG2024", "9.1"))  # contract management in the rules themselves
 
@@ -178,10 +201,14 @@ def gather(index, question, k=8, docs=CURRENT, max_units=10, max_chars=3500, fir
                           page=parts[0]["page"], label=label(doc, ref), text=window(parts, hit, max_chars), note=note,
                           chain=index.chain(doc, ref)))
 
-    guide_shown = 0
+    guide_shown = template_shown = 0
     for doc, ref in first:  # always shown, e.g. PG2024 §1.4 (the transition rule) for questions about the old regime
         add(doc, ref)
     for c in index.search(question, k=k, docs=docs):
+        if c["doc"] in TEMPLATES:  # a model clause is shown beside the rules, never instead of them
+            if template_shown >= MAX_TEMPLATE:
+                continue
+            template_shown += 1
         if c["doc"] in NON_BINDING:  # guidance never crowds out the rules, and always comes with the binding clause on the subject
             if guide_shown >= MAX_GUIDE:
                 continue
@@ -246,6 +273,20 @@ def render(units):
         else:
             out.append(head + "\n" + u["text"] + (f"\n{u['note']}" if u["note"] else ""))
     return "\n\n---\n\n".join(out)
+
+
+def scope_line(old, units):
+    """What was searched, so the answer never says "we have no 2006 text" when the 2006 documents were simply not looked at."""
+    if not old:
+        return ("Search scope: the 2024 Guidelines and Manual, the Supplements, circulars and other current sources. The 2006 Guidelines and Manual "
+                "are in our index but were NOT searched, because nothing in the question dates the procurement before 2025. Say nothing about the 2006 rules unless the question's "
+                "own facts suggest a procurement started before 1 January 2025 or the answer would differ under them; then say that you did not "
+                "search them and suggest asking about the 2006 rules by name. Never say that the 2006 text is not available.")
+    shown = sorted({u["doc"] for u in units} & {"PG2006", "PM2006"})
+    if shown:
+        return "Search scope: current and 2006 sources were both searched; 2006 passages are included below."
+    return ("Search scope: current and 2006 sources were both searched; no 2006 passage matched. Say that no 2006 clause on this was found, "
+            "not that the 2006 rules are unavailable.")
 
 
 def today_in_sri_lanka():
@@ -388,7 +429,7 @@ def ask(index, llm, question, k=8, effort="low", docs=None, history=None, today=
             res.warnings.append(warn)
         elif query != question:
             res.standalone = query
-    old = bool(OLD.search(query))
+    old = is_old_regime(query)
     res.docs = docs = docs or (ALL if old else CURRENT)
     waiting = _ask_law(law, query) if law is not None and lawmod.needs_law(query) else None  # in parallel with our own search
     res.evidence = gather(index, query, k=k, docs=docs, first=[("PG2024", "1.4")] if old else ())
@@ -408,7 +449,7 @@ def ask(index, llm, question, k=8, effort="low", docs=None, history=None, today=
     # the date goes in the question, not in SYSTEM: a date in the long fixed prefix would defeat the provider's prompt cache every day
     res.evidence += law_units
     system = SYSTEM + (lawmod.SYSTEM_NOTE if law_units else "")
-    user = f"Question: {query}\n\nToday's date: {today.isoformat()}\n\nPassages:\n\n{render(res.evidence)}"
+    user = (f"Question: {query}\n\nToday's date: {today.isoformat()}\n\n{scope_line(old, res.evidence)}\n\nPassages:\n\n{render(res.evidence)}")
     # Thinking counts against max_tokens: a question that sets two sources against each other used all of 2,500 on it, twice, and got no answer
     # (deepseek-flash, 2026-11-07). So more room, and the retry does not think: an answer without it beats "please ask again".
     for attempt in range(2):
@@ -433,6 +474,9 @@ def ask(index, llm, question, k=8, effort="low", docs=None, history=None, today=
     guide = sorted({_CANON.get(d.lower(), d) for d, _, _ in CITE.findall(res.answer)} & NON_BINDING)
     if guide:  # as with translations, this must never depend on the model remembering
         res.answer += "\n\n" + NON_BINDING_NOTE.format(docs=" and ".join(guide))
+    tmpl = sorted({_CANON.get(d.lower(), d) for d, _, _ in CITE.findall(res.answer)} & TEMPLATES)
+    if tmpl:
+        res.answer += "\n\n" + TEMPLATE_NOTE.format(docs=" and ".join(tmpl), verb="are" if len(tmpl) > 1 else "is")
     for note in lapsed_notes(res.answer, res.evidence, today):
         res.answer += "\n\nNote: " + note
     for note in lawmod.notes(res.answer, law_reply):  # Bill Assistant's fixed notes for the law it cites: never left to the model
