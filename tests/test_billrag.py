@@ -3090,7 +3090,8 @@ def test_consolidation_is_indexed_next_to_the_act_and_labelled(tmp_path):
     note = consolidated.note(st, ["086/2026", key])
     assert note.startswith("Parts of this answer use the Inland Revenue Department consolidated text") and "certified Act" in note
     assert consolidated.note(st, ["086/2026"]) is None
-    assert version_tag({"title": b["title"], "bill_kind": "Cons", "date": b["date"]}).endswith("(IRD consolidated text, 2026-04-09)")
+    tag = version_tag({"title": b["title"], "bill_kind": "Cons", "date": b["date"]})
+    assert tag == b["title"] and tag.lower().count("ird consolidated text") == 1     # said once (live Sources line said it 3 times)
 
 
 def test_refresh_adds_only_accepted_newer_consolidations(tmp_path):

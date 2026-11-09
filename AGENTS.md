@@ -974,7 +974,7 @@ as "not a statutory consolidation, but rather a convenient reference". They are 
 `Cons`, citations `[Cons 25/2022 §4]`; table `consolidations` (act, up_to, amendments, source). Answers that use one get a fixed note
 ("Parts of this answer use the Inland Revenue Department consolidated text of X, with amendments up to D: a convenient reference, not a
 statutory text. ... check the certified Act and its amending Acts"), amendments certified after `up_to` are named; the STATUS line says
-the same; Sources lines end " - IRD consolidated text". A consolidation is never a bill: `acts.build` does not link it, "which bill?"
+the same; Sources lines show its title, which says "IRD consolidated text, amendments up to D" once (the version tag and an extra " - IRD consolidated text" ending were dropped 2026-11-09: a live line said it three times). A consolidation is never a bill: `acts.build` does not link it, "which bill?"
 lists skip it. Retrieval keeps the certified Act's chunk when the text is identical, so unchanged sections are cited from the Act.
 **Made by hand** (owner's rule for hard cases): `consolidation.to_pages` (lines split into body and margin by position, section numbers
 only in sequence and only before the First Schedule, rows by vertical overlap, change notes at the end of their paragraph), then every

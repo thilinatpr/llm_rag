@@ -173,6 +173,8 @@ def version_tag(c):
     (other documents) show only the date."""
     title = plain_title(c["title"])
     label = KIND_LABEL.get(c.get("bill_kind"), "")
+    if label and label.lower() in title.lower():  # an IRD consolidation's title already names it and its date
+        return title
     return f"{title} ({label + ', ' if label else ''}{c['date'][:10]})"
 
 
@@ -264,7 +266,7 @@ class Result:
             where = (f"§{e.section}" if e.section is not None else
                      "list of amending clauses" if c["kind"] == "amendments" else c["kind"])
             official = " - official Sinhala text used" if (e.key, e.section) in self.official else ""
-            scan = (transcribed.SOURCE_TAG if e.key in self.transcribed else "") + (consolidated.SOURCE_TAG if e.key.startswith("Cons ") else "")
+            scan = transcribed.SOURCE_TAG if e.key in self.transcribed else ""  # a consolidation's title already says what it is
             out.append(f"[{e.key} {where}, p.{c['page']}] {version_tag(c)}{official}{scan}")
         return out
 
