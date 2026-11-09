@@ -256,8 +256,12 @@ document.getElementById('f').addEventListener('submit', async (e) => {
   add(text, 'me');
   const wait = add('Reading the rules...', 'bot');
   wait.classList.add('step');
+  // A question about a tax or levy also asks Bill Assistant for the law (procurement/law.py); if it was asleep, starting it takes minutes.
+  const slow = setTimeout(() => { if (wait.classList.contains('step') && wait.textContent === 'Reading the rules...')
+    wait.textContent = 'Still working. Questions about a tax or levy also consult Bill Assistant for the law, which can take a few minutes to start...'; }, 10000);
   try {
     const j = await post('/api/ask', {question: text, history: turns.slice(-2)}, wait);
+    clearTimeout(slow);
     wait.classList.remove('step');
     wait.innerHTML = renderMarkdown(j.answer); wait.classList.add('md');
     turns.push({question: j.standalone || text, answer: j.answer});
@@ -272,7 +276,7 @@ document.getElementById('f').addEventListener('submit', async (e) => {
       n.textContent = 'Check this answer against the source: one or more of its citations could not be verified.';
       wait.appendChild(n);
     }
-  } catch (err) { wait.classList.remove('step', 'md'); wait.textContent = 'Error: ' + err.message; wait.classList.add('err'); }
+  } catch (err) { clearTimeout(slow); wait.classList.remove('step', 'md'); wait.textContent = 'Error: ' + err.message; wait.classList.add('err'); }
   btn.disabled = false; q.focus(); log.scrollTop = log.scrollHeight;
 });
 </script></body></html>

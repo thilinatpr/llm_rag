@@ -11,6 +11,8 @@ POST /api/ask/stream  same body -> text/event-stream: `status` {step}, `token` {
                   (the checked final answer, which replaces the streamed draft) or `error` {error}. `unanswered` {} before `done`
                   (header X-Unanswered on /api/ask) = the reply is only an apology: the Worker gives a visitor's question back.
 POST /api/search  {"query": str, "k": int}          -> {"results": [str]} (retrieval only, no key needed)
+POST /api/evidence {"query": str, "k": int}         -> {"passages": [...], "notes": {key: note}}: law passages for Procurement Rules,
+                  built as Bill Assistant's answers see them, no model call (billrag/lawlink.py; reached through src/lawlink.js)
 
 Concurrency (billrag/gate.py): up to BILLRAG_MAX_CONCURRENT (default 8) questions run at once; up to BILLRAG_MAX_QUEUE (20) wait
 in arrival order (a streamed reply gets `queue` {position} events), each at most BILLRAG_QUEUE_WAIT seconds (90). Beyond that the
@@ -121,6 +123,23 @@ class App:
             self._gate.release()
         log_turn(type="search", question=query, k=k, results=len(out), seconds=tm.seconds, usage=use.fields(),
                  calls=trace.calls or None, cost=calltrace.cost_summary(trace.calls))
+        return out
+
+    def evidence(self, query, k=4, lane=None):
+        """POST /api/evidence: law passages for another service (billrag/lawlink.py). Retrieval only, logged as type "evidence"."""
+        from . import lawlink
+        self._ensure()
+        self._gate.acquire()
+        try:
+            with Timer() as tm, Usage() as use, calltrace.tracing() as trace:
+                with self.lock:
+                    retriever = self._retriever()
+                out = lawlink.passages(self.store, retriever, query, k)
+        finally:
+            self._gate.release()
+        log_turn(type="evidence", question=query, k=k, lane=lane, results=len(out["passages"]),
+                 evidence=[{"bill": p["key"], "section": p["section"]} for p in out["passages"]], seconds=tm.seconds,
+                 usage=use.fields(), calls=trace.calls or None, cost=calltrace.cost_summary(trace.calls))
         return out
 
     def coverage(self):
@@ -320,6 +339,12 @@ def make_handler(app):
                         return self._send(400, json.dumps({"error": "empty query"}))
                     k = max(1, min(int(body.get("k", 6)), 15))
                     return self._send(200, json.dumps({"results": app.search(q, k)}))
+                if self.path == "/api/evidence":
+                    q = str(body.get("query", "")).strip()[:1000]
+                    if not q:
+                        return self._send(400, json.dumps({"error": "empty query"}))
+                    lane = "procurement" if self.headers.get("X-Lane") == "procurement" else None  # set only by the Worker
+                    return self._send(200, json.dumps(app.evidence(q, int(body.get("k", 4)), lane)))
                 if self.path == "/api/ask/stream":
                     q = str(body.get("question", "")).strip()
                     if not q:

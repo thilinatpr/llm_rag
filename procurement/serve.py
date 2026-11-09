@@ -79,8 +79,8 @@ class WorkerChat:
 
 
 class App:
-    def __init__(self, index, llm, secret, gate=None):
-        self.index, self.llm, self.secret = index, llm, secret
+    def __init__(self, index, llm, secret, gate=None, law=None):
+        self.index, self.llm, self.secret, self.law = index, llm, secret, law
         env = os.environ.get
         self.gate = gate or Gate(int(env("PROCUREMENT_MAX_CONCURRENT") or 2), int(env("PROCUREMENT_MAX_QUEUE") or 6),
                                  float(env("PROCUREMENT_QUEUE_WAIT") or 60), 0, 0)
@@ -91,12 +91,12 @@ class App:
         waited, concurrent = self.gate.acquire()  # Busy -> 503; /healthz still answers meanwhile
         try:
             with calltrace.tracing() as trace:
-                r = ask(self.index, self.llm, question, history=history)
+                r = ask(self.index, self.llm, question, history=history, law=self.law)
         finally:
             self.gate.release()
         info = {"seconds": r.seconds, "model": getattr(self.llm, "model", None), "calls": trace.calls or None,
                 "cost": calltrace.cost_summary(trace.calls), "fallback": calltrace.fallback_summary(trace.calls),
-                "queue_wait_s": round(waited, 2), "concurrent": concurrent}
+                "queue_wait_s": round(waited, 2), "concurrent": concurrent, "law": r.law or None}
         print(json.dumps({"event": "ask", "question": question, "standalone": r.standalone, "answer": r.answer, "warnings": r.warnings,
                           "sources": r.sources(), **info}, ensure_ascii=False), flush=True)
         return {"answer": r.answer, "sources": r.sources(), "warnings": r.warnings, "standalone": r.standalone}, info
@@ -174,8 +174,12 @@ def main(argv=None):
     if backup:  # fail over quickly: see billrag.llm.make_llm
         llm.client = llm.client.with_options(max_retries=1, timeout=60)
         llm = FallbackLLM(llm, WorkerChat(backup, secret))
-    srv = ThreadingHTTPServer((a.host, a.port), make_handler(App(index, llm, secret)))
-    print(f"procurement server on {a.host}:{a.port}, rerank={'on' if url else 'off'}, fallback={'on' if backup else 'off'}", flush=True)
+    law_url = os.environ.get("PROCUREMENT_LAW_URL")  # law passages from Bill Assistant through the Worker (procurement/law.py)
+    from .law import LawClient
+    law = LawClient(law_url, secret) if law_url else None
+    srv = ThreadingHTTPServer((a.host, a.port), make_handler(App(index, llm, secret, law=law)))
+    print(f"procurement server on {a.host}:{a.port}, rerank={'on' if url else 'off'}, fallback={'on' if backup else 'off'}, "
+          f"law={'on' if law else 'off'}", flush=True)
     srv.serve_forever()
 
 

@@ -3103,3 +3103,16 @@ def test_refresh_adds_only_accepted_newer_consolidations(tmp_path):
         (src / f"{no}-2022.txt").write_text("x", encoding="utf-8")
         (src / f"{no}-2022.json").write_text(json.dumps({"no": no, "year": 2022, "title": "X", "up_to": "2026-04-09", "accepted_by": accepted}))
     assert [k for k, _m, _t in r.pending_consolidations(tmp_path, src)] == ["Cons 25/2022"]
+
+
+def test_law_passages_for_procurement_carry_labels_status_and_notes(tmp_path):
+    from billrag import lawlink
+    st, key, _ = _add_sscl_cons(tmp_path)
+    out = lawlink.passages(st, Retriever(st), "social security contribution levy registration turnover threshold", k=3)
+    ps = out["passages"]
+    assert ps and len(ps) <= 3
+    assert ps[0]["key"] == "Cons 25/2022"                                           # law first: the bills in the index are no law
+    assert all(p["cite"] == f"[{p['key']} §{p['section']}]" for p in ps if p["section"] is not None)
+    assert "consolidated text" in ps[0]["status"] and ps[0]["text"]
+    assert "Inland Revenue Department consolidated text" in out["notes"]["Cons 25/2022"]
+    assert lawlink.passages(st, Retriever(st), "anything", k=99)["passages"].__len__() <= lawlink.MAX_K

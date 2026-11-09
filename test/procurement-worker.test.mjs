@@ -111,3 +111,39 @@ test("the privacy page is open without a session and is Procurement's own", asyn
   assert.match(await r.text(), /Procurement Rules/);
   assert.equal(t.forwarded.length, 0);
 });
+
+// ---- law passages from Bill Assistant (handler.js law -> service binding BILLS -> src/lawlink.js), 2026-11-09
+const lawReq = (headers, body = { query: "who owes SSCL", k: 4 }) =>
+  new Request("https://procurement.citizenlk.com/internal/law", { method: "POST", headers, body: JSON.stringify(body) });
+
+test("law: proxy secret required, fails closed when not configured, forwards with the law secret", async () => {
+  const t = setup();
+  assert.equal((await t.handle(lawReq({}), t.env)).status, 403);
+  assert.equal((await t.handle(lawReq({ "X-Proxy-Secret": SECRET }), t.env)).status, 503);   // no BILLS binding, no LAW_SECRET
+  const sent = [];
+  t.env.BILLS = { fetch: async (r) => { sent.push(r); return new Response(JSON.stringify({ passages: [], notes: {} })); } };
+  t.env.LAW_SECRET = "l".repeat(32);
+  const ok = await t.handle(lawReq({ "X-Proxy-Secret": SECRET }), t.env);
+  assert.equal(ok.status, 200);
+  assert.equal(new URL(sent[0].url).pathname, "/internal/evidence");
+  assert.equal(sent[0].headers.get("X-Law-Secret"), "l".repeat(32));
+  assert.equal(JSON.parse(await sent[0].text()).query, "who owes SSCL");
+});
+
+test("bill assistant's evidence route: law secret required, forwarded to /api/evidence in the procurement lane", async () => {
+  const { lawEvidence } = await import("../src/lawlink.js");
+  const env = { LAW_SECRET: "l".repeat(32) };
+  const calls = [];
+  const upstream = async (r, e, opts) => { calls.push({ r, opts }); return new Response("{}"); };
+  const req = (headers, body = { query: "who owes SSCL", k: 99 }) =>
+    new Request("https://bills.citizenlk.com/internal/evidence", { method: "POST", headers, body: JSON.stringify(body) });
+  assert.equal((await lawEvidence(req({}), env, upstream)).status, 403);
+  assert.equal((await lawEvidence(req({ "X-Law-Secret": "wrong" }), env, upstream)).status, 403);
+  assert.equal((await lawEvidence(req({ "X-Law-Secret": "l".repeat(32) }), {}, upstream)).status, 403);    // secret unset: closed
+  assert.equal((await lawEvidence(req({ "X-Law-Secret": "l".repeat(32) }, { query: " " }), env, upstream)).status, 400);
+  assert.equal(calls.length, 0);
+  await lawEvidence(req({ "X-Law-Secret": "l".repeat(32) }), env, upstream);
+  assert.equal(new URL(calls[0].r.url).pathname, "/api/evidence");
+  assert.equal(calls[0].opts.lane, "procurement");
+  assert.deepEqual(JSON.parse(await calls[0].r.text()), { query: "who owes SSCL", k: 6 });             // k capped
+});

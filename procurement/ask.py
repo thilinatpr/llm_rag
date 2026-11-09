@@ -103,9 +103,10 @@ class Answer:
     docs: tuple = CURRENT
     seconds: float = 0.0
     standalone: str = ""  # what a follow-up was rewritten to; empty when the question was used as asked
+    law: dict = field(default_factory=dict)  # Bill Assistant consulted: {"asked", "passages", "seconds", "error"} (procurement/law.py)
 
     def sources(self):
-        return [f"{e['label']} {e['heading']} (p. {e['page']})" for e in self.evidence]
+        return [f"{e['label']} {e['heading']}" if e["doc"] == "LAW" else f"{e['label']} {e['heading']} (p. {e['page']})" for e in self.evidence]
 
 
 def label(doc, ref):
@@ -349,8 +350,31 @@ def condense(llm, question, history, effort="off"):
     return text, None
 
 
-def ask(index, llm, question, k=8, effort="low", docs=None, history=None, today=None):
+def _ask_law(law, query):
+    """Start the Bill Assistant call in the background (it may wait out a cold start); returns a function that waits for its result."""
+    import contextvars
+    import threading
+    box, t0 = {}, time.time()
+
+    def fetch():
+        try:
+            box["reply"] = law.evidence(query)
+        except Exception as e:
+            box["error"] = f"{type(e).__name__}: {e}"[:300]
+    th = threading.Thread(target=contextvars.copy_context().run, args=(fetch,), daemon=True)  # its call goes into this turn's trace
+    th.start()
+
+    def result():
+        th.join(getattr(law, "timeout", 240) + 5)
+        err = box.get("error") or ("no answer in time" if th.is_alive() else None)
+        return box.get("reply"), {"asked": True, "seconds": round(time.time() - t0, 1), "error": err}
+    return result
+
+
+def ask(index, llm, question, k=8, effort="low", docs=None, history=None, today=None, law=None):
+    """law: a procurement.law.LawClient; a question that needs the law (law.needs_law) gets Bill Assistant's passages too."""
     from billrag.pipeline import strip_reasoning
+    from . import law as lawmod
     t = time.time()
     today = today or today_in_sri_lanka()
     res = Answer(question)
@@ -364,19 +388,29 @@ def ask(index, llm, question, k=8, effort="low", docs=None, history=None, today=
             res.standalone = query
     old = bool(OLD.search(query))
     res.docs = docs = docs or (ALL if old else CURRENT)
+    waiting = _ask_law(law, query) if law is not None and lawmod.needs_law(query) else None  # in parallel with our own search
     res.evidence = gather(index, query, k=k, docs=docs, first=[("PG2024", "1.4")] if old else ())
-    if not res.evidence:
+    law_reply, law_units = None, []
+    if waiting:
+        law_reply, res.law = waiting()
+        law_units = lawmod.to_units(law_reply)
+        res.law["passages"] = [u["label"] for u in law_units]
+        if res.law["error"]:
+            res.warnings.append("Bill Assistant not consulted: " + res.law["error"])
+    if not res.evidence and not law_units:
         res.answer = "I could not find anything about this in the Procurement Guidelines or Manual."
         return res
     for lim, hit in limits_passed(res.evidence, today):
         for u in hit:
             u["note"] = " ".join(filter(None, [u["note"], f"The stated end date, {lim['shown']}, has passed; no later extension is among these sources."]))
     # the date goes in the question, not in SYSTEM: a date in the long fixed prefix would defeat the provider's prompt cache every day
+    res.evidence += law_units
+    system = SYSTEM + (lawmod.SYSTEM_NOTE if law_units else "")
     user = f"Question: {query}\n\nToday's date: {today.isoformat()}\n\nPassages:\n\n{render(res.evidence)}"
     # Thinking counts against max_tokens: a question that sets two sources against each other used all of 2,500 on it, twice, and got no answer
     # (deepseek-flash, 2026-11-07). So more room, and the retry does not think: an answer without it beats "please ask again".
     for attempt in range(2):
-        reply = llm.chat(SYSTEM, [{"role": "user", "content": user}], max_tokens=5000, effort=effort if attempt == 0 else "off")
+        reply = llm.chat(system, [{"role": "user", "content": user}], max_tokens=5000, effort=effort if attempt == 0 else "off")
         answer, leaked = strip_reasoning(reply.text)
         why = ("reasoning instead of an answer" if leaked else broken(answer)
                or ("cut off at the token limit" if reply.truncated else None))
@@ -399,7 +433,11 @@ def ask(index, llm, question, k=8, effort="low", docs=None, history=None, today=
         res.answer += "\n\n" + NON_BINDING_NOTE.format(docs=" and ".join(guide))
     for note in lapsed_notes(res.answer, res.evidence, today):
         res.answer += "\n\nNote: " + note
-    bad = verify(res.answer, res.evidence)
+    for note in lawmod.notes(res.answer, law_reply):  # Bill Assistant's fixed notes for the law it cites: never left to the model
+        res.answer += "\n\n" + note
+    if waiting and not law_units:
+        res.answer += "\n\n" + lawmod.FALLBACK_NOTE
+    bad = verify(res.answer, res.evidence) + lawmod.verify(res.answer, law_units)
     if bad:
         res.warnings.append("unsupported citations: " + ", ".join(bad))
     res.seconds = round(time.time() - t, 1)

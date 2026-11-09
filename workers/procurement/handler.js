@@ -40,6 +40,24 @@ async function chat(request, env) {
   return json({ text: choice?.message?.content ?? r.response ?? "", stop: choice?.finish_reason ?? "", usage: r.usage ?? null });
 }
 
+// Law passages from Bill Assistant for the container (procurement/law.py): Procurement Rules holds no tax law. Worker to Worker through
+// the service binding BILLS (gov-rag-llm) with the shared secret LAW_SECRET; the container reaches this route with its own proxy secret.
+// No timeout here: a sleeping Bill Assistant takes 1-3 min to start and the container waits for it (owner, 2026-11-09).
+async function law(request, env) {
+  if (request.method !== "POST" || !(await secretMatches(request.headers.get("X-Proxy-Secret"), env.PROXY_SECRET)))
+    return json({ error: "forbidden" }, 403);
+  if (!env.BILLS || !env.LAW_SECRET) return json({ error: "not configured" }, 503);
+  const body = await request.text();
+  if (body.length > 4000) return json({ error: "bad request" }, 400);
+  try {
+    return await env.BILLS.fetch(new Request("https://bills.citizenlk.com/internal/evidence", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-Law-Secret": env.LAW_SECRET }, body }));
+  } catch (e) {
+    console.error(JSON.stringify({ event: "law_failed", error: String((e && e.message) || e) }));
+    return json({ error: "Bill Assistant did not answer" }, 502);
+  }
+}
+
 // One R2 object per answered question: procurement-logs/YYYY-MM-DD/<HHMMSSmmm>-<id>.json. Written by the Worker through its
 // LOGS binding, so the container needs no storage credentials. Best-effort and after the reply (waitUntil): logging never
 // breaks or delays an answer. Records hold users' questions: private.
@@ -88,6 +106,7 @@ export function createProcurementHandler(getStub) {
     const internal = new URL(request.url).pathname;
     if (internal === "/internal/rerank") return rerank(request, env);
     if (internal === "/internal/chat") return chat(request, env);
+    if (internal === "/internal/law") return law(request, env);
     return createHandler({ privacy: "procurement", cookie: "clk_session", consent: { service: "procurement", name: "Procurement Rules" }, upstream: (req, e) => upstream(req, e, ctx) })(request, env);
   };
 }
