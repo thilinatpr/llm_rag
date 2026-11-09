@@ -7,6 +7,11 @@ session, never in the automated build (owner, 2026-11-09):
    vision reading (a vision model or a person).
 2. Every disagreement is settled on a zoomed crop of the scan; every number, date and paragraph label is checked.
 3. Typesetting errors in the print are kept as printed; letters merely damaged in the scan are written as the word they clearly are.
+   Layout is not text: a word hyphenated across a line break is joined ("pres-/cribed" -> "prescribed"; a real compound such as
+   "Co-operative" or "Director-General" keeps its hyphen), page headers, printer's codes and price/subscription notices are left out.
+   Line and paragraph breaks do not need fixing: the parser joins a paragraph's lines and starts a new line at each "(a)", "(2)".
+   Known parser limit (all Acts, text PDFs too): closing words after a list ("..., unless such person is registered") are joined to the
+   last paragraph of the list.
 4. The owner reads and accepts the text.
 
 Files per Act `N-YYYY`:

@@ -27,8 +27,7 @@ credit agency by any person, that he proposes to purchase
 goods for the purpose of transportation and sale within the
 territory of Sri Lanka, such person, for the purpose of
 making payment for the goods and of meeting expenditure
-in connection with the transportation and sale and prepara-
-tion for transportation and sale thereof, obtains from such
+in connection with the transportation and sale and preparation for transportation and sale thereof, obtains from such
 agency, advances by way of loan, overdraft or otherwise,
 upon the execution in favour of such agency of a document
 which complies with the provisions of subsection (2) (which
@@ -36,8 +35,7 @@ document is hereinafter referred to as “an inland trust
 receipt”), the provisions of section 3 shall be applicable
 in relation to that trust receipt and the goods to which it
 relates.
-(2) In order to comply with the provisions of this sub-
-section, a document which is executed by any person in
+(2) In order to comply with the provisions of this subsection, a document which is executed by any person in
 the circumstances mentioned in subsection (1), shall contain
 the following undertakings on the part of that person in
 respect of the goods to which the documents relates—
@@ -54,8 +52,7 @@ of such proceeds;
 Short title.
 Inland trust
 receipt for
-transporta-
-tion and
+transportation and
 sale of
 goods
 within the
@@ -88,11 +85,9 @@ to such goods, if called upon to do so by the agency ;
 (h) an undertaking to store those goods in a specified
 premises, or warehouse in the name of the agency ;
 and
-(i) and undertaking to keep the transportation docu-
-ments, goods and proceeds relating to the inland
+(i) and undertaking to keep the transportation documents, goods and proceeds relating to the inland
 trust receipt separate and distinct from any and all
-other transportation, documents, goods and pro-
-ceeds of the person by whom the inland trust
+other transportation, documents, goods and proceeds of the person by whom the inland trust
 receipt is executed.
 (3) Nothing contained in subsection (2) shall be deemed
 to prevent the inclusion in the document of any undertaking
@@ -100,8 +95,7 @@ conditions or stipulations in addition to the undertakings
 specified in that subsection.
 3. (1) Where an inland trust receipt has been executed
 by any person in conformity with the provisions of section 2
-and the inland trust receipt is registered under the Regis-
-tration of Documents Ordinance as a bill of sale affecting
+and the inland trust receipt is registered under the Registration of Documents Ordinance as a bill of sale affecting
 the goods to which it relates, the following provisions shall
 apply during such time as any money stated in the inland
 trust receipt to be due or to become payable thereunder to
@@ -167,12 +161,10 @@ and
 4 Inland Trust Receipts Act, No. 14 of 1990
 (d) the person by whom the inland trust receipt was
 executed shall, if he commits a breach or fails to
-comply with any undertaking referred to in sub-
-section (2) of section 2, being an undertaking
+comply with any undertaking referred to in subsection (2) of section 2, being an undertaking
 contained in the inland trust receipt, be guilty
 of an offence and shall on conviction after
-summary trial by a Magistrat be liable to im-
-prisonment of either description for a term not
+summary trial by a Magistrat be liable to imprisonment of either description for a term not
 exceeding three years or to a fine of an amount
 not less than the amount of the money stated in
 the inland trust receipt to be due or to become
@@ -197,8 +189,7 @@ that firm, and
 (c) if that body of persons is an unincorporate body,
 every individual who is a member of such body,
 shall be deemed to be guilty of that offence :
-Provided that a director or an officer of such body cor-
-porate or a partner of such firm shall not be deemed to be
+Provided that a director or an officer of such body corporate or a partner of such firm shall not be deemed to be
 guilty of such offence if he proves that such offence was
 committed without his knowledge or that he exercised all
 due diligence to prevent the commission of such offence.
@@ -217,12 +208,10 @@ Inland Trust Receipts Act, No. 14 of 1990 5
 (b) the National Development Bank of Sri Lanka
 established by the National Development Bank of
 Sri Lanka Act, No. 2 of 1979 ;
-(c) the State Mortgage and Investment Bank establish-
-ed by the State Mortgage and Investment Bank
+(c) the State Mortgage and Investment Bank established by the State Mortgage and Investment Bank
 Law, No. 13 of 1975 ;
 (d) the Development Finance Corporation of Ceylon
-established by the Development Finance Corpora-
-tion of Ceylon Act (Chapter 165) ;
+established by the Development Finance Corporation of Ceylon Act (Chapter 165) ;
 (e) and company, or any Co-operative society in respect
 of whom an Order has been made under section 6.
 (2) Nothing in this Act shall be deemed or construed to
@@ -235,8 +224,7 @@ Act providing for the establishment, powers and functions
 of such institution.
 6. The Director of Commerce may, where he considers
 it appropriate to do so in the interest of national economy,
-by Order published in the Gazette, declare that the provi-
-sions of this Act shall apply to any company registered
+by Order published in the Gazette, declare that the provisions of this Act shall apply to any company registered
 under the companies Act, No. 17 of 1982, or any co-operative
 society registered under the Co-operative Societies Law,
 No. 5 of 1972, which in his opinion is of sufficient financial

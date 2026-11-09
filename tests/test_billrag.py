@@ -3024,3 +3024,9 @@ def test_every_reviewed_transcription_parses_to_its_sections():
         assert any(act_cover_ok(x, m["no"], m["year"]) for x in pages[:3]), mp.name
         secs = [s.no for s in parse_act_pages(pages, m["title"], m["no"], m["year"]).sections if s.kind == "section"]
         assert secs == list(range(1, m["sections"] + 1)), (mp.name, secs)
+
+
+def test_reviewed_transcriptions_have_no_words_split_across_lines():
+    root = ROOT_FOR_SCRIPTS / "sources" / "base_acts"
+    for f in sorted(root.glob("*.txt")):
+        assert not re.findall(r"[a-z]-\n[a-z]", f.read_text(encoding="utf-8")), f.name  # "pres-\ncribed": search would miss "prescribed"
