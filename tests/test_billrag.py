@@ -3169,3 +3169,24 @@ def test_law_passages_resolve_a_lower_case_abbreviation_to_the_charging_section(
     assert cites[0] == "[Cons 25/2022 §3]" and out["focus"] == title           # the charging section, current text
     assert len({(c.split(" ", 1)[1].split(" ")[0], c.split("§")[-1]) for c in cites}) == len(cites)  # no section twice
     assert lawlink.focus(st, "Can we pay the contractor for the work?") == ((), None)  # ordinary words are no abbreviation
+
+
+def test_law_passages_give_the_consolidated_section_even_when_the_act_ranks_first(tmp_path):
+    """Live 2026-11-09 (build f83d92d5): the search ranked Act 25/2022 s.3 before Cons 25/2022 s.3, so Procurement got the 2022 text and the
+    "as enacted" note on every SSCL question although the consolidation was held."""
+    from billrag import lawlink
+    st = _sscl_with_act(tmp_path)
+    real = Retriever(st)
+
+    act = [dict(r) for r in st.db.execute("SELECT c.*, b.title, b.kind AS bill_kind, b.date FROM chunks c JOIN bills b ON b.key = c.bill_key "
+                                          "WHERE c.bill_key = 'Act 25/2022' ORDER BY c.section_no")]
+
+    class ActFirst:
+        def search(self, query, k=8, keys=None, kinds=None, **kw):  # the certified Act's s.3 and s.4 rank before their consolidated text
+            return act + real.search(query, k=k, keys=keys, kinds=kinds, **kw)
+
+    out = lawlink.passages(st, ActFirst(), "sscl charged on liable turnover rate", k=4)
+    assert [(p["key"], p["section"]) for p in out["passages"]][:2] == [("Cons 25/2022", 3), ("Cons 25/2022", 4)]  # held in both: current text
+    assert all("consolidated text" in p["status"] for p in out["passages"] if p["key"] == "Cons 25/2022")
+    assert "Cons 25/2022" in out["notes"]
+    assert lawlink._consolidated(st, {"bill_key": "Act 10/2026", "section_no": 3}) is None   # no consolidation of that Act

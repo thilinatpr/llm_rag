@@ -77,6 +77,21 @@ def _section_id(key, sec):
     return (key.split(" ", 1)[-1] if _is_law(key) else key, sec)
 
 
+def _consolidated(store, c):
+    """The same section of the IRD consolidation of a certified Act's hit, as a hit (the fields version_tag and shown_text read), or None.
+    Search order cannot decide this: the two versions score alike and the Act's often ranks first (live 2026-11-09: Act 25/2022 s.3 at 1,
+    Cons 25/2022 s.3 at 2, and every answer then carried the "as enacted in 2022" note although the consolidation was held)."""
+    key, sec = c["bill_key"], c.get("section_no")
+    if not key.startswith("Act ") or sec is None:
+        return None
+    cons = consolidated.for_act(store, key)
+    if not cons:
+        return None
+    row = store.db.execute("SELECT c.*, b.title, b.kind AS bill_kind, b.date FROM chunks c JOIN bills b ON b.key = c.bill_key "
+                           "WHERE c.bill_key=? AND c.section_no=? ORDER BY c.ord LIMIT 1", (cons, int(sec))).fetchone()
+    return dict(row) if row else None
+
+
 def passages(store, retriever, query, k=4, chars=SECTION_CHARS):
     """-> {"passages": [{cite, key, section, title, status, text}], "notes": {key: note}, "focus": title or None}.
     The law the question names comes first (searched with its name spelled out); a section held both as enacted and consolidated is
@@ -91,11 +106,9 @@ def passages(store, retriever, query, k=4, chars=SECTION_CHARS):
                                  k=3, keys=list(keys), kinds=CLAUSE_KINDS)
         hits += retriever.search(query + " " + title, k=k * 3, keys=list(keys), kinds=CLAUSE_KINDS)
     hits += retriever.search(query, k=k * 3, kinds=CLAUSE_KINDS)
-    # consolidated before as-enacted for the same section; otherwise keep the search order
-    cons_first = sorted(range(len(hits)), key=lambda i: (i if not hits[i]["bill_key"].startswith("Cons ") else i - 0.5))
     chosen, seen = [], set()
-    for i in cons_first:
-        c = hits[i]
+    for c in hits:
+        c = _consolidated(store, c) or c  # the current text, wherever the search ranked the two versions
         sid = _section_id(c["bill_key"], c.get("section_no"))
         if sid in seen or (c.get("section_no") is None and not keys):  # a schedule or overview without a section: only for the named law
             continue
