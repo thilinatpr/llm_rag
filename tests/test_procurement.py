@@ -790,7 +790,7 @@ def test_model_bidding_documents_are_capped_and_always_labelled(tmp_path, monkey
     assert [u["doc"] for u in A.gather(idx, "q", docs=A.CURRENT)].count("SBDG") == A.MAX_TEMPLATE
     monkeypatch.setattr(idx, "search", lambda *a, **k: hits[2:])
     r = A.ask(idx, FakeLLM("Adjusted under the standard conditions [SBDG §30]."), "q", docs=A.CURRENT)
-    assert "model standard bidding document" in r.answer and "non-binding guidance" not in r.answer
+    assert "our own summary of a model standard bidding document" in r.answer and "non-binding guidance" not in r.answer
 
 
 def test_sbd_texts_parse_into_the_clauses_we_cite():
@@ -801,3 +801,4 @@ def test_sbd_texts_parse_into_the_clauses_we_cite():
         assert {c["ref"] for c in chunks} == refs
     w, _ = parse.parse_curated(BY_ID["SBDW"]["file"].read_text(encoding="utf-8"), "SBDW")
     assert "taxation" in next(c for c in w if c["ref"] == "45")["text"]
+    assert all("Check clause" in c["text"] or "Check " in c["text"] for c in w)  # every summary tells the reader where to look

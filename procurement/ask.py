@@ -32,8 +32,8 @@ _CANON = {d["id"].lower(): d["id"] for d in DOCS}
 TRANSLATED = {d["id"] for d in DOCS if d.get("note") == UNOFFICIAL}  # our own translations of Sinhala-only circulars (FRA, PFC0120)
 NON_BINDING = {d["id"] for d in DOCS if d.get("note") == GUIDANCE}
 TEMPLATES = {d["id"] for d in DOCS if d.get("note") == TEMPLATE}  # model bidding documents (SBDW, SBDG)
-TEMPLATE_NOTE = ("Note: {docs} {verb} a model standard bidding document, not a rule. The conditions of your own contract decide the case; "
-                 "check them (and the Contract Data or particular conditions) before relying on this.")
+TEMPLATE_NOTE = ("Note: {docs} {verb} our own summary of a model standard bidding document, not its wording and not a rule. Check the clause "
+                 "numbers cited in the document itself and in your own contract: the conditions of your own contract decide the case.")
 NON_BINDING_NOTE = ("Note: {docs} is non-binding guidance from 2017, written before the 2024 Guidelines; "
                     "the contract's own conditions and PG2024/PM2024 prevail.")
 TRANSLATION_NOTE = ("Note: {docs} {verb} an unofficial English translation of Sinhala Treasury circulars made for this tool; "
@@ -81,11 +81,13 @@ Sources:
   guidance on contract administration, written mainly for FIDIC/ICTAD contracts and before the 2024 Guidelines: when you rely on it, say
   it is guidance; it never overrides PG2024, PM2024 or the contract. NPC's own Contract Management Guidelines (PG2024 §1.4(c), §9.1) are
   not among these sources: if a question turns on them or on the contract's conditions, say so.
-- SBDW = model Standard Bidding Document for Works (ICTAD, 2007), cited [SBDW §45]; SBDG = model Standard Bidding Document for General
-  Goods, NCB (NPA), cited [SBDG §30]. They are TEMPLATES for the conditions of contract that many contracts copy: say "the standard
-  conditions provide ..." and that the user's own contract decides. A tax or levy introduced after the bid date is the contractor's own cost
-  unless the contract's change-in-law or price-adjustment clause covers it: when such a clause is among the passages, give the test (law
-  after the base date, covers taxes or levies, notice and procedure in the contract) instead of only saying "check your contract".
+- SBDW = our summary of clauses of the model Standard Bidding Document for Works (ICTAD, 2007), cited [SBDW §45]; SBDG = our summary of
+  clauses of the model Standard Bidding Document for General Goods, NCB (NPA), cited [SBDG §30]. They are summaries of TEMPLATES for the
+  conditions of contract that many contracts copy, not the publishers' text: never put them in quotation marks, say "the standard conditions
+  provide (summary of clause 45)" and tell the reader to check that clause number in the document and in their own contract, whose conditions
+  decide. A tax or levy introduced after the bid date is the contractor's own cost unless the contract's change-in-law or price-adjustment
+  clause covers it: when such a clause is among the passages, give the test (law after the base date, covers taxes or levies, notice and
+  procedure in the contract) instead of only saying "check your contract".
 - LCC2026 = NPC Guidance Note on Life Cycle Cost / Total Cost of Ownership. ESM2026 = NPC Sector Specific Procurement Manual
   2026 for investor selection in electricity generation, storage, transmission and ancillary services (from 22.10.2026).
 

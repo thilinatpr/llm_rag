@@ -1,10 +1,14 @@
-<!-- SBDG | Standard Bidding Document: Procurement of General Goods, National Competitive Bidding, NPA/Goods/SBD 01 (National Procurement Agency), Section VII General Conditions of Contract, clauses 14, 16 and 30, word for word. A model document: a contract uses the conditions it was actually signed with. -->
+<!-- SBDG | OUR OWN SUMMARY (not the publisher's text) of general conditions of contract 14, 16 and 30 of the Standard Bidding Document for Procurement of General Goods, National Competitive Bidding (NPA/Goods/SBD 01), National Procurement Agency. The wording of the document is not reproduced here. A model document: a contract uses the conditions it was actually signed with. -->
 
 ## 14 | Contract Price (General Conditions of Contract)
-14.1 Prices charged by the Supplier for the Goods supplied and the Related Services performed under the Contract shall not vary from the prices quoted by the Supplier in its bid.
+Summary of general condition 14 of the NPA Goods (NCB) standard conditions. Check clause 14 in the document and in your contract.
+- The prices the supplier charges for the goods and related services must not differ from the prices it quoted in its bid.
 
 ## 16 | Taxes and Duties (General Conditions of Contract)
-16.1 The Supplier shall be entirely responsible for all taxes, duties, license fees, etc., incurred until delivery of the contracted Goods to the Purchaser.
+Summary of general condition 16 of the NPA Goods (NCB) standard conditions. Check clause 16 in the document and in your contract.
+- The supplier alone is responsible for taxes, duties, licence fees and similar charges incurred up to delivery of the goods to the purchaser.
 
 ## 30 | Change in Laws and Regulations (General Conditions of Contract)
-30.1 Unless otherwise specified in the Contract, if after the date of 28 days prior to date of Bid submission, any law, regulation, ordinance, order or bylaw having the force of law is enacted, promulgated, abrogated, or changed in Sri Lanka that subsequently affects the Delivery Date and/or the Contract Price, then such Delivery Date and/or Contract Price shall be correspondingly increased or decreased, to the extent that the Supplier has thereby been affected in the performance of any of its obligations under the Contract. Notwithstanding the foregoing, such additional or reduced cost shall not be separately paid or credited if the same has already been accounted for in the price adjustment provisions where applicable, in accordance with CC Clause 14.
+Summary of general condition 30 of the NPA Goods (NCB) standard conditions. Check clause 30 in the document and in your contract.
+- Unless the contract says otherwise: if, after the date 28 days before the bid submission date, a law, regulation, ordinance, order or by-law having the force of law is made, repealed or changed in Sri Lanka, and this later affects the delivery date or the contract price, the date or price is increased or decreased to match, to the extent the supplier is affected in performing its obligations.
+- Such an extra or reduced cost is not paid or credited separately where it is already accounted for in the price adjustment provisions (where they apply) under general condition 14.

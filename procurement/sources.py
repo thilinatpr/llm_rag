@@ -21,8 +21,8 @@ TIME_LIMITS = (
     dict(docs=("FRA",), heading="FR 113(6)", mentions=r"113\s*\(6\)|advance\s+.?B.?\s+account", until="2025-03-31", shown="31 March 2025",
          note="The delegated authority in FR 113(6) was valid only until 31 March 2025, which has passed, and these sources hold no later extension."),
 )
-TEMPLATE = ("Model standard bidding document (a template, not a rule): the contract's own conditions, which may differ from this text, "
-            "decide the case. The Guidelines and Manual prevail.")
+TEMPLATE = ("Our own summary of a model standard bidding document (a template, not a rule, and not the publisher's wording): the contract's own "
+            "conditions decide the case. The Guidelines and Manual prevail.")
 UNOFFICIAL = ("Unofficial English translation made for this index from the Sinhala circular (no official English version is published); the Sinhala text is authoritative.")
 
 DOCS = [
