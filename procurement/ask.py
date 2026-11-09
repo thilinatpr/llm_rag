@@ -285,6 +285,8 @@ def verify(answer, units):
         doc, ref = _CANON.get(doc.lower(), doc), ref or fr
         if doc == "FR" and ref in named and not bracketed(answer, m.start()):
             continue
+        if not ref and not bracketed(answer, m.start()):  # a document named in prose ("no PG2006 passage is given") is no citation
+            continue
         ok = any(u["doc"] == doc and (not ref or not u["ref"] or u["ref"] == ref or u["ref"].startswith(ref + ".")
                                       or (ref.startswith(u["ref"] + ".") and ref in u["text"])) for u in units)
         if not ok:
