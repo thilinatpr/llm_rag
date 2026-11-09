@@ -5,7 +5,7 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1
 WORKDIR /app
 RUN pip install openai
 COPY billrag ./billrag
-COPY procurement/__init__.py procurement/ask.py procurement/index.py procurement/parse.py procurement/serve.py procurement/sources.py procurement/tables.py ./procurement/
+COPY procurement/__init__.py procurement/ask.py procurement/index.py procurement/law.py procurement/parse.py procurement/serve.py procurement/sources.py procurement/tables.py ./procurement/
 COPY data/procurement/index.sqlite ./data/procurement/index.sqlite
 EXPOSE 8000
 CMD ["python", "-m", "procurement.serve"]

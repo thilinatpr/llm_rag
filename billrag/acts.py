@@ -272,6 +272,15 @@ def no_act_status(store, bill) -> str:
             "shown to have passed, not that it failed.")
 
 
+def _base_status(store, key, section):
+    """A base Act (as enacted): what the index knows about later changes. A consolidation that shows the section unchanged (or
+    amended) replaces the generic 'figures may be out of date' warning."""
+    if not baseacts.is_base(store, key):
+        return ""
+    known = consolidated.section_status(store, key, section)
+    return " " + baseacts.as_enacted(store, key) + (known or baseacts.STATUS_TAIL)
+
+
 def status_lines(store, key, section=None):
     """Plain-language status of one passage for the answer step (no [ ] so it can't pass for a citation)."""
     b = store.bill(key)
@@ -288,7 +297,7 @@ def status_lines(store, key, section=None):
                 + " An amending Act states changes; it is not the amended Act's current text, and a number mentioned inside a clause "
                   "does not say which Act is being amended."
                 + (transcribed.STATUS if transcribed.is_transcribed(store, key) else "")
-                + ((" " + baseacts.as_enacted(store, key) + baseacts.STATUS_TAIL) if baseacts.is_base(store, key) else ""))
+                + _base_status(store, key, section))
     a = act_for_bill(store, key)
     if not a:
         return no_act_status(store, b)

@@ -3103,3 +3103,55 @@ def test_refresh_adds_only_accepted_newer_consolidations(tmp_path):
         (src / f"{no}-2022.txt").write_text("x", encoding="utf-8")
         (src / f"{no}-2022.json").write_text(json.dumps({"no": no, "year": 2022, "title": "X", "up_to": "2026-04-09", "accepted_by": accepted}))
     assert [k for k, _m, _t in r.pending_consolidations(tmp_path, src)] == ["Cons 25/2022"]
+
+
+def test_law_passages_for_procurement_carry_labels_status_and_notes(tmp_path):
+    from billrag import lawlink
+    st, key, _ = _add_sscl_cons(tmp_path)
+    out = lawlink.passages(st, Retriever(st), "social security contribution levy registration turnover threshold", k=3)
+    ps = out["passages"]
+    assert ps and len(ps) <= 3
+    assert ps[0]["key"] == "Cons 25/2022"                                           # law first: the bills in the index are no law
+    assert all(p["cite"] == f"[{p['key']} §{p['section']}]" for p in ps if p["section"] is not None)
+    assert "consolidated text" in ps[0]["status"] and ps[0]["text"]
+    assert "Inland Revenue Department consolidated text" in out["notes"]["Cons 25/2022"]
+    assert lawlink.passages(st, Retriever(st), "anything", k=99)["passages"].__len__() <= lawlink.MAX_K
+
+
+def test_upper_case_long_titles_name_the_act_they_amend():
+    from billrag.baseacts import references
+    assert references("AN ACT TO AMEND THE SOCIAL SECURITY CONTRIBUTION LEVY ACT, NO. 25 OF 2022") == {
+        "25/2022": "Social Security Contribution Levy Act"}
+    assert references("AN ACT TO AMEND THE TRUSTS ORDINANCE (CHAPTER 87)") == {"Chapter 87": "Trusts Ordinance"}
+    assert references("to amend the Code of Criminal Procedure Act, No. 15 of 1979 and the Judicature Act, No. 2 of 1978") == {
+        "15/1979": "Code of Criminal Procedure Act", "2/1978": "Judicature Act"}
+
+
+def _sscl_with_act(tmp_path):
+    """The SSCL consolidation plus a stand-in certified Act 25/2022 (sections 3 and 4) and an amending Act with an upper-case title."""
+    st, cons, _ = _add_sscl_cons(tmp_path)
+    for key, no, year, date, title, lt in (
+            ("Act 25/2022", 25, 2022, "2022-09-20", "Social Security Contribution Levy Act, No. 25 of 2022", "TO PROVIDE FOR ... LEVY"),
+            ("Act 10/2026", 10, 2026, "2026-04-09", "Social Security Contribution Levy (Amendment) Act, No. 10 of 2026",
+             "AN ACT TO AMEND THE SOCIAL SECURITY CONTRIBUTION LEVY ACT, NO. 25 OF 2022")):
+        st.db.execute("INSERT INTO bills(key, bill_no, year, date, title, title_norm, kind, long_title) VALUES(?,?,?,?,?,?,?,?)",
+                      (key, no, year, date + "T00:00:00Z", title, title.lower(), "Act", lt))
+    for sec in (3, 4):
+        st.db.execute("INSERT INTO chunks(bill_key, kind, section_no, ord, text, ctx) VALUES(?,?,?,?,?,?)",
+                      ("Act 25/2022", "section", sec, sec, f"section {sec} text", f"section {sec} text"))
+    st.commit()
+    return st
+
+
+def test_base_act_sections_are_checked_against_the_consolidation(tmp_path):
+    from billrag import acts, baseacts, consolidated
+    st = _sscl_with_act(tmp_path)
+    assert baseacts.amended_by(st, "Act 25/2022") == ["Act 10/2026"]           # found although its long title is in capitals
+    assert consolidated.section_change(st, "Act 25/2022", 3)[0] == "unchanged"  # s.3 (the 2.5% rate) carries no IRD change note
+    assert consolidated.section_change(st, "Act 25/2022", 4)[0] == "amended"    # s.4 thresholds were substituted
+    s3, s4 = acts.status_lines(st, "Act 25/2022", 3), acts.status_lines(st, "Act 25/2022", 4)
+    assert "shows this section unchanged" in s3 and "do not state its rates" not in s3
+    assert "shows this section amended" in s4 and "Cons 25/2022 s.4" in s4 and "[" not in s4
+    assert "amended since by Act No. 10 of 2026" in s3
+    assert baseacts.note(st, ["Act 25/2022", "Cons 25/2022"]) is None          # the consolidation's note covers it
+    assert baseacts.note(st, ["Act 25/2022"])

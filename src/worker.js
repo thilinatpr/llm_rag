@@ -5,6 +5,7 @@ import { createHandler } from "./auth.js";
 import { checkBalance } from "./balance.js";
 import { reportSettings } from "./public.js";
 import { noindex } from "./seo.js";
+import { lawEvidence } from "./lawlink.js";
 
 export { BillragContainer } from "./container.js";
 export { QuotaCounter } from "./quota-do.js";
@@ -31,7 +32,10 @@ async function upstream(request, env, opts = {}) {
   }
 }
 
+const site = noindex(createHandler({ upstream, privacy: "bills", cookie: "clk_session", consent: { service: "bills", name: "Bill Assistant" } }));
+
 export default {
-  fetch: noindex(createHandler({ upstream, privacy: "bills", cookie: "clk_session", consent: { service: "bills", name: "Bill Assistant" } })),
+  // /internal/evidence: law passages for Procurement Rules (src/lawlink.js); everything else goes through the login gate
+  fetch: (request, env, ctx) => (new URL(request.url).pathname === "/internal/evidence" ? lawEvidence(request, env, upstream) : site(request, env, ctx)),
   scheduled: (_event, env, ctx) => ctx.waitUntil(Promise.all([checkBalance(env), reportSettings(env)])), // hourly: see [triggers] in wrangler.toml
 };

@@ -89,3 +89,39 @@ def note(store, evidence_keys):
     if not keys:
         return None
     return " ".join("Parts of this answer use the " + describe(store, k) for k in keys) + " " + NOTE_TAIL
+
+
+def for_act(store, act_key):
+    """Key of the consolidation held for this certified Act, or None."""
+    try:
+        r = store.db.execute("SELECT bill_key FROM consolidations WHERE act_key=? ORDER BY up_to DESC", (act_key,)).fetchone()
+    except Exception:
+        return None
+    return r[0] if r else None
+
+
+def section_change(store, act_key, section):
+    """('unchanged' | 'amended', cons key, up_to) for one section of a certified Act that has a consolidation; None otherwise.
+    The signal is IRD's own change note in that section of the consolidation (margin titles land differently in the two documents,
+    so a text comparison would call unchanged sections changed)."""
+    key = for_act(store, act_key)
+    if not key or section is None:
+        return None
+    rows = store.db.execute("SELECT text FROM chunks WHERE bill_key=? AND section_no=?", (key, section)).fetchall()
+    if not rows:
+        return None
+    up_to = info(store, key)["up_to"]
+    return ("amended" if any("[IRD note:" in r[0] for r in rows) else "unchanged", key, up_to)
+
+
+def section_status(store, act_key, section):
+    """The sentence the answering model gets beside a certified Act's section when a consolidation exists (no [ ]: not a citation)."""
+    ch = section_change(store, act_key, section)
+    if not ch:
+        return ""
+    what, key, up_to = ch
+    if what == "unchanged":
+        return (f" IRD's consolidated text ({key}, amendments up to {_date(up_to)}) shows this section unchanged: its wording, rates and "
+                "figures still stand as of that date.")
+    return (f" IRD's consolidated text ({key}, amendments up to {_date(up_to)}) shows this section amended: for the current wording rely on "
+            f"{key} s.{section} if it is in the evidence, and say this enacted text has been changed.")
