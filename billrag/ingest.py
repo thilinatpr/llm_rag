@@ -5,7 +5,8 @@ import sys
 from multiprocessing import Pool
 from pathlib import Path
 
-from .parse import parse_act_pdf, parse_pdf, split_text, norm, split_kind
+from . import transcribed
+from .parse import act_cover_ok, parse_act_pages, parse_act_pdf, parse_pdf, split_text, norm, split_kind
 from .store import Store, bill_key
 
 
@@ -195,17 +196,36 @@ def _act_row(parsed, p, title, no, year, listed_date, prev):
             "summary": prev["summary"] if prev else None}
 
 
-def add_base_act(db_path: Path, pdf: Path, no, year, title, date=None):
-    """Index one Act from a PDF someone found (a base Act that documents.gov.lk does not have): ingest_acts for one file.
-    `date` = certified date YYYY-MM-DD, used when the cover has none. Run `embed` afterwards."""
-    from . import acts, meta
+def read_transcript(path: Path):
+    """A reviewed transcription: one text file, pages separated by form feeds (\\f), margin notes after each page's body."""
+    return [p.strip("\n") for p in Path(path).read_text(encoding="utf-8").split("\f")]
+
+
+def add_base_act(db_path: Path, pdf, no, year, title, date=None, text=None, reviewed=None, method=None):
+    """Index one Act someone found (a base Act that documents.gov.lk does not have, or only as a scan): ingest_acts for one file.
+    pdf: a PDF with a text layer. text: a reviewed transcription of a scan instead (see read_transcript, billrag/ocr.py); the Act is
+    then recorded in `transcribed_docs`, so answers that use it carry the scan note. `date` = certified date YYYY-MM-DD, used when
+    the cover has none. Run `embed` afterwards."""
+    from . import acts, meta, transcribed
     from . import titles as _titles
-    parsed = parse_act_pdf(str(pdf), title, no, year)
+    if text:
+        pages = read_transcript(text)
+        if not any(act_cover_ok(x, no, year) for x in pages[:3]):
+            raise ValueError(f"{text}: Act {no}/{year} is not on its first pages")
+        parsed = parse_act_pages(pages, title, no, year)
+        parsed.n_pages = len(pages)
+    else:
+        parsed = parse_act_pdf(str(pdf), title, no, year)
+    source = text or pdf
     if not parsed.sections:
-        raise ValueError(f"no sections found in {pdf}: is it the English text of Act {no}/{year}?")
+        raise ValueError(f"no sections found in {source}: is it the English text of Act {no}/{year}?")
     store = Store(db_path)
-    row = _act_row(parsed, pdf, title, no, year, date or f"{year}-01-01", store.bill(acts.act_key(no, year)))
+    row = _act_row(parsed, source, title, no, year, date or f"{year}-01-01", store.bill(acts.act_key(no, year)))
     store.replace_bill(row, build_chunks(row, parsed))
+    if text:
+        transcribed.record(store, row["key"], method or transcribed.METHOD, reviewed)
+    else:
+        transcribed.forget(store, row["key"])
     store.commit()
     meta.build(store)
     _titles.build(store)
@@ -250,6 +270,7 @@ def ingest_acts(acts_dir: Path, db_path: Path, since_year=2024, workers=4, only_
             key = acts.act_key(no, year)
             row = _act_row(parsed, p, title, no, year, a["date"], store.bill(key))
             store.replace_bill(row, build_chunks(row, parsed))
+            transcribed.forget(store, row["key"])  # now from a PDF's own text layer
             si = english_pdf_named(acts_dir, a["date"], a["actNoText"], "SINHALA")
             link_si(store, key, si)
             added += 1

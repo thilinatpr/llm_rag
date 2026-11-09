@@ -29,7 +29,11 @@ def main(argv=None):
     p.add_argument("--listing", help="documents.gov.lk acts.json (default: data/acts/acts.json): which missing Acts can be fetched")
     p.add_argument("--json", action="store_true", help="print the result as JSON")
     p = sub.add_parser("add-base-act", help="index one Act from a PDF you found (English text), then run `embed`")
-    p.add_argument("--pdf", required=True)
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--pdf", help="a PDF with a text layer")
+    src.add_argument("--text", help="a reviewed transcription of a scan (pages separated by form feeds; see billrag/ocr.py); "
+                                    "answers that use it get the scanned-copy note")
+    p.add_argument("--reviewed", help="with --text: date the transcription was reviewed, YYYY-MM-DD")
     p.add_argument("--no", type=int, required=True, help="Act number, e.g. 15")
     p.add_argument("--year", type=int, required=True, help="e.g. 1979")
     p.add_argument("--title", required=True, help='without "Act, No. ..": e.g. "Code of Criminal Procedure"')
@@ -126,7 +130,8 @@ def main(argv=None):
         return 1 if res["unresolved"] else 0
     if a.cmd == "add-base-act":
         from .ingest import add_base_act
-        key, n = add_base_act(s.db_path, Path(a.pdf), a.no, a.year, a.title, a.date)
+        key, n = add_base_act(s.db_path, Path(a.pdf) if a.pdf else None, a.no, a.year, a.title, a.date,
+                              text=Path(a.text) if a.text else None, reviewed=a.reviewed)
         print(f"Indexed {key}: {n} sections. Now run `python -m billrag embed`, then publish.")
         return 0
     if a.cmd == "link-acts":

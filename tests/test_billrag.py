@@ -2957,3 +2957,56 @@ def test_refresh_reclassifies_kinds_once(tmp_path):
     (tmp_path / "i.sqlite").rename(tmp_path / "index.sqlite")
     assert r.reclassify_kinds(tmp_path) == ["081/2026"]
     assert r.reclassify_kinds(tmp_path) == []                         # idempotent: a later run has nothing to do
+
+
+# ---------------------------------------------------------------- Acts transcribed from scans (OCR + manual review), 2026-11-09
+def _add_itr(tmp_path):
+    from billrag.ingest import add_base_act
+    root = ROOT_FOR_SCRIPTS / "sources" / "base_acts"
+    st = make_store(tmp_path)
+    key, n = add_base_act(tmp_path / "i.sqlite", None, 14, 1990, "Inland Trust Receipts", "1990-03-06",
+                          text=root / "14-1990.txt", reviewed="2026-11-09")
+    return Store(tmp_path / "i.sqlite"), key, n
+
+
+def test_reviewed_transcription_is_indexed_and_marked(tmp_path):
+    from billrag import acts, transcribed
+    st, key, n = _add_itr(tmp_path)
+    assert (key, n) == ("Act 14/1990", 7)
+    b = st.bill(key)
+    assert b["title"] == "Inland Trust Receipts Act, No. 14 of 1990" and b["date"].startswith("1990-03-06")
+    s1 = " ".join(r[0] for r in st.db.execute("SELECT text FROM chunks WHERE bill_key=? AND section_no=1", (key,)))
+    assert "Act, No. 14 of 1990" in s1                                   # the year OCR read as 1980, as reviewed
+    assert transcribed.is_transcribed(st, key) and not transcribed.is_transcribed(st, "086/2026")
+    assert "scanned copy" in acts.status_lines(st, key, 3)
+    note = transcribed.note(st, ["086/2026", key, key])
+    assert note.startswith("The text of Inland Trust Receipts Act, No. 14 of 1990 was read from a scanned copy")
+    assert "official printed document" in note
+    assert transcribed.note(st, ["086/2026"]) is None
+
+
+def test_answer_using_a_transcribed_act_carries_the_note_and_source_tag(tmp_path):
+    class AllRelevant(ScriptLLM):
+        def chat(self, system, messages, tools=(), max_tokens=0, effort=None):
+            user = messages[-1]["content"]
+            if "CANDIDATES:" in user:
+                n = len(re.findall(r"^\[\d+\] ", user.split("CANDIDATES:")[1], re.M))
+                return Reply(json.dumps({"scores": [{"i": i, "s": 3} for i in range(1, n + 1)], "enough": True, "missing": "", "queries": []}))
+            return super().chat(system, messages, tools, max_tokens, effort)
+
+    st, key, _ = _add_itr(tmp_path)
+    r = Pipeline(st, Retriever(st), AllRelevant()).ask("What is the penalty for breaching an inland trust receipt undertaking?")
+    assert key in {e.key for e in r.evidence}
+    assert r.transcribed == {key} and "scanned copy" in r.scan_note
+    assert any(s.endswith(" - transcribed from a scan") for s in r.sources() if key in s)
+
+
+def test_refresh_adds_pending_transcriptions_once(tmp_path):
+    r = _refresh()
+    st = make_store(tmp_path)
+    (tmp_path / "i.sqlite").rename(tmp_path / "index.sqlite")
+    pend = r.pending_transcripts(tmp_path)
+    assert [k for k, _m, _t in pend] == ["Act 14/1990"]
+    ran = []
+    assert r.add_transcripts(lambda *cmd, step=None: ran.append(cmd), tmp_path) == ["Act 14/1990"]
+    assert ran[0][:4] == ("-m", "billrag", "add-base-act", "--text") and "14" in ran[0] and "1990" in ran[0]
