@@ -3155,3 +3155,17 @@ def test_base_act_sections_are_checked_against_the_consolidation(tmp_path):
     assert "amended since by Act No. 10 of 2026" in s3
     assert baseacts.note(st, ["Act 25/2022", "Cons 25/2022"]) is None          # the consolidation's note covers it
     assert baseacts.note(st, ["Act 25/2022"])
+
+
+def test_law_passages_resolve_a_lower_case_abbreviation_to_the_charging_section(tmp_path):
+    """Live procurement question 2026-11-09: 'sscl' searched as typed returned the Electricity Act and SSCL s.21 (appeals)."""
+    from billrag import lawlink
+    st = _sscl_with_act(tmp_path)
+    q = "A contract was awarded in 2021. Payments made in 2024. Now contractor asks for sscl payments. Can we pay"
+    keys, title = lawlink.focus(st, q)
+    assert title == "Social Security Contribution Levy" and {"Act 25/2022", "Cons 25/2022", "Act 10/2026"} <= set(keys)
+    out = lawlink.passages(st, Retriever(st), q, k=4)
+    cites = [p["cite"] for p in out["passages"]]
+    assert cites[0] == "[Cons 25/2022 §3]" and out["focus"] == title           # the charging section, current text
+    assert len({(c.split(" ", 1)[1].split(" ")[0], c.split("§")[-1]) for c in cites}) == len(cites)  # no section twice
+    assert lawlink.focus(st, "Can we pay the contractor for the work?") == ((), None)  # ordinary words are no abbreviation

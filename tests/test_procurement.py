@@ -752,3 +752,10 @@ def test_procurement_image_copies_every_module_the_server_imports():
         imported |= set(re.findall(r"from \.(\w+) import|from \. import (\w+)", src) and
                         [m for pair in re.findall(r"from \.(\w+) import|from \. import (\w+)", src) for m in pair if m])
     assert imported <= shipped, sorted(imported - shipped)
+
+
+def test_a_document_named_in_prose_is_not_an_unsupported_citation():
+    units = [{"doc": "PM2024", "ref": "9.1", "text": "x"}]
+    ans = "The 2006 rules apply, but no PG2006/PM2006 passage is among the sources given [PM2024 §9.1]."
+    assert pa.verify(ans, units) == []
+    assert pa.verify("See [PG2006 §2.1].", units) == ["PG2006 §2.1"]     # a bracketed citation is still checked
