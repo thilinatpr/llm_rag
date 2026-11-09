@@ -5,7 +5,7 @@ import sys
 from multiprocessing import Pool
 from pathlib import Path
 
-from .parse import parse_act_pdf, parse_pdf, split_text, norm
+from .parse import parse_act_pdf, parse_pdf, split_text, norm, split_kind
 from .store import Store, bill_key
 
 
@@ -25,10 +25,22 @@ def english_pdf_named(root: Path, date, no_text, lang="ENGLISH"):
 
 
 def classify(title: str):
-    m = re.search(r"\s*-\s*(bill|gs)\s*$", title.strip(), re.I)
-    kind = {"bill": "Bill", "gs": "GS"}.get(m.group(1).lower()) if m else "Other"
-    base = title[:m.start()] if m else title
-    return kind, norm(base)
+    kind, base = split_kind(title)
+    return kind or "Other", norm(base)
+
+
+def reclassify(store):
+    """Re-read kind and title_norm from each stored title with the current `classify` rule, in place. Only the `bills` row changes:
+    chunk ids and text (so `fingerprint()` and vectors.npz) stay valid, no re-ingest or `embed`. Acts keep their own kind.
+    Run `meta`, `titles` and `link-acts` afterwards (the CLI command does). Returns [(key, old kind, new kind, new title_norm)]."""
+    changed = []
+    for key, title, kind, tnorm in store.db.execute("SELECT key, title, kind, title_norm FROM bills WHERE kind != 'Act'").fetchall():
+        nk, ntn = classify(title or "")
+        if (nk, ntn) != (kind, tnorm):
+            changed.append((key, kind, nk, ntn))
+    store.db.executemany("UPDATE bills SET kind=?, title_norm=? WHERE key=?", [(k, tn, key) for key, _o, k, tn in changed])
+    store.commit()
+    return changed
 
 
 def _work(args):

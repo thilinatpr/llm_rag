@@ -37,7 +37,8 @@ def smalltalk_reply(question):
 
 
 def base_title(title):
-    return re.sub(r"\s+(?:-\s+(?:Bill|GS)|Act,?\s+No\.?\s*\d+\s+of\s+\d{4})\s*$", "", title or "", flags=re.I).strip()
+    from .parse import plain_title
+    return re.sub(r"\s+Act,?\s+No\.?\s*\d+\s+of\s+\d{4}\s*$", "", plain_title(title), flags=re.I).strip()
 
 
 def _initials(words):

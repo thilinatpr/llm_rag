@@ -2898,3 +2898,62 @@ def test_strip_noise_removes_margin_notes_printer_and_running_header_only():
         assert strip_noise(k, "Twentieth Amendment to the Constitution - Bill") == k
     c = {"kind": "section", "text": last, "title": "X - Bill"}
     assert shown_text(c).endswith("shall prevail.") and c["text"] == last   # stored text untouched
+
+
+# ---------------------------------------------------------------- version suffixes in listing titles (SSCL question, 2026-11-09)
+def test_classify_reads_every_spelling_of_the_version_suffix():
+    from billrag.parse import plain_title
+    cases = {
+        "Social Security Contribution Levy - (GS)": ("GS", "social security contribution levy"),
+        "Central Bank of Sri Lanka (GS)": ("GS", "central bank of sri lanka"),
+        "Coconut Development (Amendment) GS": ("GS", "coconut development amendment"),
+        "Minimum Retirement Age of Workers _ GS": ("GS", "minimum retirement age of workers"),
+        "Surcharge Tax - (Bill)": ("Bill", "surcharge tax"),
+        "Poisons, Opium and Dangerous Drugs (Amendment) Bill": ("Bill", "poisons opium and dangerous drugs amendment"),
+        "National Minimum Wage of Workers (Amendment) - SUPPLEMENT (Bill)": ("Bill", "national minimum wage of workers amendment"),
+        "Trusts (Amendment) - Bill": ("Bill", "trusts amendment"),
+        "Foo BIll": ("Bill", "foo"),
+        "Appropriation": ("Other", "appropriation"),
+        "Appropriation Bill 2020": ("Other", "appropriation bill 2020"),  # not at the end
+        "Bill": ("Other", "bill"), "GS": ("Other", "gs"),                 # nothing left: not a suffix
+    }
+    for title, want in cases.items():
+        assert classify(title) == want, title
+    assert plain_title("Social Security Contribution Levy - (GS)") == "Social Security Contribution Levy"
+    assert plain_title("Coconut Development (Amendment) GS") == "Coconut Development (Amendment)"
+
+
+def test_reclassify_fixes_kind_in_place_without_touching_chunks(tmp_path):
+    from billrag.ingest import reclassify
+    from billrag import meta
+    st = make_store(tmp_path)
+    st.db.execute("UPDATE bills SET title='Trusts (Amendment) - (GS)', kind='Other', title_norm='trusts amendment gs' WHERE key='081/2026'")
+    st.commit()
+    meta.build(st)
+    fams = dict(st.db.execute("SELECT bill_key, family FROM bill_meta").fetchall())
+    assert fams["081/2026"] != fams["086/2026"]                        # the bug: GS text and Bill in different families
+    fp = st.fingerprint()
+    assert reclassify(st) == [("081/2026", "Other", "GS", "trusts amendment")]
+    assert st.fingerprint() == fp                                      # chunk text unchanged: vectors stay valid
+    meta.build(st)
+    fams = dict(st.db.execute("SELECT bill_key, family FROM bill_meta").fetchall())
+    assert fams["081/2026"] == fams["086/2026"]
+    assert reclassify(st) == []
+
+
+def test_overview_header_stored_as_other_shows_the_plain_version():
+    from billrag.pipeline import shown_text, version_tag
+    c = {"kind": "overview", "bill_kind": "GS", "title": "Social Security Contribution Levy - (GS)", "date": "2022-06-21T00:00:00Z",
+         "text": "Bill 213/2022 — Social Security Contribution Levy - (GS) (Other, 2022-06-21). An Act to ..."}
+    assert shown_text(c).startswith("Bill 213/2022 — Social Security Contribution Levy (Gazette text, 2022-06-21).")
+    assert version_tag(c) == "Social Security Contribution Levy (Gazette text, 2022-06-21)"
+
+
+def test_refresh_reclassifies_kinds_once(tmp_path):
+    r = _refresh()
+    st = make_store(tmp_path)  # index at tmp_path/i.sqlite: refresh expects <bills_dir>/index.sqlite
+    st.db.execute("UPDATE bills SET title='Trusts (Amendment) GS', kind='Other', title_norm='trusts amendment gs' WHERE key='081/2026'")
+    st.commit()
+    (tmp_path / "i.sqlite").rename(tmp_path / "index.sqlite")
+    assert r.reclassify_kinds(tmp_path) == ["081/2026"]
+    assert r.reclassify_kinds(tmp_path) == []                         # idempotent: a later run has nothing to do

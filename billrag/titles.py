@@ -19,12 +19,14 @@ import math
 import re
 from collections import Counter
 
+from . import parse as _parse
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS title_index(
   family TEXT PRIMARY KEY, key TEXT NOT NULL, keys TEXT NOT NULL, title TEXT NOT NULL, words TEXT NOT NULL,
   kind TEXT NOT NULL, year INT, date TEXT);
 """
-SUFFIX = re.compile(r",?\s*No\.?\s*\d+\s+of\s+\d{4}\s*$|\s-\s(?:Bill|GS)\s*$", re.I)
+SUFFIX = re.compile(r",?\s*No\.?\s*\d+\s+of\s+\d{4}\s*$", re.I)  # the version code (" - GS", " (Bill)", ...) goes via parse.plain_title
 KIND_WORDS = {"act", "bill", "gs"}  # said by the user about the kind of text, not part of what it is called
 STOP = KIND_WORDS | {"the", "of", "and", "for", "to", "in", "no", "a", "an"}
 # Tuned on synthetic title questions (see evaluate): weights, the score a winner needs, and how close a rival may be.
@@ -43,7 +45,7 @@ whats new latest recent proposed this that these those one any which more say"""
 
 
 def plain_title(title):
-    return SUFFIX.sub("", title or "").strip()
+    return SUFFIX.sub("", _parse.plain_title(title)).strip()
 
 
 def words_of(text):

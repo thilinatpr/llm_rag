@@ -61,7 +61,7 @@ Legend: [x] done, [ ] open. See `AGENTS.md` for context.
 Live question, asked on both services at 06:54 UTC: "A contract was awarded in 2021. Payments made in 2024. Now contractor asks for
 sscl payments. Can we pay". Both answers said the evidence does not settle it: honest, but not useful. No errors and no citation
 warnings, and the grader kept the right SSCL clauses (scores 2-3). The causes are what the indexes hold and one indexing bug:
-- [ ] **Add the SSCL Act 25/2022 (main cause).** Acts are indexed from 2024 only (`acts.ACT_SINCE`), so the Social Security Contribution
+- [ ] **Add the SSCL Act 25/2022 (main cause).** (2026-11-09: checked from the owner's PC: documents.gov.lk lists it with an English PDF and it parses: 61 sections, 96 chunks, levy charged "on or after October, 1, 2022" (the bill said 1 July); no clause on passing the levy to a buyer or on existing contracts. Goes in with the next `refresh-index.yml` build with `force` on GitHub, NOT built locally; that build stops on the ~48 base Acts that cannot be found until they are found or waived.) Acts are indexed from 2024 only (`acts.ACT_SINCE`), so the Social Security Contribution
       Levy Act, No. 25 of 2022 is missing. Only its bills (213/2022 Gazette text, 219/2022 Bill) and amending Acts 15/2024, 24/2025 and
       10/2026 are held, so the answer quoted the 2022 bill. The bill's start date (1 July 2022) may differ from the Act's: from memory
       1 October 2022, not checked. `python -m billrag base-acts` on the live index already reports it: "[NOT FOUND] Social Security
@@ -70,7 +70,7 @@ warnings, and the grader kept the right SSCL clauses (scores 2-3). The causes ar
       `embed`, publish. documents.gov.lk reset connections from the cloud sandbox, so whether it lists 25/2022 with an English PDF is
       not known; try from the local PC. Running the full base-Act step (`refresh_bills.py --force`) would bring in the other ~30
       fetchable base Acts at the same time (see AGENTS.md "Base Acts").
-- [ ] **`ingest.classify` misses title variants (143 documents, 13 from 2020+).** It recognises only titles ending " - GS" / " - Bill", so
+- [x] **`ingest.classify` misses title variants (143 documents, 13 from 2020+).** Fixed in code 2026-11-09: one rule `parse.split_kind` / `plain_title` used by classify, version_tag, shown_text, strip_noise, titles, resolve, store.coverage, build_site; `python -m billrag reclassify` fixes `bills.kind`/`title_norm` in place (chunk text unchanged, so no embed) and every `refresh_bills.py` run does it first. The index changes at the next refresh build + Publish; the display fix needs a container deploy. Was: It recognises only titles ending " - GS" / " - Bill", so
       "Social Security Contribution Levy - (GS)", "... (GS)", "... _ GS", "... GS", "... (Bill)", "... Bill", "... - SUPPLEMENT (Bill)",
       "... BIll" are stored with kind `Other` and a `title_norm` that keeps "gs"/"bill". Effects: the GS text and its Bill land in different
       `bill_meta.family` groups (213/2022 family "213/2022", 219/2022 family "219/2022"), so identical sections are treated as two documents
@@ -80,12 +80,12 @@ warnings, and the grader kept the right SSCL clauses (scores 2-3). The causes ar
       Fix: widen the regex in `classify` and in `version_tag` / `strip_noise` / `_HEAD`, add a test, update `bills.kind` + `title_norm` in
       place (no full re-ingest, so chunk ids stay), run `meta` and `titles`; overview chunks whose header contains the title change
       text, so run `embed` (incremental, a few hundred chunks at most) and publish.
-- [ ] **Procurement Rules has nothing on taxes / change in legislation in contracts.** No source covers who bears a new tax or levy under
+- [ ] **Procurement Rules has nothing on taxes / change in legislation in contracts.** (2026-11-09: confirmed in the index: only "taxes/levies shall be included in the cost" of a bid, PM2024 4.2/7.7, and the energy-sector manual's change-in-law; nprocom.gov.lk's SBD pages carry only the 13-page national shopping procedure, so the works/goods SBDs must come from the owner or CIDA.) No source covers who bears a new tax or levy under
       an existing contract (nearest: PF Circular 03/2026, fuel/material price escalation). That rule lives in the contract conditions:
       Standard Procurement Documents (Works, Goods: "changes in laws and regulations") and the Contract Management Guidelines, both
       listed as "Not in the index" in `procurement/README.md`. Fix: add them if the PDFs are available, then `python -m procurement
       build` and an eval question for this case.
-- [ ] **Cross-service questions.** The question needs both halves: tax law (who owes SSCL: Bill Assistant) and contract terms (whether the
+- [ ] **Cross-service questions.** (Held until Procurement Rules can answer the contract side: a pointer now would send people to a service that says it does not know.) The question needs both halves: tax law (who owes SSCL: Bill Assistant) and contract terms (whether the
       employer pays it: Procurement Rules). Each service answered only its half. Option: when an answer rests on a tax/levy Act, add a
       line pointing to Procurement Rules for the contract side (and the reverse from Procurement for statutory levies).
 - What the indexed text does support (for checking an answer after the fixes): under 219/2022 §3 the levy is charged on the taxable

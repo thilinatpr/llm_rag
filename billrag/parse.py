@@ -28,6 +28,28 @@ def norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
 
 
+# The listing marks a document's version at the end of its title, in many spellings: "X - GS", "X - Bill", "X (GS)", "X GS",
+# "X - (GS)", "X _ GS", "X Bill", "X BIll", "X - SUPPLEMENT (Bill)". Only " - GS" / " - Bill" were recognised before 2026-11-09,
+# so 143 documents (e.g. 213/2022 "Social Security Contribution Levy - (GS)") were stored as kind Other with "gs" in their
+# title_norm, and the GS text and its Bill never formed one family.
+KIND_SUFFIX = re.compile(r"(?:\s*[-_\u2013]\s*SUPPLEMENT)?\s*[-_\u2013]?\s*(?:\(\s*(bill|gs)\s*\)|\b(bill|gs))\s*$", re.I)
+
+
+def split_kind(title: str):
+    """(kind, title without the version suffix): kind is "Bill", "GS" or None when the title carries no version marker."""
+    t = (title or "").strip()
+    m = KIND_SUFFIX.search(t)
+    if not m or not t[:m.start()].strip(" -_"):
+        return None, t
+    word = (m.group(1) or m.group(2)).lower()
+    return {"bill": "Bill", "gs": "GS"}[word], t[:m.start()].rstrip(" -_\u2013")
+
+
+def plain_title(title: str) -> str:
+    """The title as readers should see it: no internal version code at the end."""
+    return split_kind(re.sub(r"\s+", " ", title or ""))[1]
+
+
 @dataclass
 class Section:
     kind: str                 # "section" | "schedule"

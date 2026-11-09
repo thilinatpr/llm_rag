@@ -36,6 +36,9 @@ def main(argv=None):
     p.add_argument("--date", help="certified date YYYY-MM-DD if the PDF's cover has none")
     sub.add_parser("link-acts", help="recompute bill -> Act links and the section-by-section comparison (no re-parse)")
     sub.add_parser("glossary", help="mine English <-> official Sinhala titles and defined terms from the linked sections")
+    p = sub.add_parser("reclassify", help="re-read GS/Bill/Other from the stored titles in place (no re-ingest, vectors stay valid), "
+                       "then rebuild meta, titles and Act links")
+    p.add_argument("--dry-run", action="store_true", help="only list what would change")
     sub.add_parser("meta", help="(re)build bill metadata: families, newest instance, bill type, section cross-references")
     p = sub.add_parser("titles", help="(re)build the title index (which bill does a question name?); --eval scores the ranker")
     p.add_argument("--eval", action="store_true", help="score the ranker on synthetic title questions instead of building")
@@ -133,6 +136,22 @@ def main(argv=None):
     if a.cmd == "glossary":
         from . import glossary
         print(glossary.build(store))
+        return 0
+    if a.cmd == "reclassify":
+        from .ingest import classify, reclassify
+        if a.dry_run:
+            rows = store.db.execute("SELECT key, title, kind, title_norm FROM bills WHERE kind != 'Act' ORDER BY date DESC").fetchall()
+            changed = [(k, kd, *classify(t or "")) for k, t, kd, tn in rows if classify(t or "") != (kd, tn)]
+        else:
+            changed = reclassify(store)
+        for key, old, new, tn in changed:
+            print(f"{key}: {old} -> {new}  ({tn})")
+        print(f"{len(changed)} documents {'would change' if a.dry_run else 'changed'}")
+        if changed and not a.dry_run:
+            from . import acts, meta, titles
+            print(meta.build(store))
+            print(titles.build(store))
+            print(acts.build(store))
         return 0
     if a.cmd == "meta":
         from . import meta
