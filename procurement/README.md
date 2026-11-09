@@ -179,6 +179,11 @@ regexes are coarse and were written after reading a draft run of these questions
 new set of unseen questions, reviewed by an officer, is what would measure accuracy. gpt-oss overstated what the sources say about a "project accountant" (no document names the role); deepseek-flash's
 answers on q36-q39 said so plainly in the run read, with n too small to say that always holds.
 
+**Answer length (2026-11-09, NOT deployed):** a live "how many quotations for shopping?" got 321 words (5 bullets, 2 off the question). The rule now fits the length to the question:
+one-fact questions get 1-2 sentences + at most 2 bullets, how/whether/what-if questions keep up to 5; one sentence per bullet; no closing "the passages do not say" line unless asked.
+Eval, deepseek-flash, reranker on, 2 runs each, same session: before strict 1.00/1.00, clean 0.92/0.97, median 210 words, 5 bullets, 5.7 s; after strict 0.97/1.00, clean 0.95/1.00,
+median 141 words, 3 bullets, 5.0 s. The one strict miss (q39 run 1, a follow-up "It's not conclusive") left out joint inspection / withholding; run 2 had it. The live question: 57-80 words, 3.6-4.4 s, same answer.
+
 **Coverage, payment certification:** PM2024 §9.1 already covers certification (C) and joint inspection (F); the live question missed it because no document
 says "IPC" (`index.QUERY_TERMS`). Added GPMCM (Ministry of Finance guide, Feb 2017, chapters 4-10 word for word, `scripts/gpmcm_extract.py`): §8.3.3 lists "unsupported
 or undocumented costs" as a ground for withholding. It is non-binding and predates the 2024 rules: at most 2 passages per question, always with PM2024/PG2024 §9.1 (without

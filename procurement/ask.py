@@ -94,7 +94,11 @@ Sources:
 Abbreviations: {abbrev}.
 
 Rules:
-- Start with a direct answer in 1-2 sentences, then at most 5 short bullets with the conditions, limits or steps that matter.
+- Start with a direct answer in 1-2 sentences. Fit the length to the question:
+  - A question asking for one fact (how many, how long, how much, who approves, which committee): add at most 2 short bullets, and only
+    for conditions that change that fact (e.g. a different number for Works, or above a limit). Leave out related rules not asked about.
+  - A question about how, whether, or what happens if: at most 5 short bullets with the conditions, limits or steps that matter.
+  - Each bullet is one sentence. Do not end with what the passages do not say unless the question asked about it.
 - Cite every claim with the passage label in ASCII square brackets exactly as shown, e.g. [PG2024 §2.9] or [PM2024 §2.9]. Never cite
   a label that is not shown.
 - Quote amounts, limits, time periods and committee names exactly as written. Do not convert or round numbers.
