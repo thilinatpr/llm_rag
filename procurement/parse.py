@@ -486,6 +486,106 @@ def parse_curated(text, doc):
     return chunks, dict(sections=len({c["ref"] + c["heading"] for c in chunks}))
 
 
+# ---------------------------------------------------------------- Gazette regulations and rules (CIDA, Act No. 33 of 2014)
+# One Gazette Extraordinary can hold several instruments, each starting "REGULATIONS made by ..." or "RULES made by ...". An instrument
+# is numbered regulations ("1. These regulations may be cited as ...") and then schedules ("FIRST SCHEDULE", "SCHEDULE II", "THE SCHEDULE"),
+# whose items are numbered again from 1. Refs: "3" = regulation/rule 3; "S1" = first schedule (its text before item 1), "S1.6" = its item 6.
+
+GAZ_NOISE = re.compile(r"^\s*\d+A\s*[-–—]\s*P?G\s*\d|^\s*N\.\s*B\.\s*-\s*Gazette|^\s*EOG\s|^\s*_{5,}\s*$|^\s*L\.\s?D\.\s?B\b"
+                       r"|^\s*\d{2}\s*-\s*\d{2,4}(?:/\d)?\s*$|^\s*(?:THE\s+)?CONSTRUCTION\s+INDUSTRY\s+DEVELOPMENT\s+ACT,\s+No\.\s*33\s+OF\s+2014\s*$")
+INSTRUMENT = re.compile(r"^\s*(?:REGULATIONS|RULES|Regulations|Rules)\s+made\s+by\b")
+BODY_START = re.compile(r"^\s*(?:REGULATIONS|RULES|Regulations|Rules)\s*$")
+SCHEDULE = re.compile(r"^\s*[“\"']?\s*(?:THE\s+)?(?:(FIRST|SECOND|THIRD|FOURTH|FIFTH)\s+SCHEDULE|SCHEDULE(?:\s+([IVX]+|\d))?)\s*(\(Contd\.?\))?\s*$", re.I)
+GAZ_ITEM = re.compile(r"^\s{0,14}(\d{1,2})(?:\s*\.\s*|\s+)(?=[A-Za-z(“\"'])(.*)$")
+_ORD = {"FIRST": 1, "SECOND": 2, "THIRD": 3, "FOURTH": 4, "FIFTH": 5, "I": 1, "II": 2, "III": 3, "IV": 4, "V": 5}
+
+
+def gazette_instruments(pages):
+    """[(page, line)] of each instrument in a gazette, headers and printer's lines removed."""
+    lines = [(p, ln) for p, ln in lines_of(pages) if not GAZ_NOISE.search(ln)]
+    starts = [i for i, (_, ln) in enumerate(lines) if INSTRUMENT.match(ln)]
+    return [lines[s: (starts[n + 1] if n + 1 < len(starts) else len(lines))] for n, s in enumerate(starts)]
+
+
+def _numbered(block, doc, prefix, heading0, kind, chapter):
+    """Split (page, line) pairs at sequence-checked item numbers 1, 2, 3 ... Text before item 1 is ref `prefix` itself (a schedule's
+    title and preamble) or, for the regulations, is dropped (the 'made by' preamble is in the document title)."""
+    heads, want = [], 1
+    for i, (_, ln) in enumerate(block):
+        m = GAZ_ITEM.match(ln)
+        if m and int(m.group(1)) == want:
+            heads.append((i, m.group(1))); want += 1
+    chunks = []
+    first = heads[0][0] if heads else len(block)
+    lead = tidy([ln for _, ln in block[:first]])
+    if prefix and lead:
+        for part, piece in enumerate(split_long(lead)):
+            chunks.append(dict(doc=doc, ref=prefix, heading=heading0, chapter=chapter, kind=kind, page=block[0][0], part=part,
+                               text=piece, xref=None))
+    for n, (i, no) in enumerate(heads):
+        end = heads[n + 1][0] if n + 1 < len(heads) else len(block)
+        text = tidy([ln for _, ln in block[i:end]])
+        ref = f"{prefix}.{no}" if prefix else no
+        head = heading0 if prefix else ""
+        for part, piece in enumerate(split_long(text)):
+            chunks.append(dict(doc=doc, ref=ref, heading=head, chapter=chapter, kind=kind, page=block[i][0], part=part,
+                               text=piece, xref=None))
+    return chunks, len(heads)
+
+
+def schedules_of(block, stop=None):
+    """{number: (title, [(page, line)])} for each schedule in an instrument; "(Contd.)" and a repeated "THE SCHEDULE" (one schedule
+    printed in parts, each part under its own heading) continue the open schedule. In an amending instrument a substituted schedule is
+    quoted: it ends at its closing quote (”.) or at a line matching `stop` (the next amending instruction, a print without the quote)."""
+    out, cur, seen = {}, None, {}
+    for p, ln in block:
+        if stop and cur is not None and re.search(stop, ln):
+            cur = None
+            continue
+        m = SCHEDULE.match(ln)
+        if m and not m.group(3):
+            name = (m.group(1) or m.group(2) or "").upper()
+            no = _ORD.get(name) or (int(name) if name.isdigit() else None) or seen.get(ln.strip(" “\"'").upper()) or len(out) + 1
+            seen.setdefault(ln.strip(" “\"'").upper(), no)
+            if no not in out:
+                out[no] = (re.sub(r"^[“\"'\s]+", "", ln.strip()).title(), [])
+            cur = no
+            continue
+        if m:  # (Contd.)
+            continue
+        if cur is not None:
+            out[cur][1].append((p, ln))
+            if stop and re.search(r"”\s*\.?\s*$", ln):
+                cur = None
+    return out
+
+
+def parse_gazette(pages, doc, instrument=1, schedules_from=None):
+    """One instrument of a CIDA gazette: regulations by number, then each schedule by item. `schedules_from` = (pages, instrument,
+    {old schedule no: new schedule no}, note): schedules that a later gazette repealed and substituted. The repealed text is NOT indexed
+    (as with the 1992 FR text that circulars replaced: a note alone does not stop a model quoting an old fee), and the new schedule
+    carries the note."""
+    block = gazette_instruments(pages)[instrument - 1]
+    body_at = next((i for i, (_, ln) in enumerate(block) if BODY_START.match(ln)), 0)
+    sched_at = next((i for i, (_, ln) in enumerate(block) if SCHEDULE.match(ln)), len(block))
+    chunks, n_regs = _numbered(block[body_at + 1: sched_at], doc, "", "", "clause", "")
+    scheds = schedules_of(block[sched_at:])
+    notes = {}
+    if schedules_from:
+        new_pages, new_inst, mapping, note, stop = schedules_from
+        new = schedules_of(gazette_instruments(new_pages)[new_inst - 1], stop)
+        for old, nw in mapping.items():
+            scheds[old] = new[nw]
+            notes[old] = note
+    for no in sorted(scheds):
+        title, lines = scheds[no]
+        sc, _ = _numbered(lines, doc, f"S{no}", title, "schedule", title)
+        for c in sc:
+            c["note"] = notes.get(no)
+        chunks += sc
+    return chunks, dict(regulations=n_regs, schedules=len(scheds), replaced=len(notes))
+
+
 PARSERS = {"PG2024": parse_guidelines_2024, "PM2024": parse_manual_2024,
            "PG2006": parse_guidelines_2006, "PM2006": parse_manual_2006,
            "CON": parse_constitution_npc, "FR": parse_fr}

@@ -20,6 +20,7 @@ Hosted at https://procurement.citizenlk.com behind the login (`procurement/serve
 | PM2024 | NPC Procurement Manual 2024 (same scope), 251 pp | `data/procurement/PROCUREMENT MANUAL 2024.pdf` (owner-supplied, git-ignored) | current |
 | CON | Constitution, **Chapter XIXB only** (Art. 156B-156H: NPC composition, functions, powers, meetings, staff, "Government institution"). Parliament Secretariat Revised Edition 2023, as amended up to 31 Oct 2022, English text | `data/procurement/Constitution 2023 (as amended to 2022-10-31).pdf` (parliament.lk/files/pdf/constitution.pdf) | current as of that edition; a later amendment would not be in it |
 | (notes) | Gazette 2489/10 of 2026-05-18: amendments to PG2024 | hand-encoded in `sources.AMENDMENTS`, shown under the clauses they change | current |
+| CIDA... | 20 CIDA rules and regulations under the Construction Industry Development Act No. 33 of 2014 (13 gazettes, 2018-2025; see "CIDA rules and regulations") | `raw/cida/*.pdf` | listed by CIDA |
 | PG2006 | Government Procurement Guidelines 2006 (Goods & Works), NPA | `data/procurement/ProcurementGuidelines2006_amded12June.pdf` | transitional |
 | PM2006 | Procurement Manual 2006 (with Supplement 8), NPA | `data/procurement/Procurement Manual 2006.pdf` | transitional |
 
@@ -189,6 +190,40 @@ says "IPC" (`index.QUERY_TERMS`). Added GPMCM (Ministry of Finance guide, Feb 20
 or undocumented costs" as a ground for withholding. It is non-binding and predates the 2024 rules: at most 2 passages per question, always with PM2024/PG2024 §9.1 (without
 this it filled every slot and the model invented rules), and a fixed note in code. Not found: NPC's own Contract Management Guidelines (PG2024 §1.4(c), not in the NPC manifest), the works SBD.
 **Follow-ups:** the page sends its last 2 turns (`history`); one extra model call rewrites the question; the server stores nothing; the page shows "Read as: ...".
+
+## CIDA rules and regulations (trial, 2026-11-09, NOT uploaded or deployed)
+The Construction Industry Development Authority's "Rules & Regulations" page (cida.gov.lk `pages_e.php?id=82`) lists 13 Gazette Extraordinaries
+(2018-2025) under the Construction Industry Development Act, No. 33 of 2014. The English PDFs are in `raw/cida/` (text layer, no OCR needed; the
+Sinhala and Tamil PDFs use legacy fonts and are not used). `sources._CIDA` makes one document per **instrument**: 20 (a gazette can hold several),
+ids `CIDAQP` ... `CIDAIMS`, 310 chunks. Not added: CIDA's notice about 2430/13 (it only says it takes effect on 1 April 2025, which is in the notes).
+- **Parser** (`parse.parse_gazette`): instruments start at "REGULATIONS/RULES made by"; numbered regulations are sequence-checked (accepts "2 Every",
+  "3.The", "8. where"); schedules ("FIRST SCHEDULE", "SCHEDULE II", "THE SCHEDULE" printed in parts) are split by their own item numbers. Refs:
+  `[CIDACR §3]` = regulation 3, `[CIDACR §S1.6]` = First Schedule item 6 (`ask.CITE` accepts `S`). Removed: printer's job numbers ("07- 394"),
+  "L.D.B." lines and the next instrument's "CONSTRUCTION INDUSTRY DEVELOPMENT ACT, No. 33 OF 2014" header (capitals only: the same words in lower
+  case can be wrapped clause text). Check: every number printed in each instrument's body is in its chunks (0 missing for all 12 gazettes).
+- **Substitution is code, not search order:** Gazette 2430/13 (01.04.2025) repealed and substituted the First and Second Schedules of the
+  Registration of Contractors Regulation (2057/5: criteria, grades and financial limits, points, fees) and the fee Schedule of the Registration
+  of Adjudicators Regulations (2113/63). `replaces` in `sources._CIDA` puts the 2025 text under the instrument it amends and the 2018 text is
+  not indexed (as with `FR_REPLACED`). Each substituted chunk carries the note, including regulation 2 of 2430/13 (registrations made before then
+  stay valid for their period). The amending instructions and that saving clause are cut out of the schedules (`stop`; the printed Second
+  Schedule has no closing quote).
+- **Status:** "current" means "listed by CIDA on 2026-11-09". A later amendment that the page does not list is not here, and the prompt says so.
+- **Tables:** the grade, fee and appeal-fee tables (2-3 columns) extract cleanly. The points tables of First Schedule items 8-9 (Tables 8.2-8.7, 9.x;
+  up to 14 columns, about 37k characters) are flattened and their columns can be misread: they are not transcribed (the `tables.py` method would fit).
+- **Eval** (8 new items c01-c08 in `evals/procurement_eval.jsonl`, gold from the gazette text, `--check-gold` clean; deepseek-flash, reranker on,
+  2 runs each, same session):
+
+  | index | 39 earlier items: strict / clean | 8 CIDA items: strict / clean | warned |
+  |---|---|---|---|
+  | live (R2, 2026-11-09 12:42 upload) | 0.99 / 0.96 | 0.00 / 0.00 | 3 of 94 |
+  | live + CIDA (trial) | 1.00 / 0.99 | 1.00 / 1.00 | 1 of 94 |
+
+  So no harm to the earlier questions (gaps are within noise), and q14 (the grade a contract needs, from SUP05) is still answered from SUP05.
+  Answers read: all 8 right on the facts. Weak spots: c07 also cited the qualified persons' disciplinary appeal rule (`CIDAQPD §17`) in an answer about
+  contractors; c01 gave both "600 > X > 300" (grade table) and "600 ≥ X > 300" (fee table), which the gazette prints differently.
+- **To make it live:** on the owner's machine `python -m procurement build` (builds everything, CIDA from `raw/cida/` in git), then
+  `scripts/procurement_index.py upload`, then deploy Procurement Rules (`deploy.yml`, target procurement). The trial was built differently (live index
+  from R2 + `index.build(docs=sources.CIDA_IDS)`), because the owner's PDFs are not in the sandbox; the result is the same for the other documents.
 
 ## Gazette retrieval (scripts/)
 - documents.gov.lk generic server action (same id as `scripts/scrape_bills.py`) with `apiEndpoint=.../extra-gazette/get-all` and a

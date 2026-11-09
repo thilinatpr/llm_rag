@@ -80,6 +80,11 @@ def build(path=DB, docs=None, log=print):
             chunks, stats = parse.parse_curated(Path(d["file"]).read_text(encoding="utf-8"), d["id"])
         elif d.get("parser") == "act":
             chunks, stats = parse.parse_act(d["file"], d["id"])
+        elif d.get("parser") == "gazette":
+            pages = parse.pdf_pages(d["file"])
+            r = d.get("replaces")
+            sub = (parse.pdf_pages(sources.CIDA / f"{r['gazette']}_E.pdf"), r["instrument"], r["schedules"], r["note"], r["stop"]) if r else None
+            chunks, stats = parse.parse_gazette(pages, d["id"], d["instrument"], sub)
         else:
             pages = parse.pdf_pages(d["file"], overrides)
             parser = parse.parse_numbered if d.get("parser") == "numbered" else parse.PARSERS[d["id"]]
