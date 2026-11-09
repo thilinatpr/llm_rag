@@ -126,6 +126,13 @@ def test_ingest_acts_can_be_limited_to_named_acts_of_any_year():
     assert "keys" in inspect.signature(ingest.ingest_acts).parameters and callable(ingest.add_base_act)
 
 
+@pytest.fixture(autouse=True)
+def _no_owner_waivers(tmp_path, monkeypatch):
+    """Tests decide their own waivers: the committed evals/base_acts_waived.json (the owner's decisions) must not change their outcome."""
+    from billrag import baseacts
+    monkeypatch.setattr(baseacts, "WAIVED_FILE", tmp_path / "no-waivers.json")
+
+
 def _refresh():
     spec = importlib.util.spec_from_file_location("refresh_bills", ROOT / "scripts" / "refresh_bills.py")
     mod = importlib.util.module_from_spec(spec)
