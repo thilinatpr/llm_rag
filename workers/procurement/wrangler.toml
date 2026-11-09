@@ -1,7 +1,7 @@
 # Procurement Rules. Deploy from the main checkout (needs data/procurement/index.sqlite):
 #   npx wrangler deploy -c workers/procurement/wrangler.toml
 # Secrets (npx wrangler secret put NAME -c workers/procurement/wrangler.toml):
-#   OTP_PEPPER, PROXY_SECRET (both its own random value), CF_EMAIL_TOKEN, DEEPSEEK_API_KEY
+#   OTP_PEPPER, PROXY_SECRET (both its own random value), CF_EMAIL_TOKEN, DEEPSEEK_API_KEY, LAW_SECRET (same value as on gov-rag-llm)
 name = "citizenlk-procurement"
 main = "worker.js"
 compatibility_date = "2026-11-01"
@@ -48,6 +48,12 @@ new_sqlite_classes = ["ProcurementContainer"]
 [observability]
 enabled = true
 
+# Law passages from Bill Assistant (src/lawlink.js there): Worker to Worker, not over the internet. Needs the secret LAW_SECRET on BOTH
+# Workers (the same random value): npx wrangler secret put LAW_SECRET -c workers/procurement/wrangler.toml, and again without -c.
+[[services]]
+binding = "BILLS"
+service = "gov-rag-llm"
+
 # The counters live in Bill Assistant's Durable Object (one place for the day and month counts); used once OPEN_SIGNUP is "on" here.
 [[durable_objects.bindings]]
 name = "QUOTA"
@@ -71,6 +77,7 @@ CHAT_MODEL = "deepseek-flash"
 CHAT_BASE_URL = "https://api.deepseek.com"
 RERANK_URL = "https://procurement.citizenlk.com/internal/rerank"
 CHAT_FALLBACK_URL = "https://procurement.citizenlk.com/internal/chat"
+LAW_URL = "https://procurement.citizenlk.com/internal/law"  # law passages from Bill Assistant (handler.js law, procurement/law.py)
 
 # Anonymous visitor counts (src/events.js); the admin panel reads them. Counting is off until the EV_KEY secret exists (or OTP_PEPPER, on the services).
 [[analytics_engine_datasets]]

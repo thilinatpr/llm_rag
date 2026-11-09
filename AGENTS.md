@@ -33,6 +33,7 @@ billrag/config.py         all settings come from BILLRAG_* env vars (documented 
 src/chatconfig.js         which chat model/provider the container gets (CHAT_PROVIDER var: workers-ai | deepseek); pure function, tested in test/worker.test.mjs
 procurement/evaluate.py   Procurement Rules answer eval: gold in evals/procurement_eval.jsonl, no model judge
 billrag/meta.py           bill metadata outside `chunks`: families, newest instance, bill type, tags, section cross-references (`meta`, `tag`), what each amending clause changes
+billrag/lawlink.py        law passages for Procurement Rules (POST /api/evidence); procurement/law.py + src/lawlink.js = the two ends
 billrag/consolidated.py   IRD consolidated texts (key Cons N/YYYY) + fixed note; billrag/consolidation.py = manual PDF -> text helper
 billrag/transcribed.py    Acts transcribed from scans (table transcribed_docs) + the fixed answer note; billrag/ocr.py = manual OCR helper; sources/base_acts/ = reviewed texts
 billrag/titles.py         title index (table `title_index`) + custom title ranker: which bill/Act does a gist question name? one / ask which / none
@@ -982,6 +983,23 @@ corrected. `refresh_bills.py` adds accepted ones (`accepted_by`), a newer `up_to
 consolidation lists are fetched with the base Acts (SSCL Act 15/2023 was missing). First: SSCL 25/2022, amendments to 9 April 2026
 (61 sections, 22 change notes; against the certified Act only s.4 and s.5 differ, both noted). VAT 14/2002 (IRD consolidation to
 31 Dec 2025, 173 pages) has inserted sections (2A, ...), which section numbers (INT) and citations (`§\d+`) cannot hold yet: not done.
+
+## Procurement Rules asks Bill Assistant for the law (`procurement/law.py`, `billrag/lawlink.py`, `src/lawlink.js`; written 2026-11-09, NOT deployed)
+
+A procurement question that names a tax, levy, duty or an Act (`law.NEEDS_LAW`; only the question decides) also gets law passages from Bill Assistant:
+Procurement container -> its Worker `/internal/law` (proxy secret) -> service binding `BILLS` -> Bill Assistant Worker `/internal/evidence`
+(shared secret `LAW_SECRET`, on BOTH Workers, fails closed) -> container `POST /api/evidence` (lane `procurement`, logged as type `evidence`).
+No model call on Bill Assistant: retrieval only, certified Acts and IRD consolidations before bills, each passage with its citation label, version,
+STATUS line and cleaned section text, plus the fixed notes (consolidated / as enacted / scanned). The call runs in parallel with Procurement's own
+search and WAITS for a sleeping Bill Assistant (up to 240 s; owner: wait for cold starts, do not keep it warm); the page says so after 10 s.
+In the answer: the law guidance is added to the system prompt only when law passages are present; `law.verify` checks `[Act ..]`, `[Cons ..]`
+and bill citations against what was received; the cited documents' notes are appended by code; Sources say "from Bill Assistant"; if Bill
+Assistant cannot be reached, a fixed line points to it and the log has `law.error`. Log field `law` {asked, passages, seconds, error}.
+**To turn on:** `LAW_SECRET` secret on `gov-rag-llm` and `citizenlk-procurement` (same value), deploy Bill Assistant (route + `/api/evidence`)
+and Procurement Rules (`gh workflow run deploy.yml -f target=procurement`: the job fetches `data/procurement/index.sqlite` from R2
+`procurement/index.sqlite`, checked by SHA-256; after every `python -m procurement build` on the owner's machine run
+`scripts/procurement_index.py upload`; first upload 2026-11-09, 17,145,856 bytes, sha256 7a186bd0b03c...). Without the secret/binding it answers as before
+plus the pointer line. Tested offline (Python + Node) and `/api/evidence` over HTTP on a local server; not on Cloudflare (service binding, cold start).
 
 ## Gist questions: overview, title index, "which bill?" (written 2026-11-07, branch `claude/overview-questions`, NOT merged or deployed)
 

@@ -681,3 +681,74 @@ def test_an_answer_cut_off_while_thinking_is_retried_without_thinking(tmp_path, 
             return Reply("", [], "length") if len(self.efforts) == 1 else Reply("Yes [PG2024].", [], "stop")
     r = ask_mod.ask(idx, LLM(), "q")
     assert LLM.efforts == ["low", "off"] and r.answer == "Yes [PG2024]." and "cut off" in r.warnings[0]
+
+
+# ---------------------------------------------------------------- law passages from Bill Assistant (procurement/law.py), 2026-11-09
+LAW_REPLY = {"passages": [{"cite": "[Act 25/2022 §3]", "key": "Act 25/2022", "section": 3,
+                           "title": "Social Security Contribution Levy Act, No. 25 of 2022 (certified, 2022-09-20)",
+                           "status": "Certified Act ... shows this section unchanged", "text": "(1) A levy ... at the rate of 2.5 per centum ..."}],
+             "notes": {"Act 25/2022": "Social Security Contribution Levy Act, No. 25 of 2022 is the text as enacted in 2022."}}
+
+
+class FakeLaw:
+    timeout = 5
+
+    def __init__(self, reply=None, error=None):
+        self.reply, self.error, self.asked = reply, error, []
+
+    def evidence(self, query, k=4):
+        self.asked.append(query)
+        if self.error:
+            raise self.error
+        return self.reply
+
+
+def test_needs_law_only_for_tax_levy_or_act_questions():
+    from procurement.law import needs_law
+    for q in ("Contractor asks for SSCL payments. Can we pay", "Is VAT payable on the advance?", "what does the Excise duty say",
+              "Under the Inland Revenue Act, No. 24 of 2017 ...", "who pays the social security contribution levy"):
+        assert needs_law(q), q
+    for q in ("When can emergency procurement be used?", "what if the contractor missed the date in the letter of bid", "bid security validity"):
+        assert not needs_law(q), q
+
+
+def test_tax_question_gets_law_passages_notes_and_sources(tmp_path, monkeypatch):
+    idx = _index(tmp_path, monkeypatch)
+    llm = FakeLLM("The contractor owes the levy on its turnover [Act 25/2022 §3]; payment rests on the contract [PG2024 §1.2].")
+    law = FakeLaw(LAW_REPLY)
+    r = pa.ask(idx, llm, "Emergency procurement: contractor asks for SSCL levy payments, can we pay?", law=law)
+    assert law.asked and "[Act 25/2022 §3]" in llm.calls[0] and "STATUS: Certified Act" in llm.calls[0]
+    assert r.warnings == [] and r.law["passages"] == ["[Act 25/2022 §3]"] and not r.law["error"]
+    assert r.answer.endswith("is the text as enacted in 2022.")                    # Bill Assistant's note, added by code
+    assert any(s.startswith("[Act 25/2022 §3]") and s.endswith("from Bill Assistant") for s in r.sources())
+    bad = pa.ask(idx, FakeLLM("It is [Act 25/2022 §9] and [PG2024 §1.2]."), "SSCL levy and emergency procurement", law=FakeLaw(LAW_REPLY))
+    assert any("Act 25/2022 §9" in w for w in bad.warnings)                         # a law clause that was not received
+
+
+def test_unreachable_bill_assistant_gives_the_fixed_pointer(tmp_path, monkeypatch):
+    from procurement.law import FALLBACK_NOTE
+    idx = _index(tmp_path, monkeypatch)
+    r = pa.ask(idx, FakeLLM("Payment rests on the contract [PG2024 §1.2]."), "emergency procurement and the VAT levy",
+               law=FakeLaw(error=TimeoutError("timed out")))
+    assert r.answer.endswith(FALLBACK_NOTE) and any("Bill Assistant not consulted" in w for w in r.warnings)
+
+
+def test_procurement_only_question_does_not_call_bill_assistant(tmp_path, monkeypatch):
+    idx = _index(tmp_path, monkeypatch)
+    law = FakeLaw(LAW_REPLY)
+    r = pa.ask(idx, FakeLLM("Use it in exceptional circumstances [PG2024 §1.2]."), "When can emergency procurement be used?", law=law)
+    assert not law.asked and not r.law and "Bill Assistant" not in r.answer
+
+
+def test_procurement_image_copies_every_module_the_server_imports():
+    """The Dockerfile lists procurement modules one by one: a new module (law.py, 2026-11-09) left out of it fails only on Cloudflare."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    copy = next(ln for ln in (root / "workers/procurement/Dockerfile").read_text().splitlines() if ln.startswith("COPY procurement/"))
+    shipped = set(re.findall(r"procurement/(\w+)\.py", copy))
+    imported = set()
+    for mod in shipped:
+        src = (root / "procurement" / f"{mod}.py").read_text()
+        imported |= set(re.findall(r"from \.(\w+) import|from \. import (\w+)", src) and
+                        [m for pair in re.findall(r"from \.(\w+) import|from \. import (\w+)", src) for m in pair if m])
+    assert imported <= shipped, sorted(imported - shipped)
