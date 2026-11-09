@@ -14,6 +14,9 @@ Base Acts: every Act that an indexed bill or Act amends (named in its long title
 has are fetched here; the others stop the publish and appear in the report (`base_acts_missing`, and the admin panel) until someone adds the text
 (`python -m billrag add-base-act`) or records why not in evals/base_acts_waived.json. The first run after this was added needs --force (it fetches ~36 Acts).
 
+Kinds: every run first re-reads GS/Bill from the stored titles (`billrag reclassify`; " (GS)", " - (Bill)", " GS", ... were stored as Other before
+2026-11-09). Only `bills` rows change, so it costs no embedding; a run where it changed something counts as having work to do.
+
 Checks before publishing: nothing that was in the index is lost, every new document can be found by its own title, retrieval on the recent eval
 questions stays above --min-mrr (measured 0.87-0.88; needs Workers AI). Chat model: the BILLRAG_CHAT_* settings, or deepseek-flash if only DEEPSEEK_API_KEY is set.
 """
@@ -84,6 +87,20 @@ def base_acts(run, work, bills_dir):
         run("scripts/scrape_bills.py", "--source", "acts", "--out", str(work / "acts"), "--keys", keys, "--langs", "ENGLISH", step="fetch base Acts")
         run("-m", "billrag", "ingest-acts", "--keys", keys, "--only-new", step="parse base Acts")
     return ids
+
+
+def reclassify_kinds(bills_dir):
+    """`python -m billrag reclassify` in effect: kind + title_norm re-read from the stored titles, then meta/titles rebuilt. Returns the changed keys.
+    Changes only `bills` rows (no chunk text, so no embedding); idempotent, so after the first run it returns []."""
+    from billrag import meta, titles
+    from billrag.ingest import reclassify
+    store = Store(bills_dir / "index.sqlite")
+    changed = reclassify(store)
+    if changed:
+        print(f"\nReclassified {len(changed)} documents (version suffix in the title), e.g. {[c[0] for c in changed[:5]]}", file=sys.stderr)
+        meta.build(store)
+        titles.build(store)
+    return [c[0] for c in changed]
 
 
 def base_check(work, bills_dir):
@@ -170,6 +187,8 @@ def run_refresh(a, report):
     try:
         run("scripts/fetch_index.py", "--bucket", a.bucket, "--data", str(bills_dir), "--force", step="copy the live index from R2")
         before = snapshot(bills_dir / "index.sqlite")
+        reclassified = reclassify_kinds(bills_dir)  # GS/Bill read from every spelling of the title suffix; bills rows only, vectors stay valid
+        report.update(reclassified=reclassified)
         extra = ["--action-id", a.action_id] if a.action_id else []
         run("scripts/scrape_bills.py", "--out", str(bills_dir), "--since-year", str(a.since_year), *extra, step="scrape bills")
         run("scripts/scrape_bills.py", "--source", "acts", "--out", str(work / "acts"), "--since-year", str(max(a.since_year, ACTS_SINCE)),
@@ -177,7 +196,7 @@ def run_refresh(a, report):
         new = new_documents(work, before["keys"])
         report.update(new_bills=new["bills"], new_acts=new["acts"])
         print(f"\nNew: {len(new['bills'])} bills {sorted(new['bills'])}, {len(new['acts'])} Acts {sorted(new['acts'])}", file=sys.stderr)
-        if not new["bills"] and not new["acts"] and not a.force:
+        if not new["bills"] and not new["acts"] and not reclassified and not a.force:
             print("Nothing new. The live index is unchanged.", file=sys.stderr)
             report.update(base_acts_missing={k: {"name": v["name"], "cited_by": v["cited_by"], "why": v["why"]} for k, v in base_check(work, bills_dir)["unresolved"].items()})  # only reported: nothing is published
             report.update(state="nothing_new", unindexed=sorted(listing_keys(work, a.since_year) - before["keys"]))
@@ -187,7 +206,7 @@ def run_refresh(a, report):
             run("-m", "billrag", "ingest-si", "--since-year", str(a.since_year), "--keys", ",".join(new["bills"]), step="link official Sinhala text")
         run("-m", "billrag", "ingest-acts", "--only-new", "--since-year", str(max(a.since_year, ACTS_SINCE)), step="parse new Acts, link bills to Acts")
         base_added = base_acts(run, work, bills_dir)  # every Act that an indexed bill or Act amends must be in the index too
-        if new["acts"] or new["bills"]:
+        if new["acts"] or new["bills"] or reclassified:
             run("-m", "billrag", "link-acts", step="recompute bill -> Act links")
         run("-m", "billrag", "summarize", "--since-year", str(a.since_year), step="summarise what has no summary")
         run("-m", "billrag", "embed", step="embed the new text")

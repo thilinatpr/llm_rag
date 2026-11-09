@@ -26,6 +26,9 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import quote
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 SITE = "https://citizenlk.com"
 CHAT = "https://bills.citizenlk.com"
 DOCS = "https://documents.gov.lk"
@@ -61,7 +64,8 @@ def fix_case(text: str) -> str:
 
 
 def plain_title(title: str) -> str:
-    return re.sub(r"\s+-\s+(Bill|GS)\s*$", "", re.sub(r"\s+", " ", title or "")).strip()
+    from billrag.parse import plain_title as plain  # one rule for " - GS", " (GS)", " - (Bill)", ... (see parse.KIND_SUFFIX)
+    return plain(title)
 
 
 def clean_summary(text: str | None) -> str:

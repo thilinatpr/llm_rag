@@ -4,6 +4,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from .parse import plain_title
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bills(
   key TEXT PRIMARY KEY, bill_no INT, year INT, date TEXT, title TEXT, title_norm TEXT,
@@ -94,7 +96,7 @@ class Store:
                 continue
             seen.add(group)
             if len(out) < recent:
-                out.append({"key": key, "title": re.sub(r"\s*(-\s*(Bill|GS)|\(GS\))\s*$", "", title).strip(), "date": date[:10]})
+                out.append({"key": key, "title": plain_title(title), "date": date[:10]})
         dates = [r[3][:10] for r in rows]
         return {"bills": len(seen), "acts": acts, "first": min(dates, default=None), "last": max(dates, default=None), "recent": out}
 

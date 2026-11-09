@@ -14,6 +14,10 @@ on:
         type: choice
         options: [build, publish]
         default: build
+      force:
+        description: "build: go on even if no new bill or Act was listed (fetch missing base Acts, retry summaries)"
+        type: boolean
+        default: false
 
 # One at a time: a publish must not run beside a build.
 concurrency:
@@ -29,6 +33,7 @@ jobs:
     timeout-minutes: 120
     env:
       MODE: ${{ inputs.mode }}
+      FORCE: ${{ inputs.force && '--force' || '' }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -52,7 +57,7 @@ jobs:
       # ---- build ----
       - name: Build and check (publishes nothing)
         if: inputs.mode == 'build'
-        run: python scripts/refresh_bills.py --report report.json
+        run: python scripts/refresh_bills.py --report report.json $FORCE
       - name: Stage the built index
         id: stage
         if: inputs.mode == 'build' && success()

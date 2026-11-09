@@ -16,6 +16,7 @@ import unicodedata
 from dataclasses import dataclass, field
 
 from . import acts, calltrace, glossary as gloss, meta, parse_si, resolve, titles as title_index, translate
+from .parse import plain_title
 from .store import ACT_REF, normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
@@ -170,12 +171,12 @@ def version_tag(c):
     """'Title (Gazette text, 2026-10-16)' for a chunk: the title without its internal ' - GS' / ' - Bill' suffix, and the version in
     plain words. 'GS' is our own code and means nothing to readers (a live user asked "what is GS"); kinds without a plain name
     (other documents) show only the date."""
-    title = re.sub(r"\s*-\s*(Bill|GS)\s*$", "", c["title"]).strip()
+    title = plain_title(c["title"])
     label = KIND_LABEL.get(c.get("bill_kind"), "")
     return f"{title} ({label + ', ' if label else ''}{c['date'][:10]})"
 
 
-_HEAD = re.compile(r"\u2014 (.*?)(?: - (?:GS|Bill))? \((GS|Bill|Act|Other), (\d{4}-\d\d-\d\d)\)")
+_HEAD = re.compile(r"\u2014 (.*?) \((GS|Bill|Act|Other), (\d{4}-\d\d-\d\d)\)")
 
 
 # ---- read-time cleanup of what the PDF parser leaves inside clause text (the stored text and the vectors are not changed).
@@ -203,7 +204,7 @@ def strip_noise(text, title=""):
     if not CLEAN_TEXT:
         return text
     t = PRINTER.sub(" ", text or "")
-    short = re.sub(r"\s*-\s*(?:Bill|GS)\s*$", "", title or "").strip()
+    short = plain_title(title)
     if len(short) >= 12:  # the running header: "25Twentieth Amendment to the Constitution", "... (Amendment)" before a line break
         t = re.sub(rf"(?<=[.;:\u201d\"\s])\s*\d{{0,3}}\s*{re.escape(short)}(?!\s*(?:Act|Bill|Ordinance|Law|,))\s*(?=\n|$)", "", t)
     t = MARGIN_RUN.sub(" ", t)
@@ -218,7 +219,10 @@ def shown_text(c):
     t = c["text"]
     if c.get("kind") != "overview":
         return strip_noise(t, c.get("title", "")) if c.get("kind") in CLAUSE_KINDS else t
-    return _HEAD.sub(lambda m: f"\u2014 {m.group(1)} ({KIND_LABEL[m.group(2)] + ', ' if m.group(2) in KIND_LABEL else ''}{m.group(3)})", t, count=1)
+    def head(m):  # a header stored before reclassify says "Other" for a GS/Bill: the bills table (bill_kind) knows better
+        kind = c.get("bill_kind") if m.group(2) == "Other" else m.group(2)
+        return f"\u2014 {plain_title(m.group(1))} ({KIND_LABEL[kind] + ', ' if kind in KIND_LABEL else ''}{m.group(3)})"
+    return _HEAD.sub(head, t, count=1)
 
 
 @dataclass
@@ -740,7 +744,7 @@ class Pipeline:
             b = self.store.bill(k) if hasattr(self.store, "bill") else None
             if not b:
                 continue
-            title = re.sub(r",?\s*No\.?\s*\d+\s+of\s+\d{4}|\s-\s(?:Bill|GS)$", "", b["title"])
+            title = re.sub(r",?\s*No\.?\s*\d+\s+of\s+\d{4}", "", plain_title(b["title"]))
             words = [w for w in re.findall(r"[a-z]{3,}", title.lower()) if w not in _TITLE_STOP]
             if not words or (len(words) < 2 and len(words[0]) < 6):
                 continue
@@ -762,7 +766,7 @@ class Pipeline:
 
     def which_of(self, cands, total=None):
         """A reply that asks which bill was meant, with the candidates (no model call)."""
-        lines = [f"- {re.sub(r' - (?:Bill|GS)$', '', t)} ({k}, {d[:10]})" for k, _n, d, t in cands[:5]]
+        lines = [f"- {plain_title(t)} ({k}, {d[:10]})" for k, _n, d, t in cands[:5]]
         if (total or len(cands)) > 5:
             lines.append(f"- ... and {(total or len(cands)) - 5} more with similar titles")
         return ("Your question could mean more than one bill. Which did you mean?\n\n" + "\n".join(lines) +
@@ -777,8 +781,8 @@ class Pipeline:
         fams = {}
         for e in evidence:
             b = self.store.bill(e.key) if hasattr(self.store, "bill") else None
-            fam = (b or {}).get("title_norm") or re.sub(r"\s*-\s*(gs|bill)\s*$", "", e.chunk["title"].lower()).strip()
-            f = fams.setdefault(fam, {"title": re.sub(r"\s*-\s*(GS|Bill)\s*$", "", e.chunk["title"]).strip(), "bills": [],
+            fam = (b or {}).get("title_norm") or plain_title(e.chunk["title"]).lower()
+            f = fams.setdefault(fam, {"title": plain_title(e.chunk["title"]), "bills": [],
                                       "max": 0, "sum": 0, "date": ""})
             if e.key not in f["bills"]:
                 f["bills"].append(e.key)
