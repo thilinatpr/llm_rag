@@ -116,6 +116,57 @@ DOCS += [
          title="NPC Circular No. 01/2023: establishment of the NPC; interim use of the 2006/2007 guidelines (superseded for goods, "
                "works and non-consulting services by the 2024 Guidelines)", file=TEXTS / "NPCC2023.md"),
 ]
+# CIDA: rules and regulations under the Construction Industry Development Act, No. 33 of 2014, as listed on cida.gov.lk "Rules & Regulations"
+# (pages_e.php?id=82, fetched 2026-11-09; English PDFs in procurement/raw/cida/, one per gazette). One document per instrument (a gazette can
+# hold several). Gazette 2430/13 (01.04.2025, in force from that date per CIDA's notice) repealed and substituted two schedules: the substituted
+# text is indexed under the instrument it amends and the repealed text is not indexed (parse.parse_gazette). Later amendments that the page
+# does not list are not here, and "current" means "listed by CIDA", not checked against every later gazette.
+CIDA = Path("procurement/raw/cida")
+CIDA_ACT = "made under the Construction Industry Development Act, No. 33 of 2014"
+_G2430 = ("Schedule substituted by Gazette 2430/13 (01.04.2025), in force from 1 April 2025 (CIDA notice); the 2018 text it replaced is not "
+          "in these sources.")
+_G2430_SAVING = (" Under regulation 2 of those amending regulations, a registration made before then that has not expired, been suspended or "
+                 "cancelled remains valid for its period.")
+_STOP2430 = r"^\s*\(\d\)\s+by the repeal|^\s*\d+\.\s+Every registration made in terms of"
+_CIDA = [  # id, gazette file, instrument (1 = first in the gazette), gazette date, short title, extra
+    ("CIDAQP", "2057-05", 1, "2018-02-05", "Construction Industry Development (Registration of Qualified Persons) Regulation of 2017", {}),
+    ("CIDACR", "2057-05", 2, "2018-02-05", "Construction Industry Development (Registration of Contractors) Regulation No. 1 of 2017; First and "
+     "Second Schedules (registration criteria, grading, points; fees) as substituted by Gazette 2430/13 of 01.04.2025",
+     dict(replaces=dict(gazette="2430-13", instrument=2, schedules={1: 1, 2: 2}, note=_G2430 + _G2430_SAVING, stop=_STOP2430))),
+    ("CIDATA", "2057-05", 3, "2018-02-05", "Construction Industry Development (Technical Auditing Procedure and Fees) Regulation of 2017", {}),
+    ("CIDARC", "2065-41", 1, "2018-04-05", "Construction Industry Development (Register of Contractors) Rules of 2017", {}),
+    ("CIDAQMA", "2065-41", 2, "2018-04-05", "Construction Industry Development (Registration of Quality Management Auditors) Rules of 2017", {}),
+    ("CIDAFC", "2085-19", 1, "2018-08-23", "Construction Industry Development (Temporary Registration of Foreign Contractors) Regulations of 2018", {}),
+    ("CIDAICW", "2085-20", 1, "2018-08-23", "Construction Industry Development (Procedures and Standards for Identified Construction Work) "
+     "Regulation of 2018", {}),
+    ("CIDAADJ", "2113-63", 1, "2019-03-08", "Construction Industry Development (Registration of Adjudicators) Regulations of 2019; fee Schedule "
+     "as substituted by Gazette 2430/13 of 01.04.2025",
+     dict(replaces=dict(gazette="2430-13", instrument=1, schedules={1: 1}, note=_G2430, stop=_STOP2430))),
+    ("CIDAADR", "2114-01", 1, "2019-03-11", "Construction Industry Development (Register of Adjudicators) Rules of 2019", {}),
+    ("CIDAAPP", "2116-47", 1, "2019-03-28", "Construction Industry Development (Appeal Procedure) Regulations of 2019 (appeals to the Appeals "
+     "Board against CIDA decisions)", {}),
+    ("CIDAIS", "2116-48", 1, "2019-03-28", "Construction Industry (Information Secretariat) Regulations of 2019", {}),
+    ("CIDAHM", "2116-49", 1, "2019-03-28", "Construction Industry Development (Registration of Heavy Construction Machinery and Equipment) "
+     "Rules of 2019", {}),
+    ("CIDASW", "2181-21", 1, "2020-06-25", "Construction Industry Development (Register of Skilled Construction Workers, Construction Site "
+     "Supervisors, Middle Level Technical Officers and Other Professionals in the Construction Industry) Regulations of 2020", {}),
+    ("CIDACIC", "2181-21", 2, "2020-06-25", "Construction Industry Development (Craft Identity Cards) Regulations of 2020", {}),
+    ("CIDAQPD", "2181-21", 3, "2020-06-25", "Construction Industry Development (Disciplinary Procedure for Qualified Persons) Regulations of 2020", {}),
+    ("CIDACD", "2181-21", 4, "2020-06-25", "Construction Industry Development (Guidelines for Disciplinary Procedure for Registered Contractors) "
+     "Regulations of 2020 (acts or omissions and sanctions)", {}),
+    ("CIDAPD", "2181-21", 5, "2020-06-25", "Construction Industry Development (Registration of Property Developers) Regulations of 2020", {}),
+    ("CIDAMS", "2182-12", 1, "2020-06-30", "Construction Industry Development (Monitoring System of Contractors) Rules of 2020", {}),
+    ("CIDAPI", "2182-12", 2, "2020-06-30", "Construction Industry Development (Power to Instruct and Request Information) Rules of 2020", {}),
+    ("CIDAIMS", "2336-46", 1, "2023-06-14", "Construction Industry Development (Directory of Importers, Manufacturers and Suppliers) Rules 2023", {}),
+]
+DOCS += [
+    dict(id=i, kind="regulations", status="current", issued=d, effective=x.get("effective", d), parser="gazette", instrument=n,
+         title=f"{t}, {CIDA_ACT}, Gazette Extraordinary {int(g[:4])}/{int(g[5:])} "
+               f"of {d[8:]}.{d[5:7]}.{d[:4]} (CIDA)",
+         file=CIDA / f"{g}_E.pdf", **{k: v for k, v in x.items() if k != "effective"})
+    for i, g, n, d, t, x in _CIDA
+]
+CIDA_IDS = tuple(i for i, *_ in _CIDA)
 BY_ID = {d["id"]: d for d in DOCS}
 CURRENT = tuple(d["id"] for d in DOCS if d["status"] == "current")
 ALL = tuple(d["id"] for d in DOCS)

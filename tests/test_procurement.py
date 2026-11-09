@@ -509,7 +509,7 @@ def test_eval_gold_is_well_formed_and_scoring_handles_typography():
     from procurement.ask import Answer
     from procurement.evaluate import EVAL, score
     items = [_j.loads(l) for l in open(EVAL, encoding="utf-8")]
-    assert len(items) == 39 and len({i["id"] for i in items}) == 39 and all(i["facts"] and i["gold"] for i in items)
+    assert len(items) == 47 and len({i["id"] for i in items}) == 47 and all(i["facts"] and i["gold"] for i in items)
     item = dict(id="x", question="q", gold=["PM2024 §2.9"], facts=["seven years"])
     r = score(item, Answer("q", answer="up to seven\u202fyears [PM2024 §2.9.1].", warnings=["unsupported citations: FR 1"]))
     assert r["strict"] and r["cited"] and not r["clean"]
@@ -802,3 +802,79 @@ def test_sbd_texts_parse_into_the_clauses_we_cite():
     w, _ = parse.parse_curated(BY_ID["SBDW"]["file"].read_text(encoding="utf-8"), "SBDW")
     assert "taxation" in next(c for c in w if c["ref"] == "45")["text"]
     assert all("Check clause" in c["text"] or "Check " in c["text"] for c in w)  # every summary tells the reader where to look
+
+
+# ---------------------------------------------------------------- CIDA gazettes (parse.parse_gazette)
+
+_GAZ_2018 = ["""No. 2057/5 - MONDAY, FEBRUARY 05, 2018
+This Gazette Extraordinary can be downloaded from www.documents.gov.lk
+L.D.B. 15/2014(II)
+              THE CONSTRUCTION INDUSTRY DEVELOPMENT ACT, No. 33 OF 2014
+REGULATIONS made by the Minister of Housing and Construction under Section 26 of the Act.
+Colombo, 03rd January 2018.
+                                     Regulations
+    1. These Regulation may be cited as the Construction Industry Development (Registration of Qualified Persons) Regulation of 2017.
+    2. Every qualified person shall register.
+                                     THE SCHEDULE
+    1. Fee Rs. 1,000.
+07- 394
+REGULATIONS made by the Minister of Housing and Construction under Section 35 of the Act.
+                                     Regulations
+    1. These Regulation may be cited as the Construction Industry Development (Registration of Contractors) Regulation No. 1 of 2017.
+    2 Every contractor shall register under a grade
+Construction Industry Development Act, No. 33 of 2014
+       and pay the fee.
+    3.The criteria shall be as specified in the First Schedule hereto.
+    4. where the grade changes a fee is payable.
+""", """1A - PG 4413 - 507 (2019/03)
+                                     SCHEDULE I
+    1. C1 limit Rs. 1,000 million (old).
+                                     SCHEDULE 2
+    1. C1 fee Rs. 100,000 (old).
+"""]
+_GAZ_2025 = ["""REGULATIONS made by the Minister of Urban Development under section 58 of the Act.
+                                     Regulations
+1.  The Regulation No.1 of 2017 are hereby amended as follows: -
+      (1) by the repeal of "SCHEDULE I" thereof, and the substitution therefor of the following new schedule: -
+                                   “FIRST SCHEDULE
+                         Criteria for Registration of Construction Contractors
+1. A contractor shall satisfy item 2.
+2. C1: 3,000 > X > 1,200 (Rs. Million).”.
+ (2) by the repeal of "SCHEDULE II" thereof, and the substitution therefor of the following new schedule: -
+                                   “SECOND SCHEDULE
+1. C1 fee 200,000.00 + VAT
+2.	Every registration made in terms of the Regulation No.1 of 2017 shall remain valid for its period.
+"""]
+
+
+def test_gazette_instruments_regulations_and_schedules():
+    chunks, st = parse.parse_gazette(_GAZ_2018, "Q", 1)
+    assert st == dict(regulations=2, schedules=1, replaced=0)
+    assert [c["ref"] for c in chunks] == ["1", "2", "S1.1"]
+    assert not any("07- 394" in c["text"] or "REGULATIONS made" in c["text"] for c in chunks)  # printer's number, next instrument
+    chunks, st = parse.parse_gazette(_GAZ_2018, "C", 2)
+    regs = {c["ref"]: c["text"] for c in chunks if not c["ref"].startswith("S")}
+    assert list(regs) == ["1", "2", "3", "4"]  # "2 Every" (no stop), "3.The" (no space), "4. where" (lower case)
+    assert "Construction Industry Development Act, No. 33 of 2014" in regs["2"]  # wrapped clause text is not a header
+    assert "old" in " ".join(c["text"] for c in chunks)
+
+
+def test_gazette_substituted_schedules_replace_the_old_text():
+    sub = (_GAZ_2025, 1, {1: 1, 2: 2}, "Substituted by Gazette 2430/13.", r"^\s*\(\d\)\s+by the repeal|^\s*\d+\.\s+Every registration made")
+    chunks, st = parse.parse_gazette(_GAZ_2018, "C", 2, sub)
+    assert st["replaced"] == 2
+    text = " ".join(c["text"] for c in chunks)
+    assert "(old)" not in text  # the repealed 2018 schedules are never indexed
+    assert "3,000 > X > 1,200" in text and "200,000.00" in text
+    assert "by the repeal" not in text and "remain valid" not in text  # the amending instructions stay out of the schedules
+    sched = [c for c in chunks if c["ref"].startswith("S")]
+    assert {c["ref"] for c in sched} >= {"S1.1", "S1.2", "S2.1"}
+    assert all(c["note"] == "Substituted by Gazette 2430/13." for c in sched)
+
+
+def test_schedule_citations_are_recognised():
+    found = pa.CITE.findall("Fees [CIDACR §S2.1]; criteria [CIDACR §S1]; regulation [CIDAADJ §3].")
+    assert [(d, r) for d, r, _ in found] == [("CIDACR", "S2.1"), ("CIDACR", "S1"), ("CIDAADJ", "3")]
+    units = [dict(doc="CIDACR", ref="S2.1", text="1. C1 fee", heading=""), dict(doc="CIDACR", ref="3", text="3. criteria", heading="")]
+    assert pa.verify("[CIDACR §S2.1] [CIDACR §3]", units) == []
+    assert pa.verify("[CIDACR §S2.2] [CIDACR §S1.4]", units) == ["CIDACR §S2.2", "CIDACR §S1.4"]

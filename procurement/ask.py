@@ -38,7 +38,7 @@ NON_BINDING_NOTE = ("Note: {docs} is non-binding guidance from 2017, written bef
                     "the contract's own conditions and PG2024/PM2024 prevail.")
 TRANSLATION_NOTE = ("Note: {docs} {verb} an unofficial English translation of Sinhala Treasury circulars made for this tool; "
                     "the Sinhala text is authoritative.")  # citations are matched case-insensitively ("PFC0326i")
-CITE = re.compile(rf"\b({_IDS})\b(?:\s*(?:§|Art(?:icle)?\.?)\s*(Definitions|156[A-Z]|\d{{1,2}}(?:\.\d{{1,2}}){{0,3}})"
+CITE = re.compile(rf"\b({_IDS})\b(?:\s*(?:§|Art(?:icle)?\.?)\s*(Definitions|156[A-Z]|S?\d{{1,2}}(?:\.\d{{1,2}}){{0,3}})"
                   rf"|(?:(?<=FR)|(?<=FRA))\s*(\d{{1,3}}[A-Z]?)\b)?", re.I)  # Financial Regulations: [FR 135], [FRA 108]
 
 SYSTEM = """You answer questions from Sri Lankan public officers about government procurement rules, using ONLY the passages given.
@@ -88,6 +88,12 @@ Sources:
   decide. A tax or levy introduced after the bid date is the contractor's own cost unless the contract's change-in-law or price-adjustment
   clause covers it: when such a clause is among the passages, give the test (law after the base date, covers taxes or levies, notice and
   procedure in the contract) instead of only saying "check your contract".
+- CIDA... = rules and regulations of the Construction Industry Development Authority under the Construction Industry Development Act,
+  No. 33 of 2014 (contractor registration and grading, foreign contractors, adjudicators, qualified persons, appeals, discipline,
+  monitoring, suppliers' directory). Cited by regulation [CIDACR §3] or by schedule and item: [CIDACR §S1.6] = First Schedule item 6,
+  [CIDACR §S2] = Second Schedule. CIDACR's First and Second Schedules (criteria, grades and financial limits, points, fees) are the 2025
+  text substituted by Gazette 2430/13. They are CIDA's rules for registering contractors; which grade a contract requires is set by
+  PG2024/PM2024 and their supplements. These sources hold the instruments CIDA lists; a later amendment may not be here.
 - LCC2026 = NPC Guidance Note on Life Cycle Cost / Total Cost of Ownership. ESM2026 = NPC Sector Specific Procurement Manual
   2026 for investor selection in electricity generation, storage, transmission and ancillary services (from 22.10.2026).
 
