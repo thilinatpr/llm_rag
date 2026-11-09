@@ -80,7 +80,7 @@ def base_acts(run, work, bills_dir):
     """Fetch and index the base Acts (the law an indexed bill or Act amends) that documents.gov.lk has and the index lacks. Returns their ids.
     What it cannot fetch is reported by the check after the build (baseacts.check) and stops the publish until someone finds the text or waives it."""
     res = base_check(work, bills_dir)
-    ids = sorted(res["fetchable"])
+    ids = sorted(set(res["fetchable"]) | set(consolidation_acts_missing(bills_dir)))
     if ids:
         print(f"\nBase Acts to fetch: {ids}", file=sys.stderr)
         keys = ",".join(ids)
@@ -90,6 +90,48 @@ def base_acts(run, work, bills_dir):
 
 
 TRANSCRIPTS = ROOT / "sources" / "base_acts"
+CONSOLIDATIONS = ROOT / "sources" / "consolidations"
+
+
+def pending_consolidations(bills_dir, folder=None):
+    """[(key, meta, text path)] of accepted IRD consolidated texts (sources/consolidations) that the index lacks or holds at an older
+    cut-off date (a newer consolidation replaces it)."""
+    folder = Path(folder or CONSOLIDATIONS)
+    db = Store(bills_dir / "index.sqlite").db
+    try:
+        have = {r[0]: r[1] for r in db.execute("SELECT bill_key, up_to FROM consolidations")}
+    except sqlite3.OperationalError:
+        have = {}
+    out = []
+    for meta_path in sorted(folder.glob("*.json")):
+        m = json.loads(meta_path.read_text(encoding="utf-8"))
+        key, text = f"Cons {m['no']}/{m['year']}", meta_path.with_suffix(".txt")
+        if text.exists() and m.get("accepted_by") and have.get(key, "") < m["up_to"]:
+            out.append((key, m, text))
+    return out
+
+
+def consolidation_acts_missing(bills_dir, folder=None):
+    """The amending Acts an accepted consolidation lists (e.g. SSCL Act 15/2023) that the index lacks, as "15/2023": fetched with the
+    base Acts, so an answer can cite the amendment itself, not only the consolidated wording."""
+    folder = Path(folder or CONSOLIDATIONS)
+    have = {r[0] for r in Store(bills_dir / "index.sqlite").db.execute("SELECT key FROM bills WHERE kind='Act'")}
+    out = set()
+    for meta_path in sorted(folder.glob("*.json")):
+        m = json.loads(meta_path.read_text(encoding="utf-8"))
+        if m.get("accepted_by"):
+            out |= {k[4:] for k in m.get("amendments", []) if k.startswith("Act ") and k not in have}
+    return sorted(out)
+
+
+def add_consolidations(run, bills_dir, folder=None):
+    added = []
+    for key, m, text in pending_consolidations(bills_dir, folder):
+        run("-m", "billrag", "add-consolidation", "--text", str(text), "--no", str(m["no"]), "--year", str(m["year"]), "--title", m["title"],
+            "--up-to", m["up_to"], "--amendments", ",".join(m.get("amendments", [])), *(["--source", m["source"]] if m.get("source") else []),
+            *(["--prepared", m["prepared"]] if m.get("prepared") else []), step=f"add IRD consolidated text {key}")
+        added.append(key)
+    return added
 
 
 def pending_transcripts(bills_dir, folder=None):
@@ -225,7 +267,8 @@ def run_refresh(a, report):
         new = new_documents(work, before["keys"])
         report.update(new_bills=new["bills"], new_acts=new["acts"])
         print(f"\nNew: {len(new['bills'])} bills {sorted(new['bills'])}, {len(new['acts'])} Acts {sorted(new['acts'])}", file=sys.stderr)
-        if not new["bills"] and not new["acts"] and not reclassified and not pending_transcripts(bills_dir) and not a.force:
+        if not new["bills"] and not new["acts"] and not reclassified and not pending_transcripts(bills_dir) \
+                and not pending_consolidations(bills_dir) and not a.force:
             print("Nothing new. The live index is unchanged.", file=sys.stderr)
             report.update(base_acts_missing={k: {"name": v["name"], "cited_by": v["cited_by"], "why": v["why"]} for k, v in base_check(work, bills_dir)["unresolved"].items()})  # only reported: nothing is published
             report.update(state="nothing_new", unindexed=sorted(listing_keys(work, a.since_year) - before["keys"]))
@@ -235,7 +278,7 @@ def run_refresh(a, report):
             run("-m", "billrag", "ingest-si", "--since-year", str(a.since_year), "--keys", ",".join(new["bills"]), step="link official Sinhala text")
         run("-m", "billrag", "ingest-acts", "--only-new", "--since-year", str(max(a.since_year, ACTS_SINCE)), step="parse new Acts, link bills to Acts")
         manual_added = add_transcripts(run, bills_dir)  # reviewed transcriptions of scanned Acts (sources/base_acts), before fetching
-        report.update(transcripts_added=manual_added)
+        report.update(transcripts_added=manual_added, consolidations_added=add_consolidations(run, bills_dir))
         base_added = base_acts(run, work, bills_dir)  # every Act that an indexed bill or Act amends must be in the index too
         if new["acts"] or new["bills"] or reclassified:
             run("-m", "billrag", "link-acts", step="recompute bill -> Act links")

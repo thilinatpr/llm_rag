@@ -3050,3 +3050,56 @@ def test_base_act_note_says_as_enacted_and_names_the_amending_acts(tmp_path):
     assert note.startswith("Inland Trust Receipts Act, No. 14 of 1990 is the text as enacted in 1990; amended since by Act No. 3 of 2025.")
     assert "may be out of date" in note and baseacts.note(st, ["086/2026"]) is None
     assert "as originally enacted" in acts.status_lines(st, key, 3)
+
+
+# ---------------------------------------------------------------- IRD consolidated texts next to the certified Act, 2026-11-09
+def _add_sscl_cons(tmp_path):
+    from billrag.ingest import add_consolidation
+    root = ROOT_FOR_SCRIPTS / "sources" / "consolidations"
+    m = json.loads((root / "25-2022.json").read_text(encoding="utf-8"))
+    make_store(tmp_path)
+    key, n = add_consolidation(tmp_path / "i.sqlite", root / "25-2022.txt", 25, 2022, m["title"], m["up_to"], m["amendments"], m["source"])
+    return Store(tmp_path / "i.sqlite"), key, n
+
+
+def test_consolidation_files_parse_to_their_sections():
+    from billrag.ingest import read_transcript
+    from billrag.parse import parse_act_pages
+    root = ROOT_FOR_SCRIPTS / "sources" / "consolidations"
+    for mp in sorted(root.glob("*.json")):
+        m = json.loads(mp.read_text(encoding="utf-8"))
+        secs = [s.no for s in parse_act_pages(read_transcript(mp.with_suffix(".txt")), m["title"], m["no"], m["year"]).sections
+                if s.kind == "section"]
+        assert secs == list(range(1, m["sections"] + 1)), mp.name
+
+
+def test_consolidation_is_indexed_next_to_the_act_and_labelled(tmp_path):
+    from billrag import acts, consolidated
+    from billrag.pipeline import CITE, version_tag
+    st, key, n = _add_sscl_cons(tmp_path)
+    assert (key, n) == ("Cons 25/2022", 61)
+    b = st.bill(key)
+    assert b["kind"] == "Cons" and b["title"].startswith("Social Security Contribution Levy Act, No. 25 of 2022 (IRD consolidated text")
+    s4 = " ".join(r[0] for r in st.db.execute("SELECT text FROM chunks WHERE bill_key=? AND section_no=4", (key,)))
+    assert "July 1, 2026" in s4 and "[IRD note: Sec 2(2) of 10 of 2026]" in s4
+    assert CITE.search("as amended [Cons 25/2022 §4]").groups() == ("Cons 25/2022", "4")
+    status = acts.status_lines(st, key, 4)
+    assert "consolidated text" in status and "9 April 2026" in status and "not a statutory text" in status
+    assert "not shown to have passed" not in status                        # never treated as a bill
+    assert not st.db.execute("SELECT 1 FROM act_links WHERE bill_key=?", (key,)).fetchone()
+    note = consolidated.note(st, ["086/2026", key])
+    assert note.startswith("Parts of this answer use the Inland Revenue Department consolidated text") and "certified Act" in note
+    assert consolidated.note(st, ["086/2026"]) is None
+    assert version_tag({"title": b["title"], "bill_kind": "Cons", "date": b["date"]}).endswith("(IRD consolidated text, 2026-04-09)")
+
+
+def test_refresh_adds_only_accepted_newer_consolidations(tmp_path):
+    r = _refresh()
+    make_store(tmp_path)
+    (tmp_path / "i.sqlite").rename(tmp_path / "index.sqlite")
+    src = tmp_path / "cons"
+    src.mkdir()
+    for no, accepted in ((25, "owner"), (24, None)):
+        (src / f"{no}-2022.txt").write_text("x", encoding="utf-8")
+        (src / f"{no}-2022.json").write_text(json.dumps({"no": no, "year": 2022, "title": "X", "up_to": "2026-04-09", "accepted_by": accepted}))
+    assert [k for k, _m, _t in r.pending_consolidations(tmp_path, src)] == ["Cons 25/2022"]

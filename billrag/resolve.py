@@ -123,7 +123,7 @@ def which_bill_reply(store, limit=5):
     """Ask which bill is meant and list the newest ones (one line per title, GS + Bill versions together)."""
     lines, seen = [], set()
     for b in store.find_bills(limit=60):
-        if b["kind"] == "Act":
+        if b["kind"] in ("Act", "Cons"):
             continue
         t = base_title(b["title"]).lower()
         if t in seen:

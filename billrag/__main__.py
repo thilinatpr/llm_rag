@@ -38,6 +38,15 @@ def main(argv=None):
     p.add_argument("--year", type=int, required=True, help="e.g. 1979")
     p.add_argument("--title", required=True, help='without "Act, No. ..": e.g. "Code of Criminal Procedure"')
     p.add_argument("--date", help="certified date YYYY-MM-DD if the PDF's cover has none")
+    p = sub.add_parser("add-consolidation", help="index a reviewed IRD consolidated text next to the certified Act (sources/consolidations/), then `embed`")
+    p.add_argument("--text", required=True)
+    p.add_argument("--no", type=int, required=True)
+    p.add_argument("--year", type=int, required=True)
+    p.add_argument("--title", required=True, help='without "Act, No. ..": e.g. "Social Security Contribution Levy"')
+    p.add_argument("--up-to", required=True, help="date of the last amendment it includes, YYYY-MM-DD")
+    p.add_argument("--amendments", default="", help='comma-separated Act keys it includes, e.g. "Act 15/2023,Act 10/2026"')
+    p.add_argument("--source", help="where the PDF came from (URL)")
+    p.add_argument("--prepared", help="the date IRD prepared it, YYYY-MM-DD")
     sub.add_parser("link-acts", help="recompute bill -> Act links and the section-by-section comparison (no re-parse)")
     sub.add_parser("glossary", help="mine English <-> official Sinhala titles and defined terms from the linked sections")
     p = sub.add_parser("reclassify", help="re-read GS/Bill/Other from the stored titles in place (no re-ingest, vectors stay valid), "
@@ -133,6 +142,12 @@ def main(argv=None):
         key, n = add_base_act(s.db_path, Path(a.pdf) if a.pdf else None, a.no, a.year, a.title, a.date,
                               text=Path(a.text) if a.text else None, reviewed=a.reviewed)
         print(f"Indexed {key}: {n} sections. Now run `python -m billrag embed`, then publish.")
+        return 0
+    if a.cmd == "add-consolidation":
+        from .ingest import add_consolidation
+        key, n = add_consolidation(s.db_path, Path(a.text), a.no, a.year, a.title, a.up_to,
+                                   [k.strip() for k in a.amendments.split(",") if k.strip()], a.source, a.prepared)
+        print(f"{key}: {n} sections. Now run `python -m billrag embed`.")
         return 0
     if a.cmd == "link-acts":
         from . import acts

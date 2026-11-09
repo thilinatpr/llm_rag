@@ -33,6 +33,7 @@ billrag/config.py         all settings come from BILLRAG_* env vars (documented 
 src/chatconfig.js         which chat model/provider the container gets (CHAT_PROVIDER var: workers-ai | deepseek); pure function, tested in test/worker.test.mjs
 procurement/evaluate.py   Procurement Rules answer eval: gold in evals/procurement_eval.jsonl, no model judge
 billrag/meta.py           bill metadata outside `chunks`: families, newest instance, bill type, tags, section cross-references (`meta`, `tag`), what each amending clause changes
+billrag/consolidated.py   IRD consolidated texts (key Cons N/YYYY) + fixed note; billrag/consolidation.py = manual PDF -> text helper
 billrag/transcribed.py    Acts transcribed from scans (table transcribed_docs) + the fixed answer note; billrag/ocr.py = manual OCR helper; sources/base_acts/ = reviewed texts
 billrag/titles.py         title index (table `title_index`) + custom title ranker: which bill/Act does a gist question name? one / ask which / none
 src/refresh.js, scripts/refresh_r2.py, .github/workflows/refresh-index.yml   daily new-bills check + Build/Publish buttons (see "Scheduled refresh")
@@ -963,6 +964,24 @@ work). Table `transcribed_docs` marks them; an answer whose evidence includes on
 of X was read from a scanned copy by OCR and checked by hand, so a small reading error is still possible. Before a high-stakes decision,
 check the wording against the official printed document." The model's STATUS line and the Sources line (" - transcribed from a scan")
 say the same; log field `transcribed`. A later PDF ingest of the same Act clears the mark.
+
+## IRD consolidated texts (`sources/consolidations/`, `billrag/consolidated.py`, `billrag/consolidation.py`; written 2026-11-09, NOT deployed)
+
+The Inland Revenue Department (ird.gov.lk, Publications > Acts; owner: "the official source for tax related matters") publishes consolidated
+versions of tax Acts: Word-made PDFs, every amendment folded in, each change noted in the margin ("Sec 2(1) of 10 of 2026"), self-described
+as "not a statutory consolidation, but rather a convenient reference". They are held NEXT TO the certified Act, key `Cons N/YYYY`, kind
+`Cons`, citations `[Cons 25/2022 §4]`; table `consolidations` (act, up_to, amendments, source). Answers that use one get a fixed note
+("Parts of this answer use the Inland Revenue Department consolidated text of X, with amendments up to D: a convenient reference, not a
+statutory text. ... check the certified Act and its amending Acts"), amendments certified after `up_to` are named; the STATUS line says
+the same; Sources lines end " - IRD consolidated text". A consolidation is never a bill: `acts.build` does not link it, "which bill?"
+lists skip it. Retrieval keeps the certified Act's chunk when the text is identical, so unchanged sections are cited from the Act.
+**Made by hand** (owner's rule for hard cases): `consolidation.to_pages` (lines split into body and margin by position, section numbers
+only in sequence and only before the First Schedule, rows by vertical overlap, change notes at the end of their paragraph), then every
+section compared with the certified Act; differences must carry an IRD note or be explained; only errors the certified Act proves are
+corrected. `refresh_bills.py` adds accepted ones (`accepted_by`), a newer `up_to` replaces an older one, and the amending Acts a
+consolidation lists are fetched with the base Acts (SSCL Act 15/2023 was missing). First: SSCL 25/2022, amendments to 9 April 2026
+(61 sections, 22 change notes; against the certified Act only s.4 and s.5 differ, both noted). VAT 14/2002 (IRD consolidation to
+31 Dec 2025, 173 pages) has inserted sections (2A, ...), which section numbers (INT) and citations (`§\d+`) cannot hold yet: not done.
 
 ## Gist questions: overview, title index, "which bill?" (written 2026-11-07, branch `claude/overview-questions`, NOT merged or deployed)
 

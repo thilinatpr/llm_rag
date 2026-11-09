@@ -57,7 +57,7 @@ SUM_PROMPT = ("Summarise this Sri Lankan {doc} for a non-lawyer in at most 110 w
 
 def _summarise(llm, b, body, effort=None):
     # effort: thinking on, deepseek-flash spent the whole token limit on reasoning and returned nothing for 6 of 7 documents (2026-11-07)
-    prompt = SUM_PROMPT.format(doc="Act" if b.get("kind") == "Act" else "bill", title=b["title"], long_title=b["long_title"] or "n/a", text=body[:9000])
+    prompt = SUM_PROMPT.format(doc="Act" if b.get("kind") in ("Act", "Cons") else "bill", title=b["title"], long_title=b["long_title"] or "n/a", text=body[:9000])
     for _ in range(2):
         s = llm.chat("You are a careful legislative analyst.", [{"role": "user", "content": prompt}],
                      max_tokens=1500, effort=effort).text.strip()

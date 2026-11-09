@@ -15,12 +15,12 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 
-from . import acts, baseacts, calltrace, glossary as gloss, meta, parse_si, resolve, titles as title_index, transcribed, translate
+from . import acts, baseacts, calltrace, consolidated, glossary as gloss, meta, parse_si, resolve, titles as title_index, transcribed, translate
 from .parse import plain_title
 from .store import ACT_REF, normalize_ref
 
 CLAUSE_KINDS = ("section", "schedule")
-CITE = re.compile(r"[\[【](Act \d{1,3}/\d{4}|\d{3}/\d{4})(?:\s*§\s*(\d+))?")  # also the full-width brackets some models emit
+CITE = re.compile(r"[\[【]((?:Act|Cons) \d{1,3}/\d{4}|\d{3}/\d{4})(?:\s*§\s*(\d+))?")  # also the full-width brackets some models emit
 REASONING = re.compile(r"^\s*analysis\s*[:\uff1a]?", re.I)
 FINAL = re.compile(r"assistant\s*final\s*[:\uff1a]?\s*|\bfinal(?:\s+answer)?\s*[:\uff1a]\s*", re.I)
 RETRY_NOTE = "\n\nReply with ONLY the final answer, in the format requested. Do not include any analysis or reasoning text."
@@ -164,7 +164,7 @@ class Evidence:
         return self.chunk.get("section_no")
 
 
-KIND_LABEL = {"GS": "Gazette text", "Bill": "Bill", "Act": "certified"}  # what users (and the answering model) see instead of the internal kind codes
+KIND_LABEL = {"GS": "Gazette text", "Bill": "Bill", "Act": "certified", "Cons": "IRD consolidated text"}  # what users (and the answering model) see instead of the internal kind codes
 
 
 def version_tag(c):
@@ -245,6 +245,7 @@ class Result:
     transcribed: set = field(default_factory=set)  # evidence documents whose text was transcribed from a scan (OCR + manual review)
     scan_note: str = ""  # the fixed note shown under such an answer (transcribed.NOTE), "" when none
     base_note: str = ""  # fixed note when the evidence includes an Act as originally enacted (baseacts.note), "" when none
+    cons_note: str = ""  # fixed note when the evidence includes an IRD consolidated text (consolidated.note), "" when none
     added_overview: str = ""  # bill/Act whose overview was added to the evidence for a "key provisions / summarise" question
     added_sections: list = field(default_factory=list)  # sections added to bill-level-only evidence (bill_sections)
     followed: list = field(default_factory=list)  # sections added because a kept clause refers to them (follow_section_refs)
@@ -263,7 +264,7 @@ class Result:
             where = (f"§{e.section}" if e.section is not None else
                      "list of amending clauses" if c["kind"] == "amendments" else c["kind"])
             official = " - official Sinhala text used" if (e.key, e.section) in self.official else ""
-            scan = transcribed.SOURCE_TAG if e.key in self.transcribed else ""
+            scan = (transcribed.SOURCE_TAG if e.key in self.transcribed else "") + (consolidated.SOURCE_TAG if e.key.startswith("Cons ") else "")
             out.append(f"[{e.key} {where}, p.{c['page']}] {version_tag(c)}{official}{scan}")
         return out
 
@@ -825,6 +826,7 @@ class Pipeline:
             res.transcribed = {k for k in keys if transcribed.is_transcribed(self.store, k)}
             res.scan_note = transcribed.note(self.store, keys) or ""
             res.base_note = baseacts.note(self.store, keys) or ""
+            res.cons_note = consolidated.note(self.store, keys) or ""
         self.last = res
         return res
 
