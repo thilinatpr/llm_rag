@@ -173,6 +173,8 @@ class App:
             note = machine_note(res.lang, res.path, res.answer)
             if note:
                 out += "\n\n*" + note + "*"
+            if res.cons_note:  # fixed: an IRD consolidated text (a convenient reference, not statutory)
+                out += "\n\n*" + res.cons_note + "*"
             if res.base_note:  # fixed: an Act as originally enacted, later amendments not included
                 out += "\n\n*" + res.base_note + "*"
             if res.scan_note:  # fixed, not left to the model: the text came from a scan (OCR + manual review)
@@ -193,6 +195,7 @@ class App:
                 "acts": res.acts or None, "amend_list": res.amend_list or None,
                 "direct_rejected": res.direct_rejected or None,
                 "transcribed": sorted(res.transcribed) or None, "base_note": bool(res.base_note) or None,
+                "cons_note": bool(res.cons_note) or None,
                 "answer_mode": mode or "default", "answer_effort": effort,
                 "free": free_turn(res),
             }

@@ -18,7 +18,7 @@ from collections import Counter
 from datetime import datetime
 from difflib import SequenceMatcher
 
-from . import baseacts, transcribed
+from . import baseacts, consolidated, transcribed
 
 ACT_SINCE = 2024  # Acts indexed from this year: a bill older than this may have become an Act we do not hold
 LINK_TITLE = 0.8  # a similar title needs this title similarity and LINK_TEXT shared text
@@ -165,7 +165,7 @@ def build(store) -> dict:
         db.commit()
         return {"acts": 0, "links": 0}
     first = min(_d(a["date"]) for a in acts_)
-    bills = [r for r in rows if r["kind"] != "Act" and (first - _d(r["date"])).days <= LINK_LATE[1]]
+    bills = [r for r in rows if r["kind"] not in ("Act", "Cons") and (first - _d(r["date"])).days <= LINK_LATE[1]]  # a consolidation is no bill
     secs = {r["key"]: store.section_map(r["key"]) for r in acts_ + bills}
     sh = {k: _shingles(_toks(" ".join(v[n] for n in sorted(v)))) for k, v in secs.items()}
     best = {}  # a bill goes with at most one Act: the one whose text it shares most
@@ -277,6 +277,8 @@ def status_lines(store, key, section=None):
     b = store.bill(key)
     if not b:
         return ""
+    if b["kind"] == consolidated.KIND:
+        return consolidated.describe(store, key) + consolidated.STATUS_TAIL
     if b["kind"] == "Act":
         purpose = re.sub(r"\s+", " ", b.get("long_title") or "").strip()[:220]
         came = bills_for_act(store, key)

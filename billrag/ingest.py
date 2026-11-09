@@ -53,7 +53,7 @@ def _work(args):
 
 
 def head_line(bill: dict) -> str:
-    prefix = "" if bill["kind"] == "Act" else "Bill "  # an Act's key already says "Act"
+    prefix = "" if bill["kind"] in ("Act", "Cons") else "Bill "  # an Act's key already says "Act", a consolidation's "Cons"
     return f"{prefix}{bill['key']} \u2014 {bill['title']} ({bill['kind']}, {bill['date'][:10]})"
 
 
@@ -231,6 +231,37 @@ def add_base_act(db_path: Path, pdf, no, year, title, date=None, text=None, revi
     _titles.build(store)
     acts.build(store)
     return row["key"], row["n_sections"]
+
+
+def add_consolidation(db_path: Path, text, no, year, title, up_to, amendments=(), source=None, prepared=None):
+    """Index an IRD consolidated text (billrag/consolidated.py) next to the certified Act: key "Cons N/YYYY". `text` = the reviewed
+    file in the transcript format (billrag/consolidation.py makes it from the PDF), `up_to` = YYYY-MM-DD of the last amendment it
+    includes, `amendments` = the Act keys it incorporates. Run `embed` afterwards."""
+    from . import acts, consolidated, meta
+    from . import titles as _titles
+    pages = read_transcript(text)
+    if not any(act_cover_ok(x, no, year) for x in pages[:3]):
+        raise ValueError(f"{text}: Act {no}/{year} is not on its first pages")
+    parsed = parse_act_pages(pages, title, no, year)
+    if not parsed.sections:
+        raise ValueError(f"no sections found in {text}")
+    store = Store(db_path)
+    key = consolidated.cons_key(no, year)
+    prev = store.bill(key)
+    name = re.sub(r"\s+Act$", "", title.rstrip(" ,"))
+    row = {"key": key, "bill_no": no, "year": year, "date": f"{up_to}T00:00:00.000Z",
+           "title": f"{name} Act, No. {no} of {year} (IRD consolidated text, amendments up to {up_to})",
+           "title_norm": norm(f"{name} consolidated"), "kind": consolidated.KIND, "long_title": parsed.cover.get("long_title"),
+           "presented_by": None, "presented_on": None, "gazette_date": None, "printed_no": None, "n_pages": len(pages),
+           "n_sections": sum(1 for s in parsed.sections if s.kind == "section"), "pdf_path": str(text),
+           "summary": prev["summary"] if prev else None}
+    store.replace_bill(row, build_chunks(row, parsed))
+    consolidated.record(store, key, acts.act_key(no, year), up_to, amendments, source, prepared)
+    store.commit()
+    meta.build(store)
+    _titles.build(store)
+    acts.build(store)
+    return key, row["n_sections"]
 
 
 def ingest_acts(acts_dir: Path, db_path: Path, since_year=2024, workers=4, only_new=False, keys=None):
