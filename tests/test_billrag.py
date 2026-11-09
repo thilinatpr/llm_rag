@@ -3010,3 +3010,17 @@ def test_refresh_adds_pending_transcriptions_once(tmp_path):
     ran = []
     assert r.add_transcripts(lambda *cmd, step=None: ran.append(cmd), tmp_path) == ["Act 14/1990"]
     assert ran[0][:4] == ("-m", "billrag", "add-base-act", "--text") and "14" in ran[0] and "1990" in ran[0]
+
+
+def test_every_reviewed_transcription_parses_to_its_sections():
+    from billrag.ingest import read_transcript
+    from billrag.parse import act_cover_ok, parse_act_pages
+    root = ROOT_FOR_SCRIPTS / "sources" / "base_acts"
+    metas = sorted(root.glob("*.json"))
+    assert metas
+    for mp in metas:
+        m = json.loads(mp.read_text(encoding="utf-8"))
+        pages = read_transcript(mp.with_suffix(".txt"))
+        assert any(act_cover_ok(x, m["no"], m["year"]) for x in pages[:3]), mp.name
+        secs = [s.no for s in parse_act_pages(pages, m["title"], m["no"], m["year"]).sections if s.kind == "section"]
+        assert secs == list(range(1, m["sections"] + 1)), (mp.name, secs)

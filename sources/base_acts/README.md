@@ -11,7 +11,8 @@ session, never in the automated build (owner, 2026-11-09):
 
 Files per Act `N-YYYY`:
 - `N-YYYY.txt`: the text, pages separated by form feeds, margin notes after each page's body (as the parser expects).
-- `N-YYYY.json`: `no`, `year`, `title` (without "Act, No. .."), `date` (certified), `reviewed`, `source`, `accepted_by`.
+- `N-YYYY.json`: `no`, `year`, `title` (without "Act, No. .."), `date` (certified), `sections` (count, checked by a test), `reviewed`,
+  `source`, `accepted_by` (null until the owner accepts the text; the build adds only accepted ones).
 - `N-YYYY.review.md`: what was corrected and why.
 
 `scripts/refresh_bills.py` adds every Act here that the index does not hold (`python -m billrag add-base-act --text ...`), before it

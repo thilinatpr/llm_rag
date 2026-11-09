@@ -93,14 +93,15 @@ TRANSCRIPTS = ROOT / "sources" / "base_acts"
 
 
 def pending_transcripts(bills_dir, folder=None):
-    """[(key, meta, text path)] of the reviewed transcriptions in sources/base_acts whose Act the index does not hold."""
+    """[(key, meta, text path)] of the reviewed transcriptions in sources/base_acts whose Act the index does not hold and that the
+    owner has accepted (`accepted_by` in the .json; a transcription waiting for review is left out)."""
     folder = Path(folder or TRANSCRIPTS)
     have = {r[0] for r in Store(bills_dir / "index.sqlite").db.execute("SELECT key FROM bills WHERE kind='Act'")}
     out = []
     for meta_path in sorted(folder.glob("*.json")):
         m = json.loads(meta_path.read_text(encoding="utf-8"))
         key, text = f"Act {m['no']}/{m['year']}", meta_path.with_suffix(".txt")
-        if key not in have and text.exists():
+        if key not in have and text.exists() and m.get("accepted_by"):  # only texts the owner has read and accepted
             out.append((key, m, text))
     return out
 
