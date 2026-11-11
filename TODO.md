@@ -106,6 +106,36 @@ warnings, and the grader kept the right SSCL clauses (scores 2-3). The causes ar
 - [ ] Older Acts (2015-2023, ~245): principal Acts of today's amendments, and "did this bill pass?" for older bills.
 - [ ] Tamil text of Acts; Sinhala of 2024 Acts (FM Abhaya) and 17 visual-order 2025+ Acts.
 - [ ] Compare schedules; label a bill-to-Act link as uncertain when its text score is low.
+- [ ] **Environment Acts from the Central Environmental Authority site (owner to review, 2026-11-10).** Source:
+      https://env.gov.lk/web/index.php/en/downloads/acts (10 PDFs, `https://env.gov.lk/web/images/downloads/acts/<file>`). Why: a
+      live question about "consultant responsibility" under the National Environmental (Amendment) Act, No. 15 of 2026 found only
+      that Act. The live index holds none of these 10. NEA 47/1980 is waived in `evals/base_acts_waived.json`: its documents.gov.lk
+      PDF is a scan. Checked in a session, nothing published:
+      - **Certified prints, ready** (Government Printer text layer). A trial `add-base-act --pdf` parsed all three cleanly:
+        - `fauna_and_flora_protection_amendment_act_2009.pdf`: Act 22/2009, certified 2009-04-20, 70 sections.
+        - `forest_amendment_act_no_65_of_2009.pdf`: Act 65/2009, certified 2009-11-16, 45 sections.
+        - `coast_conservation_amendment_act_2011.pdf`: Act 49/2011, certified 2011-11-30, 37 sections.
+
+        Commands: `python -m billrag add-base-act --pdf F --no N --year YYYY --title "Forest (Amendment)" --date YYYY-MM-DD`
+        (titles without "Act, No."), then `summarize`, `embed`, `upload_r2.py --include-index`.
+      - **Retyped web copies, not certified prints** (Word-made, no Gazette cover). The words may differ from the official text.
+        Compare each with a printed copy before indexing, or index it with a note like the one `transcribed_docs` adds:
+        - `nea_no_47_of_1980.pdf`: National Environmental Act 47/1980 as enacted (3-member Authority, no Part IVA or s.23A).
+          This is the principal Act of 026/2026, 032/2026 and Act 15/2026. The cover has no "Act, No. 47 of 1980" line, so
+          `act_cover_ok` may refuse it. Remove its waiver once it is added.
+        - `nea_amendment_no_56_of_1988.pdf` (Act 56/1988, certified 1988-12-12) and `nea_amendment_no_53_of_2000.pdf`
+          (Act 53/2000, certified 2000-08-18; replaces s.23A).
+        - `coast_conservation_act_no_57_of_1981.pdf`: Act 57/1981. Typing damage: quote marks rendered as `"`.
+        - `mines_mineral_act_no_32_of_1992.pdf`: the Act is No. **33** of 1992 (the file name says 32). OCR-style errors
+          ("MINES KITREAU", "AMP;", "Mines and Mineral, Act").
+      - **Scans with a machine OCR layer: hand-reviewed transcription only** (`sources/base_acts/` procedure, `billrag/ocr.py`):
+        - `marine_pollution_prevention_act_no_35_of_2008.pdf`: certified print, 57 page images, OCR errors ("qountry", "f o r °_
+          eins"). The trial `--pdf` found only 5 of about 60 sections, so it was removed again.
+        - `forest_ordinance.pdf`: Forest Ordinance, Chapter 283 of the revised Legislative Enactments (amended to Act 56/1979).
+          19 two-column page images; the OCR text mixes the columns. It is not "Act N/YYYY", so `add-base-act` cannot key it
+          yet, like the other `Chapter N` waivers.
+      - Not checked: whether documents.gov.lk lists text-layer prints of 56/1988, 53/2000, 57/1981 or 33/1992 (see `data/acts/acts.json`
+        after `scrape_bills.py --source acts`), or retrieval quality with these Acts added.
 
 ## Data quality
 - [ ] OCR the 2 scanned bills with no text layer (`048/2013`, `011/2012`); OCR also unlocks Sinhala/Tamil.
