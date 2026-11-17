@@ -146,3 +146,21 @@ test("consent and privacy: Budget has its own statements and page, and visitor c
   assert.match(await r.text(), /Budget 2027/);
   assert.equal(t.forwarded.length, 0);
 });
+
+// "Use the auth system, env vars and bindings the same way as Bill Assistant and Procurement Rules" (owner, 2026-11-17): the settings that make
+// one citizenlk account work across services must not drift between the Budget and Procurement configs.
+test("config: account, mail, model and storage settings equal Procurement's", () => {
+  const strip = (t) => t.replace(/^\s*#.*$/gm, "");
+  const val = (t, k) => (t.match(new RegExp(`^${k}\\s*=\\s*"([^"]*)"`, "m")) || [])[1];
+  const bud = strip(read("../workers/budget/wrangler.toml")), proc = strip(read("../workers/procurement/wrangler.toml"));
+  for (const k of ["COOKIE_DOMAIN", "ALLOWED_EMAILS", "FROM_ADDRESS", "CF_ACCOUNT_ID", "CHAT_MODEL", "CHAT_BASE_URL", "OPEN_SIGNUP", "MEMBER_MONTHLY", "compatibility_date"])
+    { assert.ok(val(bud, k), `${k} missing in Budget`); assert.equal(val(bud, k), val(proc, k), k); }
+  const block = (t, header) => (t.match(new RegExp(`\\[\\[${header.replace(/\./g, "\\.")}\\]\\]([\\s\\S]*?)(?=\\n\\[|$)`)) || [])[1]?.replace(/\s+/g, " ").trim();
+  assert.equal(block(bud, "kv_namespaces"), block(proc, "kv_namespaces"));                         // the shared account KV, binding AUTH
+  assert.equal(block(bud, "r2_buckets"), block(proc, "r2_buckets"));                               // LOGS -> gov-rag
+  assert.equal(block(bud, "analytics_engine_datasets"), block(proc, "analytics_engine_datasets"));
+  assert.ok(bud.includes('script_name = "gov-rag-llm"') && bud.includes('class_name = "QuotaCounter"'));
+  assert.ok(bud.includes("[ai]") && /binding = "AI"/.test(bud));
+  // the secrets the Worker reads, as on Procurement (LAW_SECRET only serves its law link): documented in the header of each config
+  for (const s of ["OTP_PEPPER", "PROXY_SECRET", "CF_EMAIL_TOKEN", "DEEPSEEK_API_KEY"]) assert.ok(read("../workers/budget/wrangler.toml").includes(s), s);
+});
