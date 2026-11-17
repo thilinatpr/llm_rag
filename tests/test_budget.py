@@ -89,3 +89,66 @@ def test_gold(item):
     else:
         hits = index.search(db, item["find"], 5, (item["kind"],))
         assert any(item["find"] in " ".join(r["text"].split()) for r in hits)  # the PDF wraps lines mid-phrase
+
+
+# ------------------------------------------------------------------ answer layer
+from budget import ask  # noqa: E402
+
+
+def _db():
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript(index.SCHEMA)
+    index.add_chunk(db, ask.BILL, "estimate", "head 118", "Head 118 Minister of Agriculture", "23",
+                    "Head 118: Minister of Agriculture. Programme 02 Development Activities: recurrent Rs. 55,587,000,000, capital Rs. 78,439,000,000.")
+    index.add_chunk(db, ask.BILL, "group", "group Ministry of Agriculture", "Ministry of Agriculture (ministry total)", "23",
+                    "Ministry of Agriculture: recurrent Rs. 99,000,000,000, capital Rs. 119,000,000,000.")
+    index.add_chunk(db, ask.BILL, "facts", "totals", "Key figures of the Bill: total expenditure", None, "voted together Rs. 4,992,773,388,000.")
+    index.add_chunk(db, ask.SPEECH, "speech", "17.2", "Agriculture / Irrigation Sector", "40", "Rs. 19,500 million has been allocated for the Mahaweli programme.")
+    index.add_chunk(db, ask.SPEECH, "annex", "annex II #3", "Annexure II: new expenditure proposal (Education)", "84",
+                    "New expenditure proposal no. 3 (Education): spectacles. Proposed annual allocation Rs. 100 million (capital).")
+    return db
+
+
+class Scripted:
+    def __init__(self, text):
+        self.text, self.calls = text, []
+
+    def chat(self, system, messages, tools=(), max_tokens=0, effort=None, on_token=None):
+        from billrag.llm import Reply
+        self.calls.append(messages[0]["content"])
+        return Reply(text=self.text)
+
+
+def test_gather_lanes_and_head_number():
+    u = ask.gather(_db(), "Head 118 irrigation")
+    labels = [x["label"] for x in u]
+    assert labels[0] == "[Bill Head 118]"                     # a named head comes first
+    assert any(l.startswith("[Speech") for l in labels)       # the speech lane is always represented
+    assert "[Bill Totals]" in [x["label"] for x in ask.gather(_db(), "what is the total budget")]
+
+
+def test_verify_citations_incl_semicolon_and_page_suffix():
+    units = ask.gather(_db(), "Head 118 development allocation mahaweli")
+    ok = "x [Bill Head 118] y [Speech §17.2, p.40] z [Bill Head 118; Speech §17.2]"
+    assert ask.verify(ok, units) == []
+    bad = ask.verify("x [Bill Head 999] [Bill = description] [Speech §3]", units)
+    assert set(bad) == {"Bill Head 999", "Bill = description", "Speech §3"}
+
+
+def test_verify_numbers_accepts_conversions_flags_calculated_sums():
+    units = ask.gather(_db(), "Head 118 development allocation mahaweli")
+    good = "Recurrent Rs. 55,587,000,000 (Rs. 55,587 million, about Rs. 55.6 billion) and Rs. 19,500 million (Rs. 19.5 billion)."
+    assert ask.verify_numbers(good, units) == []
+    # the model adds 55,587,000,000 + 78,439,000,000 itself: not printed anywhere, so it must be flagged
+    assert ask.verify_numbers("Together Rs. 134,026,000,000 (Rs. 134,026 million).", units) != []
+
+
+def test_ask_adds_fixed_notes_and_warns_on_figures_without_citation():
+    db = _db()
+    res = ask.ask(db, Scripted("Rs. 78,439,000,000 is the capital allocation [Bill Head 118]."), "Head 118 capital")
+    assert res.warnings == [] and ask.BILL_NOTE in res.answer and ask.SPEECH_NOTE not in res.answer
+    res = ask.ask(db, Scripted("Rs. 19,500 million is allocated."), "mahaweli")
+    assert any("figures but no citations" in w for w in res.warnings)
+    res = ask.ask(db, Scripted("The passages do not answer this."), "head 118 capital")
+    assert res.warnings == []                                  # a refusal needs no citation

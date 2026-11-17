@@ -105,7 +105,7 @@ def parse_first(pages: list[str], p0: int, p1: int) -> tuple[list[dict], dict]:
                 i = j
                 continue
             if t == "Head" and i + 2 < len(toks) and re.fullmatch(r"\d+", toks[i + 1]):
-                head = {"no": int(toks[i + 1]), "title": toks[i + 2].strip()}
+                head = {"no": int(toks[i + 1]), "title": re.sub(r"\s+", " ", toks[i + 2]).strip()}
                 i += 3
                 continue
             m = re.match(r"Programme\s+(\d+)\s*(?:-\s*(.+))?$", t)

@@ -1,0 +1,15 @@
+{"id":"a1","q":"How much does the Ministry of Health and Mass Media get in the 2027 Appropriation Bill?","must_re":["470,499,998,000|470\\.5 billion|470,500 million","120,000,000,000|120 billion|120,000 million"],"cite":["Bill Ministry: Ministry of Health and Mass Media"]}
+{"id":"a2","q":"What is the total expenditure voted by the 2027 Appropriation Bill?","must_re":["4,992,773,388,000|4,992\\.8 billion|4,992\\.77 billion|4,992,773 million"],"cite":["Bill Totals","Bill s2"]}
+{"id":"a3","q":"How much capital expenditure is allocated to Head 286, the Department of Land Commissioner General?","must_re":["452,000,000|452 million"],"cite":["Bill Head 286"]}
+{"id":"a4","q":"How much is allocated for the Mahaweli Water Security and Investment Programme?","must_re":["19,500 million|19\\.5 billion|19,500,000,000"],"cite":["Speech §17.2"]}
+{"id":"a5","q":"Is there money for providing spectacles to school students?","must_re":["100 million|100,000,000"],"cite":["Speech Annex II #3"]}
+{"id":"a6","q":"What is the proposed increase in the monthly allowance of trainee teachers and what does it cost?","must_re":["20,000","1,800 million|1\\.8 billion|1,800,000,000"],"cite":["Speech Annex II #4"]}
+{"id":"a7","q":"How much expenditure is charged on the Consolidated Fund for the National Procurement Commission?","must_re":["6,000,000|6 million"],"cite":["Bill Charged 24"]}
+{"id":"a8","q":"What is the borrowing limit set by the Appropriation Bill?","must_re":["3,800 billion|3,800,000,000,000|3\\.8 trillion"],"cite":["Bill Totals","Bill s2"]}
+{"id":"a9","q":"What do the Ministry of Defence's recurrent and capital allocations come to?","must_re":["388,000,000,000|388 billion|388,000 million","70,000,000,000|70 billion|70,000 million"],"cite":["Bill Ministry: Ministry of Defence"]}
+{"id":"a10","q":"When was the 2027 Budget Speech delivered?","must_re":["12(th)? November 2026|November 12, 2026"],"cite":[]}
+{"id":"a11","q":"What is the Department of Posts' recurrent allocation for operational activities in Head 308?","must_re":["26,455,000,000|26\\.455 billion|26,455 million"],"cite":["Bill Head 308"]}
+{"id":"r1","q":"What is the maximum limit for the advance account of the Department of Posts?","refuse":true}
+{"id":"r2","q":"How much was spent on health in the 2019 budget?","refuse":true}
+{"id":"r3","q":"What is the capital of France?","refuse":true}
+{"id":"c1","q":"How much is the combined recurrent and capital allocation for Head 111 and Head 112 together?","calc":true}
