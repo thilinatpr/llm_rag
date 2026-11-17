@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Budget 2027 - citizenlk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Abhaya+Libre:wght@700;800&family=Yaldevi:wght@400;500&family=Catamaran:wght@500&display=swap">
+<style>
+  /* citizenlk look: see DESIGN.md (tokens, type, petal border) */
+  :root { color-scheme: light dark;
+    --lime:#F4F2EE; --ink:#1C1511; --muted:#6E6157; --line:#DAD3CA; --box:#FFFFFF; --sindoor:#A3241B; --ochre:#E0A93A; --err:#B3261E;
+    --f-display:"Abhaya Libre","Noto Serif Sinhala",Georgia,serif;
+    --f-body:"Yaldevi","Noto Sans Sinhala","Noto Sans Tamil","Segoe UI",system-ui,sans-serif;
+    --gl:max(16px,env(safe-area-inset-left,0px)); --gr:max(16px,env(safe-area-inset-right,0px));
+    --padl:max(var(--gl),calc((100% - 700px) / 2)); --padr:max(var(--gr),calc((100% - 700px) / 2)); }
+  @media (prefers-color-scheme: dark) { :root {
+    --lime:#15100D; --ink:#F1E6D6; --muted:#B3A391; --line:#3A2D24; --box:#211913; --sindoor:#E0675A; --ochre:#E8B550; --err:#FF8A80; } }
+  * { box-sizing: border-box; }
+  html, body { height:100%; }
+  body { margin:0; font:400 1rem/1.65 var(--f-body); background:var(--lime); color:var(--ink); display:flex; flex-direction:column; }
+  a { color:inherit; }
+  :focus-visible { outline:2px solid var(--ochre); outline-offset:3px; border-radius:4px; }
+  button, select, input { font:inherit; color:inherit; }
+  .petals { height:14px; flex:none; background:radial-gradient(circle at 50% 0,var(--sindoor) 0 7px,transparent 7.5px) 0 0/20px 14px repeat-x; }
+  header { flex:none; display:flex; align-items:center; justify-content:space-between; gap:8px 16px; flex-wrap:wrap;
+    padding:12px var(--gr) 12px var(--gl); border-bottom:1px solid var(--line); }
+  .left { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  .mark { font:800 1.35rem/1 var(--f-display); text-decoration:none; letter-spacing:-.01em; }
+  .mark b { color:var(--sindoor); font-weight:800; }
+  .name { color:var(--muted); font-size:.95rem; }
+  .hint { color:var(--muted); font-size:.85rem; }
+  .right { display:flex; align-items:center; gap:8px 14px; flex-wrap:wrap; font-size:.88rem; color:var(--muted); }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:999px; padding:2px; background:var(--box); }
+  .seg button { border:0; background:transparent; padding:4px 12px; border-radius:999px; cursor:pointer; color:var(--muted); }
+  .seg button[aria-pressed="true"] { background:var(--ink); color:var(--lime); }
+  .link { background:none; border:0; padding:0; cursor:pointer; color:var(--muted); text-decoration:underline; text-underline-offset:3px; }
+  .link:hover { color:var(--ink); }
+  .opt { display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+  #log { flex:1; min-height:0; overflow-y:auto; padding:28px var(--padr) 12px var(--padl); display:flex; flex-direction:column; gap:24px; }
+  .msg { overflow-wrap:anywhere; white-space:pre-wrap; }
+  .me { align-self:flex-end; max-width:85%; background:color-mix(in srgb,var(--ink) 6%,var(--lime)); padding:10px 16px; border-radius:14px 14px 4px 14px; }
+  .bot { align-self:stretch; min-width:0; }
+  .err { color:var(--err); }
+  .cite { font-size:.84em; color:var(--sindoor); white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .start { text-align:center; display:flex; flex-direction:column; align-items:center; gap:18px; padding:8vh 0 0; white-space:normal; }
+  .start h2 { font:800 clamp(2rem,6vw,2.8rem)/1.05 var(--f-display); margin:0; }
+  .start p { margin:0; color:var(--muted); max-width:34em; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+  .chip { padding:8px 16px; border:0; border-radius:6px; background:color-mix(in srgb,var(--ink) 6%,var(--lime)); cursor:pointer; font-size:.92rem; text-align:left; }
+  .chip:hover { outline:1px solid var(--line); }
+  form { flex:none; padding:12px var(--padr) 6px var(--padl); }
+  .pill { display:flex; align-items:center; gap:10px; padding:6px 6px 6px 20px; border:1px solid var(--line); border-radius:999px; background:var(--box); transition:border-color .2s, box-shadow .2s; }
+  .pill:hover, .pill:focus-within { border-color:var(--ochre); box-shadow:0 2px 10px -2px color-mix(in srgb,var(--ink) 18%,transparent); }
+  .pill svg { flex:none; color:var(--sindoor); }
+  input[type=text] { flex:1; min-width:0; border:0; background:transparent; padding:9px 0; outline:none; }
+  input[type=text]::placeholder { color:var(--muted); }
+  #send { flex:none; border:0; border-radius:999px; padding:9px 20px; background:var(--ink); color:var(--lime); cursor:pointer; font-weight:500; }
+  #send:hover { background:var(--sindoor); color:#fff; }
+  #send:disabled { opacity:.5; cursor:default; }
+  .note { flex:none; text-align:center; font-size:.78rem; color:var(--muted); margin:0; padding:0 var(--gr) calc(14px + env(safe-area-inset-bottom,0px)) var(--gl); }
+  .md { white-space:normal; }
+  .md p { margin:0 0 .6em; } .md > :last-child { margin-bottom:0; }
+  .md ul, .md ol { margin:0 0 .6em; padding-left:1.4em; } .md li { margin:.15em 0; }
+  .md h3, .md h4 { font:700 1.15rem/1.25 var(--f-display); margin:.4em 0 .3em; }
+  .md code { font:.9em ui-monospace,monospace; background:var(--line); padding:0 .25em; border-radius:4px; }
+  .md table { border-collapse:collapse; margin:0 0 .6em; font-size:.92rem; display:block; overflow-x:auto; } .md td, .md th { border:1px solid var(--line); padding:3px 6px; text-align:left; }
+  .md hr { border:0; border-top:1px solid var(--line); margin:.6em 0; }
+  .step { color:var(--muted); }
+  .srcs { margin-top:.6em; font-size:.84rem; color:var(--muted); } .srcs summary { cursor:pointer; } .srcs ul { margin:.3em 0 0; padding-left:1.2em; }
+  .draft::after { content:" \25cf"; color:var(--sindoor); animation:blink 1s steps(2) infinite; }
+  #histPanel { position:fixed; top:56px; right:max(12px,env(safe-area-inset-right,0px)); width:min(420px,calc(100vw - 24px)); max-height:70vh; overflow:auto; z-index:5; padding:14px;
+    background:var(--lime); color:var(--ink); border:1px solid var(--line); border-radius:12px; box-shadow:0 8px 24px -8px color-mix(in srgb,var(--ink) 30%,transparent); }
+  #histPanel[hidden] { display:none; } #histPanel h3 { margin:0 0 4px; font-size:1rem; } #histPanel .hint { display:block; margin:0 0 10px; }
+  .hrow { display:flex; gap:8px; align-items:center; padding:6px 0; border-top:1px solid var(--line); } .hrow button.open { flex:1; min-width:0; text-align:left; background:none; border:0; padding:4px 0; font:inherit; color:inherit; cursor:pointer; }
+  .hrow .t { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .hrow small { color:var(--muted); }
+  .saved { padding:8px 12px; margin:0 0 10px; border:1px dashed var(--line); border-radius:8px; color:var(--muted); font-size:.92rem; }
+  @keyframes blink { 50% { opacity:0; } }
+  @media (prefers-reduced-motion: reduce) { .draft::after { animation:none; } }
+</style></head>
+<body>
+<div class="petals" aria-hidden="true"></div>
+<header>
+  <div class="left"><a class="mark" href="https://citizenlk.com">citizen<b>lk</b></a><span class="name">Budget 2027</span><small id="status" class="hint" title="Server status"></small></div>
+  <div class="right">
+    <button class="link" id="hist" type="button" hidden aria-expanded="false">History</button>
+    <button class="link" id="new" type="button">New chat</button>
+    <button class="link" id="out" type="button" title="Sign out">Sign out</button>
+  </div>
+</header>
+<div id="histPanel" hidden role="dialog" aria-label="Chat history"></div>
+<div id="log"></div>
+<form id="f"><div class="pill">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+  <input type="text" id="q" placeholder="Ask in English" aria-label="Your question" autocomplete="off" autofocus>
+  <button id="send">Ask</button></div></form>
+<p class="note">Answers cite the official text but can be incomplete or wrong: check the document · The Bill is as presented to Parliament · Not the Treasury · Not a government service · <a href="/privacy" style="color:inherit">Privacy</a></p>
+<script>
+const log = document.getElementById('log'), q = document.getElementById('q'),
+      btn = document.getElementById('send');
+document.getElementById('out').onclick = async () => {
+  try { await fetch('/logout', {method: 'POST'}); } catch (e) {}
+  location.href = '/login';
+};
+const EXAMPLES = ['How much does the Ministry of Health and Mass Media get in the 2027 Appropriation Bill?',
+  'What is the borrowing limit?', 'Is there money for providing spectacles to school students?'];
+function showStart() {
+  log.textContent = '';
+  const d = document.createElement('div'); d.className = 'start';
+  d.innerHTML = '<h2>Ask about the 2027 Budget</h2><p>The Appropriation Bill 2027 (as presented to Parliament on 7 October 2026) and the Budget Speech of 12 November 2026. Every answer names where its figures come from. Each question is answered on its own.</p>';
+  const chips = document.createElement('div'); chips.className = 'chips';
+  EXAMPLES.forEach((t) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'chip'; b.textContent = t;
+    b.onclick = () => { q.value = t; document.getElementById('f').requestSubmit(); }; chips.appendChild(b); });
+  d.appendChild(chips); log.appendChild(d);
+}
+showStart();
+// --- chat history (src/history.js): signed-in accounts keep their chats for 30 days and can delete them. Saved after each answer.
+// Every question is answered on its own (no history is sent), so a saved chat is read-only. ---
+const H = {on: false, full: false};
+const newId = () => Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2, 6);   // 6-40 letters/digits: the history API's id rule
+let chatId = newId();
+const histPanel = document.getElementById('histPanel'), histBtn = document.getElementById('hist');
+const saved = [];  // what is stored: what the person typed and the answer, one entry per question
+document.getElementById('new').onclick = () => { chatId = newId(); saved.length = 0; showStart(); histPanel.hidden = true; q.focus(); };
+async function saveChat() {
+  if (!H.on || !saved.length) return;
+  try {
+    const r = await fetch('/history/' + chatId, {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({turns: saved})});
+    if (r.status === 409) H.full = true;   // 50 chats: the panel says so; the answer on screen is unaffected
+  } catch (e) {}
+}
+async function histCall(path, method) { const r = await fetch(path, {method: method || 'GET', cache: 'no-store'}); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }
+async function renderHistory() {
+  histPanel.textContent = '';
+  const h = document.createElement('h3'); h.textContent = 'Your chats'; histPanel.appendChild(h);
+  const hint = document.createElement('small'); hint.className = 'hint';
+  hint.textContent = 'Kept for 30 days after the last question, only for you. Delete any time.' + (H.full ? ' History is full (50 chats): delete one to save new chats.' : '');
+  histPanel.appendChild(hint);
+  let list;
+  try { list = await histCall('/history'); } catch (e) { hint.textContent = 'History could not be loaded.'; return; }
+  if (!list.chats.length) { const p = document.createElement('p'); p.textContent = 'No saved chats yet.'; histPanel.appendChild(p); return; }
+  list.chats.forEach((c) => {
+    const row = document.createElement('div'); row.className = 'hrow';
+    const open = document.createElement('button'); open.type = 'button'; open.className = 'open';
+    const t = document.createElement('span'); t.className = 't'; t.textContent = c.title || 'Chat';
+    const d = document.createElement('small'); d.textContent = new Date(c.updated).toLocaleDateString(undefined, {day: 'numeric', month: 'short'}) + ' · ' + c.n + (c.n === 1 ? ' question' : ' questions');
+    open.append(t, d); open.onclick = () => openChat(c.id);
+    const del = document.createElement('button'); del.type = 'button'; del.className = 'link'; del.textContent = 'Delete'; del.setAttribute('aria-label', 'Delete chat: ' + (c.title || ''));
+    del.onclick = async () => { try { await histCall('/history/' + c.id, 'DELETE'); H.full = false; if (c.id === chatId) { saved.length = 0; chatId = newId(); } renderHistory(); } catch (e) { hint.textContent = 'Could not delete. Try again.'; } };
+    row.append(open, del); histPanel.appendChild(row);
+  });
+  const all = document.createElement('button'); all.type = 'button'; all.className = 'link'; all.textContent = 'Delete all history';
+  all.onclick = async () => { if (!confirm('Delete all your saved chats? This cannot be undone.')) return; try { await histCall('/history', 'DELETE'); saved.length = 0; chatId = newId(); H.full = false; renderHistory(); } catch (e) { hint.textContent = 'Could not delete. Try again.'; } };
+  histPanel.appendChild(all);
+}
+async function openChat(id) {
+  let chat;
+  try { chat = await histCall('/history/' + id); } catch (e) { return; }
+  histPanel.hidden = true; histBtn.setAttribute('aria-expanded', 'false');
+  chatId = id; saved.length = 0;
+  log.textContent = '';
+  const note = document.createElement('div'); note.className = 'saved'; note.textContent = 'A saved chat. Every question is answered on its own, so ask a new question below.'; log.appendChild(note);
+  chat.turns.forEach((t) => { add(t.q, 'me'); const a = add('', 'bot'); a.innerHTML = renderMarkdown(t.a); a.classList.add('md'); saved.push({q: t.q, a: t.a}); });
+  log.scrollTop = log.scrollHeight; q.focus();
+}
+histBtn.onclick = () => { const open = histPanel.hidden; histPanel.hidden = !open; histBtn.setAttribute('aria-expanded', String(open)); if (open) renderHistory(); };
+(async function history() { try { const me = await (await fetch('/public/me', {cache: 'no-store'})).json(); if (me.user === 'member') { H.on = true; histBtn.hidden = false; } } catch (e) {} })();
+function add(text, cls) {
+  const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
+  log.appendChild(d); log.scrollTop = log.scrollHeight; return d;
+}
+// --- md:start --- Minimal, safe Markdown for model answers: everything is HTML-escaped first, then only a few
+// constructs become tags (paragraphs, -/*/1. lists, #-headings, tables, **bold**, *italic*, `code`). Leftover * marks are dropped.
+function renderMarkdown(src) {
+  const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const inline = (t) => {
+    const codes = [];
+    t = esc(t).replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
+    t = t.replace(/(\[(?:Bill|Speech)[^\]\n]*\]|\u3010[^\u3011\n]*\u3011)/g, '<span class="cite">$1</span>')
+         .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>')
+         .replace(/__(?=\S)([\s\S]*?\S)__/g, '<strong>$1</strong>')
+         .replace(/(^|[^\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])/g, '$1<em>$2</em>')
+         .replace(/\*+/g, '');
+    return t.replace(/\u0000(\d+)\u0000/g, (_, i) => '<code>' + codes[+i] + '</code>');
+  };
+  const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  const lines = String(src || '').replace(/\r\n?/g, '\n').split('\n');
+  const out = []; let para = [], list = null;
+  const flushPara = () => { if (para.length) out.push('<p>' + para.map(inline).join('<br>') + '</p>'); para = []; };
+  const flushList = () => { if (list) out.push('<' + list.tag + '>' + list.items.map((i) => '<li>' + inline(i) + '</li>').join('') + '</' + list.tag + '>'); list = null; };
+  const flush = () => { flushPara(); flushList(); };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i], t = line.trim(); let m;
+    if (!t) { flush(); continue; }
+    if (/^([-*_])(\s*\1){2,}$/.test(t)) { flush(); out.push('<hr>'); continue; }
+    if ((m = t.match(/^#{1,6}\s+(.*?)\s*#*$/))) { flush(); out.push('<h4>' + inline(m[1]) + '</h4>'); continue; }
+    if (t.startsWith('|') && i + 1 < lines.length && /^\|?\s*:?-{2,}/.test(lines[i + 1].trim())) {
+      flush(); const head = cells(t); i++;
+      const rows = []; while (i + 1 < lines.length && lines[i + 1].trim().startsWith('|')) rows.push(cells(lines[++i]));
+      out.push('<table><tr>' + head.map((c) => '<th>' + inline(c) + '</th>').join('') + '</tr>' +
+               rows.map((r) => '<tr>' + r.map((c) => '<td>' + inline(c) + '</td>').join('') + '</tr>').join('') + '</table>');
+      continue;
+    }
+    const ul = t.match(/^[-*+\u2022]\s+(.*)$/), ol = t.match(/^\d+[.)]\s+(.*)$/);
+    if (ul || ol) {
+      flushPara(); const tag = ul ? 'ul' : 'ol';
+      if (!list || list.tag !== tag) { flushList(); list = {tag, items: []}; }
+      list.items.push((ul || ol)[1]); continue;
+    }
+    if (list && /^\s+/.test(line)) { list.items[list.items.length - 1] += ' ' + t; continue; }
+    flushList(); para.push(t);
+  }
+  flush();
+  return out.join('');
+}
+// --- md:end ---
+const statusEl = document.getElementById('status');
+const setStatus = (t) => { statusEl.textContent = t; };
+// The page is static and loads instantly; this wakes the server (it sleeps when idle) while you read and type.
+(async function warm() {
+  setStatus('\u25cf waking server...');
+  for (let i = 0; i < 100; i++) {
+    try { const r = await fetch('/healthz', {cache: 'no-store'}); if (r.ok) { setStatus('\u25cf ready'); return; } } catch (e) {}
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  setStatus('\u25cf server not responding');
+})();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A dropped connection (TypeError) usually means the container was asleep and is starting; wait until it answers, then retry once.
+async function waitUntilUp(note) {
+  for (let i = 0; i < 60; i++) {
+    note.textContent = 'The server is waking up (this can take a minute or two)... ' + (i * 3) + 's';
+    try { const r = await fetch('/healthz', {cache: 'no-store'}); if (r.ok) return true; } catch (e) {}
+    await sleep(3000);
+  }
+  return false;
+}
+async function post(path, body, note) {
+  const send = () => fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  let r;
+  try { r = await send(); }
+  catch (e) {
+    if (!(await waitUntilUp(note))) throw new Error('The server did not come back after 3 minutes. Try again shortly.');
+    note.textContent = 'Server is up. Asking again...';
+    r = await send();
+  }
+  let j = {};
+  try { j = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(`${j.error || r.statusText || 'Request failed'} (HTTP ${r.status})`);
+  return j;
+}
+// Where each cited figure comes from: the passages the answer cites, with the document and page (j.sources are 'label where' lines from the server).
+function addSources(box, j) {
+  const used = [...new Set(j.sources || [])].filter((s) => {
+    const label = s.slice(0, s.indexOf(']') + 1).slice(0, -1);
+    return label.length > 1 && j.answer.split(label).slice(1).some((rest) => /^[\],;]/.test(rest));
+  });
+  if (!used.length) return;
+  const d = document.createElement('details'); d.className = 'srcs';
+  const sm = document.createElement('summary'); sm.textContent = 'Sources (' + used.length + ')'; d.appendChild(sm);
+  const ul = document.createElement('ul');
+  used.forEach((s) => { const li = document.createElement('li'); li.textContent = s; ul.appendChild(li); });
+  d.appendChild(ul); box.appendChild(d);
+}
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = q.value.trim(); if (!text) return;
+  q.value = ''; btn.disabled = true;
+  const st = log.querySelector('.start'); if (st) log.textContent = '';
+  add(text, 'me');
+  const wait = add('Reading the Bill and the Speech...', 'bot');
+  wait.classList.add('step');
+  try {
+    const j = await post('/api/ask', {question: text}, wait);
+    wait.classList.remove('step');
+    wait.innerHTML = renderMarkdown(j.answer); wait.classList.add('md');
+    addSources(wait, j);
+    saved.push({q: text, a: j.answer}); saveChat();
+    if ((j.warnings || []).some((w) => w.includes('citations') || w.includes('figures'))) {
+      const n = document.createElement('p'); n.className = 'step';
+      n.textContent = 'Check this answer against the source: a citation or a figure in it could not be verified.';
+      wait.appendChild(n);
+    }
+  } catch (err) { wait.classList.remove('step', 'md'); wait.textContent = 'Error: ' + err.message; wait.classList.add('err'); }
+  btn.disabled = false; q.focus(); log.scrollTop = log.scrollHeight;
+});
+</script></body></html>

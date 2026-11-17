@@ -5,6 +5,8 @@
 #   gh workflow run deploy.yml -f target=admin      (admin panel Worker, no container)
 #   gh workflow run deploy.yml -f target=procurement   (Procurement Rules: Worker + container; its index comes from R2, see
 #                                                     scripts/procurement_index.py: upload it after every `python -m procurement build`)
+#   gh workflow run deploy.yml -f target=budget       (Budget 2027: Worker + container; its index comes from R2: scripts/budget_index.py upload
+#                                                     after every `python -m budget build`)
 #   gh run watch
 # Afterwards record it in AGENTS.md "Deployed vs main" (the job summary prints the commit, build id and Worker version).
 # Repo secret CLOUDFLARE_API_TOKEN needs Workers Scripts: Edit, Workers KV Storage: Edit, Containers: Edit, Zone: Read.
@@ -18,7 +20,7 @@ on:
       target:
         description: "What to deploy"
         type: choice
-        options: [bills, admin, procurement]
+        options: [bills, admin, procurement, budget]
         default: bills
 
 concurrency:
@@ -58,8 +60,11 @@ jobs:
       - name: Fetch Procurement Rules' index from R2 (checked by SHA-256)
         if: inputs.target == 'procurement'
         run: python scripts/procurement_index.py fetch
+      - name: Fetch the Budget index from R2 (checked by SHA-256)
+        if: inputs.target == 'budget'
+        run: python scripts/budget_index.py fetch
       - uses: docker/setup-buildx-action@v3
-        if: inputs.target == 'bills' || inputs.target == 'procurement'
+        if: inputs.target == 'bills' || inputs.target == 'procurement' || inputs.target == 'budget'
       - name: Deploy
         run: |
           set -o pipefail
@@ -67,6 +72,7 @@ jobs:
             bills) npx wrangler deploy 2>&1 | tee deploy.log ;;
             admin) npx wrangler deploy -c workers/admin/wrangler.toml 2>&1 | tee deploy.log ;;
             procurement) npx wrangler deploy -c workers/procurement/wrangler.toml 2>&1 | tee deploy.log ;;
+            budget) npx wrangler deploy -c workers/budget/wrangler.toml 2>&1 | tee deploy.log ;;
           esac
       - name: Summary
         if: always()
