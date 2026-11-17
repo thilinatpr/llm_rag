@@ -1,6 +1,9 @@
 data/
 # The Procurement Rules image bakes in its index. Wrangler pipes the Dockerfile over stdin, so this root file is the one that applies.
 !data/procurement/index.sqlite
+# The Budget image bakes in its index too (scripts/budget_index.py fetch puts it here). Without this line the build fails with
+# '"/data/budget/index.sqlite": not found' (first deploy attempt, 2026-11-17, run 44013609302).
+!data/budget/index.sqlite
 .git/
 node_modules/
 .wrangler/
