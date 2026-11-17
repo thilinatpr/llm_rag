@@ -18,7 +18,7 @@ const SOURCES = ["facebook", "whatsapp", "viber", "telegram", "x", "instagram", 
 const MEDIUMS = ["", "social", "message", "paid", "email", "print", "other"];
 const WORD = /^(?:[a-z0-9][a-z0-9._-]{0,59})?$/;
 const HOST = /^(?:[a-z0-9][a-z0-9.-]{0,99})?$/;
-export const GO = ["bills", "procurement", "admin", "other"]; // where a tap on a link to another citizenlk service went
+export const GO = ["bills", "procurement", "budget", "admin", "other"]; // where a tap on a link to another citizenlk service went
 export const SCHEMA = {
   view: { a: [""], b: [""] }, // a person was here (visible 2 s and touched the page)
   nav: { a: ["new", "reload", "back"], b: ["out", "in"] }, // how the page was opened; new + out = a visit starts
@@ -29,7 +29,7 @@ export const SCHEMA = {
   scroll: { a: ["25", "50", "75", "100"], b: [""] },
   skip: { a: ["noint", "webdriver"], b: [""] }, // the page saw no person (counted, so the panel can say how many)
 };
-export const SITES = { "citizenlk.com": "home", "bills.citizenlk.com": "bills", "procurement.citizenlk.com": "procurement" };
+export const SITES = { "citizenlk.com": "home", "bills.citizenlk.com": "bills", "procurement.citizenlk.com": "procurement", "budget.citizenlk.com": "budget" };
 const PAGES = ["/", "/index.html"]; // the pages that carry the counter
 export const MAX_EVENTS = 20, MAX_BYTES = 4096;
 const PV = /^[a-z0-9]{8,12}$/;
@@ -158,7 +158,7 @@ function check(){
 function touch(){if(touched)return;touched=true;check()}
 ['pointerdown','keydown','touchstart','wheel'].forEach(function(t){addEventListener(t,touch,{passive:true,capture:true})});
 addEventListener('scroll',function(){touch();var h=document.documentElement.scrollHeight-innerHeight;var d=h<=0?1:(scrollY||pageYOffset)/h;if(d>maxDepth)maxDepth=d},{passive:true});
-document.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a||!open)return;var h;try{h=new URL(a.href).hostname}catch(x){return}if(h===location.hostname||h.slice(-13)!=='citizenlk.com')return;ev('go',h.indexOf('bills.')===0?'bills':h.indexOf('procurement.')===0?'procurement':h.indexOf('admin.')===0?'admin':'other','')},true);
+document.addEventListener('click',function(e){var a=e.target&&e.target.closest?e.target.closest('a[href]'):null;if(!a||!open)return;var h;try{h=new URL(a.href).hostname}catch(x){return}if(h===location.hostname||h.slice(-13)!=='citizenlk.com')return;ev('go',h.indexOf('bills.')===0?'bills':h.indexOf('procurement.')===0?'procurement':h.indexOf('budget.')===0?'budget':h.indexOf('admin.')===0?'admin':'other','')},true);
 function leaving(){
  if(!sent){sent=true;
   if(open){var d=maxDepth>=0.98?'100':maxDepth>=0.75?'75':maxDepth>=0.5?'50':maxDepth>=0.25?'25':'';if(d)queue.push({ev:'scroll',a:d,b:''})}

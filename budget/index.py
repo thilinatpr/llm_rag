@@ -32,8 +32,9 @@ def rs(n: int | None) -> str:
     return "nil" if not n else f"Rs. {n:,}"
 
 
-def connect(path: str | Path) -> sqlite3.Connection:
-    db = sqlite3.connect(str(path))
+def connect(path: str | Path, readonly: bool = False) -> sqlite3.Connection:
+    """readonly: the server opens the baked index immutable (no journal files, safe for one connection per thread)."""
+    db = sqlite3.connect(f"file:{path}?mode=ro&immutable=1", uri=True, check_same_thread=False) if readonly else sqlite3.connect(str(path))
     db.row_factory = sqlite3.Row
     return db
 

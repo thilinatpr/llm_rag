@@ -16,6 +16,10 @@ const EXTRA = {
     { id: "procurement-confidential", text: "I will not enter confidential procurement information: bids, evaluation reports, bidder names, or tender documents that are not public." },
     { id: "procurement-decision", text: "An answer will not be the only basis for awarding, rejecting or cancelling a bid, for approving a payment, or for an appeal. I stay responsible for my decisions." },
   ],
+  budget: [
+    { id: "budget-official", text: "citizenlk.com is an independent service, not the Treasury, the Ministry of Finance or Parliament, and its answers are not official figures. The Appropriation Bill 2027 is a Bill as presented to Parliament and can be changed; the Budget Speech announces proposals. I will check any figure I rely on against the official documents." },
+    { id: "budget-decision", text: "An answer will not be the only basis for a decision that involves money, a budget submission, a contract or a legal position. I stay responsible for my decisions." },
+  ],
 };
 
 // What this service needs from an account before it answers: the general items plus its own.

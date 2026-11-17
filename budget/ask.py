@@ -61,9 +61,9 @@ def unit_from(row) -> dict:
         if kind == "section":
             label, where = f"[Bill s{ref[1:]}]", f"Appropriation Bill 2027, section {ref[1:]}"
         elif kind == "estimate":
-            label, where = f"[Bill Head {ref.split()[1]}]", f"Appropriation Bill 2027, First Schedule, p.{row['page']} of the Bill's schedule pages"
+            label, where = f"[Bill Head {ref.split()[1]}]", f"Appropriation Bill 2027, First Schedule, PDF page {row['page']}"
         elif kind == "charged":
-            label, where = f"[Bill Charged {ref.split()[1]}]", "Appropriation Bill 2027, Second Schedule"
+            label, where = f"[Bill Charged {ref.split()[1]}]", f"Appropriation Bill 2027, Second Schedule, PDF page {row['page']}"
         elif kind == "group":
             label, where = f"[Bill Ministry: {ref[len('group '):]}]", "Appropriation Bill 2027, First Schedule ministry total"
         else:

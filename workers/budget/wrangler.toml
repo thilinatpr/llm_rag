@@ -1,0 +1,73 @@
+# Budget 2027: the Appropriation Bill 2027 and the Budget Speech. NOT DEPLOYED (written 2026-11-17). Deploy from main with
+#   gh workflow run deploy.yml -f target=budget      (needs the index in R2: python scripts/budget_index.py upload)
+# or by hand from a checkout that has data/budget/index.sqlite:  npx wrangler deploy -c workers/budget/wrangler.toml
+# Secrets (npx wrangler secret put NAME -c workers/budget/wrangler.toml):
+#   OTP_PEPPER, PROXY_SECRET (both its own random value), CF_EMAIL_TOKEN, DEEPSEEK_API_KEY
+name = "citizenlk-budget"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "budget.citizenlk.com", custom_domain = true }]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+
+# One account for every citizenlk service: the same KV namespace as Bill Assistant, domain-wide session cookie (COOKIE_DOMAIN).
+[[kv_namespaces]]
+binding = "AUTH"
+id = "a44e7e8cc8f0444ba865ea162820193d"
+
+# Question/answer logs (handler.js logAsk): same bucket as the other services, own prefix `budget-logs/`.
+[[r2_buckets]]
+binding = "LOGS"
+bucket_name = "gov-rag"
+
+[ai]
+binding = "AI"  # the backup chat model (/internal/chat)
+
+[[containers]]
+class_name = "BudgetContainer"
+image = "./Dockerfile"
+image_build_context = "../.."
+instance_type = "lite"  # 1/16 vCPU, 256 MiB: Procurement Rules runs a similar server at that size; NOT measured for Budget
+max_instances = 1
+
+# auth.js forwards to the container when a binding of this name exists.
+[[durable_objects.bindings]]
+name = "BILLRAG"
+class_name = "BudgetContainer"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BudgetContainer"]
+
+[observability]
+enabled = true
+
+# Daily and monthly counts for free accounts live in Bill Assistant's Durable Object; used only if OPEN_TO is set below.
+[[durable_objects.bindings]]
+name = "QUOTA"
+class_name = "QuotaCounter"
+script_name = "gov-rag-llm"
+
+[vars]
+# STAFF ONLY at first (ALLOWED_EMAILS). To open it to every registered citizenlk account, as Procurement Rules is: add OPEN_TO = "registered"
+# (free accounts then get MEMBER_DAILY questions a day). Decide after the answers have been read by someone other than the author.
+OPEN_SIGNUP = "off"
+MEMBER_DAILY = "10"
+MEMBER_MONTHLY = "none"
+COOKIE_DOMAIN = "citizenlk.com"
+ALLOWED_EMAILS = "thilinatpr@gmail.com"
+FROM_ADDRESS = "login@citizenlk.com"
+CF_ACCOUNT_ID = "e81ea992523c4e14d3d1a89f10732576"
+CHAT_MODEL = "deepseek-flash"
+CHAT_BASE_URL = "https://api.deepseek.com"
+CHAT_FALLBACK_URL = "https://budget.citizenlk.com/internal/chat"
+
+# Anonymous visitor counts (src/events.js): off until the EV_KEY secret exists (or OTP_PEPPER, on the services).
+[[analytics_engine_datasets]]
+binding = "EVENTS"
+dataset = "citizenlk_events"

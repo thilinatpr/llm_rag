@@ -43,6 +43,19 @@ const SERVICES = {
     ],
     others: [],
   },
+  budget: {
+    name: "Budget 2027",
+    keep: [
+      "<b>Page counts:</b> when you open this page we count that a person looked at it, how far they scrolled and which site sent them (for example a search engine or a link someone shared), with your country. There is no cookie, no ID, no IP address and nothing you type in the count, and nothing is counted if your browser sends Do Not Track or Global Privacy Control.",
+      "<b>Your questions and the answers.</b> Each is saved in a log with its time, the passages it used, how long it took and what it cost. The record does not carry your name, email or IP address. If a question contains something that identifies you, the log contains it too. A copy of each question and answer also goes to the service's system logs at Cloudflare.",
+      "<b>Your sign-in:</b> use your citizenlk account (created on Bill Assistant). Your email address is used to send a one-time code and is kept with your session for 7 days (the session cookie works on every citizenlk.com address). The code is stored only in scrambled form, for 5 minutes.",
+      "<b>If you use a free account, your daily count:</b> the number of questions you have asked today is counted against a scrambled form of your email address, and kept for about a day.",
+      "<b>Your agreement:</b> when you accept the statements shown after your first sign-in, we keep the date and version of the wording with your email address. One account works on all citizenlk services, so the same sign-in and the same record are used on each. They are kept for as long as you have access.",
+      "<b>Your conversation:</b> every question is answered on its own: the service does not send earlier questions with a new one and keeps no conversation between questions, apart from the log above and your chat history below.",
+      "<b>Your chat history:</b> each chat (your questions and the answers) is saved with your account, so you can read it again. It is kept for 30 days after the last question in that chat, then removed, and you can delete one chat or all of them under History on the chat page. Deleting history does not remove the separate question log above, which does not know who you are.",
+    ],
+    others: [],
+  },
 };
 
 export function privacyPage(service, contact) {
