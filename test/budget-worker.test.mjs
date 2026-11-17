@@ -164,3 +164,18 @@ test("config: account, mail, model and storage settings equal Procurement's", ()
   // the secrets the Worker reads, as on Procurement (LAW_SECRET only serves its law link): documented in the header of each config
   for (const s of ["OTP_PEPPER", "PROXY_SECRET", "CF_EMAIL_TOKEN", "DEEPSEEK_API_KEY"]) assert.ok(read("../workers/budget/wrangler.toml").includes(s), s);
 });
+
+// The first Budget deploy (2026-11-17) failed at `docker build`: .dockerignore starts with `data/`, and only Procurement's index had an
+// exception, so `COPY data/budget/index.sqlite` found nothing. No other test builds an image, so check the rule itself, for every Worker image.
+test(".dockerignore lets every baked-in data file into the build context", () => {
+  const ignore = read("../.dockerignore").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  assert.ok(ignore.includes("data/"), "the rule this test guards: data/ is excluded by default");
+  let checked = 0;
+  for (const w of ["budget", "procurement"]) {
+    for (const m of read(`../workers/${w}/Dockerfile`).matchAll(/^COPY\s+(data\/\S+)\s/gm)) {
+      assert.ok(ignore.includes("!" + m[1]), `${w}: ${m[1]} needs "!${m[1]}" in .dockerignore`);
+      checked++;
+    }
+  }
+  assert.equal(checked, 2);
+});
